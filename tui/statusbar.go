@@ -49,10 +49,12 @@ func (m StatusBarModel) Update(msg tea.Msg) (StatusBarModel, tea.Cmd) {
 		switch msg.Type {
 		case EventStarted:
 			m.runningCount++
+		case EventProgress:
+			m.totalRecords = msg.RecordsCount
 		case EventCompleted:
 			m.runningCount--
 			m.completedCount++
-			m.totalRecords += msg.RecordsCount
+			m.totalRecords = msg.RecordsCount
 		case EventFailed:
 			m.runningCount--
 			m.failedCount++

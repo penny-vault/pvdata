@@ -32,6 +32,7 @@ type MainModel struct {
 	width         int
 	height        int
 	quitting      bool
+	confirmQuit   bool
 }
 
 func NewMainModel(
@@ -75,15 +76,46 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Handle quit confirmation
+		if m.confirmQuit {
+			switch msg.String() {
+			case "y", "Y":
+				m.quitting = true
+				return m, tea.Quit
+			default:
+				m.confirmQuit = false
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
-		case "tab":
+		case "q":
+			if m.statusBar.runningCount > 0 {
+				m.confirmQuit = true
+				return m, nil
+			}
+			m.quitting = true
+			return m, tea.Quit
+		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % tabID(len(tabNames))
 			return m, nil
-		case "shift+tab":
+		case "shift+tab", "left", "h":
 			m.activeTab = (m.activeTab - 1 + tabID(len(tabNames))) % tabID(len(tabNames))
+			return m, nil
+		case "1":
+			m.activeTab = tabSubscriptions
+			return m, nil
+		case "2":
+			m.activeTab = tabLogs
+			return m, nil
+		case "3":
+			m.activeTab = tabHistory
+			return m, nil
+		case "4":
+			m.activeTab = tabConfig
 			return m, nil
 		}
 
@@ -132,6 +164,12 @@ func (m MainModel) View() string {
 		b.WriteString(ContentStyle.Render(m.config.View()))
 	}
 
+	b.WriteString("\n")
+	if m.confirmQuit {
+		b.WriteString(LogWarn.Render("  Subscriptions are still running. Quit anyway? (y/n)"))
+	} else {
+		b.WriteString(HelpStyle.Render("  arrow keys: switch tabs | 1-4: jump to tab | q: quit"))
+	}
 	b.WriteString("\n")
 	b.WriteString(m.statusBar.View())
 

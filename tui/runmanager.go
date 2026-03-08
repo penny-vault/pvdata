@@ -178,6 +178,10 @@ func (rm *RunManager) countObservations(in <-chan *data.Observation, out chan<- 
 
 			// Emit progress every 100 records to avoid flooding
 			if count%100 == 0 {
+				log.Info().
+					Str("Subscription", obs.SubscriptionName).
+					Int("Records", count).
+					Msg("import progress")
 				rm.emit(RunEvent{
 					SubscriptionID:   obs.SubscriptionID,
 					SubscriptionName: obs.SubscriptionName,

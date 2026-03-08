@@ -66,7 +66,7 @@ func (m SubscriptionsModel) Update(msg tea.Msg) (SubscriptionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		m.height = msg.Height - 4
+		m.height = msg.Height - 6
 		m.table.SetHeight(m.height)
 
 	case RunEvent:

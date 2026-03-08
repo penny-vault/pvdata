@@ -41,7 +41,7 @@ func (m HistoryModel) Init() tea.Cmd {
 func (m HistoryModel) Update(msg tea.Msg) (HistoryModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport = viewport.New(msg.Width, msg.Height-4)
+		m.viewport = viewport.New(msg.Width, msg.Height-6)
 		m.ready = true
 		m.refreshContent()
 

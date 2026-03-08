@@ -49,7 +49,7 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport = viewport.New(msg.Width, msg.Height-4)
+		m.viewport = viewport.New(msg.Width, msg.Height-6)
 		m.viewport.SetContent(strings.Join(m.lines, ""))
 		m.ready = true
 

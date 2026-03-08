@@ -25,7 +25,7 @@ func (m ConfigModel) Init() tea.Cmd {
 func (m ConfigModel) Update(msg tea.Msg) (ConfigModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport = viewport.New(msg.Width, msg.Height-4)
+		m.viewport = viewport.New(msg.Width, msg.Height-6)
 		m.ready = true
 		m.viewport.SetContent(m.renderConfig())
 	}
