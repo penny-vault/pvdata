@@ -34,6 +34,8 @@ type Dataset struct {
 	Description string
 	DataTypes   []*data.DataType
 	DateRange   func() (time.Time, time.Time)
+	LifeCycle   LifeCycleManager
+	TTL         time.Duration
 
 	// Fetch is called when pvdata wants to retrieve measurements from the dataset. It
 	// passes a config with the provider configuration, a channel to write results to,

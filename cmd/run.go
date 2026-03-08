@@ -11,6 +11,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/penny-vault/pvdata/web"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -33,19 +34,29 @@ sequentially (ignoring any set schedule).`,
 			log.Fatal().Err(err).Msg("could not connect to library")
 		}
 
-		// check if we are running in daemon mode
-		if len(args) == 0 {
-			// no args provided -- run as a daemon
-			// TODO
-			os.Exit(0)
-		}
-
 		outChan := make(chan *data.Observation, 1000)
 		exitChan := make(chan data.RunSummary, 5)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go myLibrary.SaveObservations(outChan, &wg)
+
+		// check if we are running in daemon mode
+		if len(args) == 0 {
+			// no args provided -- run as a daemon
+
+			// start the web server
+			app := web.CreateFiberApp()
+
+			port := viper.GetString("web.port")
+			if port == "" {
+				port = "3000"
+			}
+
+			app.Listen(":" + port)
+
+			os.Exit(0)
+		}
 
 		// not daemon mode, execute each subscription individually
 		for _, subscriptionID := range args {

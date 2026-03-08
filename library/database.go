@@ -17,10 +17,12 @@ package library
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/georgysavva/scany/v2/pgxscan"
+	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
@@ -243,7 +245,23 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 // Subscriptions returns an array of subscription objects
 func (myLibrary *Library) Subscriptions(ctx context.Context) ([]*Subscription, error) {
 	var subscriptions []*Subscription
-	err := pgxscan.Select(ctx, myLibrary.Pool, &subscriptions,
+
+	// get nyc timezone
+	nyc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		log.Panic().Err(err).Msg("could not load timezone")
+	}
+
+	scheduler, err := gocron.NewScheduler(
+		gocron.WithLocation(nyc),
+	)
+	if err != nil {
+		log.Panic().Err(err).Msg("could not create scheduler")
+	}
+
+	scheduler.Start()
+
+	err = pgxscan.Select(ctx, myLibrary.Pool, &subscriptions,
 		`SELECT id, name, provider, dataset, config, data_tables, data_types, total_records,
 num_records_last_import, total_securities, num_securities_last_import,
 coalesce(first_obs_date, '0001-01-01'::timestamp) as first_obs_date,
@@ -257,7 +275,24 @@ created_by FROM subscriptions`)
 		for idx, dataType := range sub.DataTypes {
 			sub.DataTablesMap[dataType] = sub.DataTables[idx]
 		}
+
+		job, err := scheduler.NewJob(gocron.CronJob(sub.Schedule, false), gocron.NewTask(func() {}))
+		if err != nil {
+			log.Warn().Err(err).Msg("could not create cron job")
+			continue
+		}
+
+		sub.NextRun, err = job.NextRun()
+		if err != nil {
+			log.Warn().Err(err).Msg("could not get next run time")
+			continue
+		}
+
+		sub.NextRunHuman = strings.Replace(time.Until(sub.NextRun).Round(time.Minute).String(), "0s", "", 1)
 	}
+
+	scheduler.Shutdown()
+
 	return subscriptions, err
 }
 
