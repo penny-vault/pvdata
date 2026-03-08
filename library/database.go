@@ -240,6 +240,12 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 			}
 		}
 
+		if elem.Consensus != nil {
+			if err := elem.Consensus.SaveDB(ctx, subscription.DataTablesMap[data.ConsensusKey], conn); err != nil {
+				log.Error().Err(err).Msg("cannot save consensus to database")
+			}
+		}
+
 		if elem.Estimate != nil {
 			if err := elem.Estimate.SaveDB(ctx, subscription.DataTablesMap[data.EstimateKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save estimate to database")

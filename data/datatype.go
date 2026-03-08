@@ -40,6 +40,7 @@ type RunSummary struct {
 
 type Observation struct {
 	AssetObject       *Asset
+	Consensus         *Consensus
 	CustomObject      *Custom
 	EconomicIndicator *EconomicIndicator
 	EodQuote          *Eod
@@ -65,6 +66,7 @@ type DataType struct {
 
 const (
 	AssetKey             = "asset-description"
+	ConsensusKey         = "consensus"
 	CustomKey            = "custom"
 	EconomicIndicatorKey = "economic-indicator"
 	EODKey               = "eod"
@@ -116,6 +118,30 @@ ADD COLUMN search tsvector
 ) STORED;
 
 CREATE INDEX %[1]s_search_idx ON %[1]s USING GIN (search);`,
+		Migrations:    []string{},
+		Version:       0,
+		IsPartitioned: false,
+	},
+	ConsensusKey: {
+		Name:     ConsensusKey,
+		ViewName: "consensus",
+		Schema: `CREATE TABLE %[1]s (
+	ticker                   CHARACTER VARYING(10) NOT NULL,
+	composite_figi           CHARACTER(12)         NOT NULL,
+	event_date               DATE                  NOT NULL,
+	avg_recommendation       REAL,
+	num_analysts             INT,
+	num_strong_buy_or_buy    INT,
+	num_hold                 INT,
+	num_sell_or_strong_sell  INT,
+	num_upgrades             INT,
+	num_downgrades           INT,
+	avg_target_price         REAL,
+	PRIMARY KEY (composite_figi, event_date)
+);
+
+CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);
+CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date);`,
 		Migrations:    []string{},
 		Version:       0,
 		IsPartitioned: false,
