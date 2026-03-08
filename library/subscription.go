@@ -113,6 +113,29 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 		return err
 	}
 
+	// clean up preferred views that pointed to deleted tables
+	existingViews, viewErr := PreferredViews(ctx, subscription.Library.Pool)
+	if viewErr != nil {
+		log.Warn().Err(viewErr).Msg("could not query preferred views during deletion")
+	} else {
+		deletedTables := make(map[string]bool, len(tables))
+		for _, t := range tables {
+			deletedTables[t] = true
+		}
+
+		for _, dataTypeKey := range subscription.DataTypes {
+			dt := data.DataTypes[dataTypeKey]
+			if dt == nil || dt.ViewName == "" {
+				continue
+			}
+			if targetTable, ok := existingViews[dt.ViewName]; ok && deletedTables[targetTable] {
+				if err := DropPreferredView(ctx, subscription.Library.Pool, dataTypeKey); err != nil {
+					log.Warn().Err(err).Str("View", dt.ViewName).Msg("could not drop preferred view for deleted table")
+				}
+			}
+		}
+	}
+
 	// now that all database related modification has succeeded delete any corresponding health check
 	if subscription.HealthCheckID != "" {
 		if err := healthcheck.Delete(subscription.HealthCheckID); err != nil {
@@ -256,6 +279,28 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 	// commit to database
 	if err := tx.Commit(ctx); err != nil {
 		return err
+	}
+
+	// auto-create preferred views for data types that don't have one yet
+	existingViews, err := PreferredViews(ctx, subscription.Library.Pool)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not query existing preferred views")
+	} else {
+		for _, dataTypeKey := range subscription.DataTypes {
+			dt := data.DataTypes[dataTypeKey]
+			if dt == nil || dt.ViewName == "" {
+				continue
+			}
+			if _, exists := existingViews[dt.ViewName]; !exists {
+				tableName := subscription.DataTablesMap[dataTypeKey]
+				if tableName == "" {
+					continue
+				}
+				if err := SetPreferredView(ctx, subscription.Library.Pool, dataTypeKey, tableName); err != nil {
+					log.Warn().Err(err).Str("DataType", dataTypeKey).Msg("could not auto-create preferred view")
+				}
+			}
+		}
 	}
 
 	return nil

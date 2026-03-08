@@ -16,14 +16,12 @@ package figi
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/alphadose/haxmap"
 	"github.com/georgysavva/scany/v2/pgxscan"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
 )
 
 var (
@@ -39,13 +37,7 @@ func MapInstance() *haxmap.Map[string, string] {
 }
 
 func LoadCacheFromDB(ctx context.Context, dbConn *pgxpool.Conn) {
-	assetTable := viper.GetString("default.asset_table")
-	if assetTable == "" {
-		log.Warn().Msg("default.asset_table not set, local figi lookup is disabled")
-		return
-	}
-
-	sql := fmt.Sprintf("SELECT ticker, composite_figi FROM %s WHERE active=true", assetTable)
+	sql := "SELECT ticker, composite_figi FROM assets WHERE active=true"
 
 	rows, err := dbConn.Query(ctx, sql)
 	if err != nil {

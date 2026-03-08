@@ -55,6 +55,7 @@ type Observation struct {
 
 type DataType struct {
 	Name          string
+	ViewName      string
 	Schema        string
 	Migrations    []string
 	Version       int
@@ -75,7 +76,8 @@ const (
 
 var DataTypes = map[string]*DataType{
 	AssetKey: {
-		Name: AssetKey,
+		Name:     AssetKey,
+		ViewName: "assets",
 		Schema: `CREATE TABLE %[1]s (
 ticker TEXT,
 composite_figi TEXT,
@@ -117,7 +119,8 @@ CREATE INDEX %[1]s_search_idx ON %[1]s USING GIN (search);`,
 		IsPartitioned: false,
 	},
 	CustomKey: {
-		Name: CustomKey,
+		Name:     CustomKey,
+		ViewName: "custom",
 		Schema: `CREATE TABLE %[1]s (
 	ticker         CHARACTER VARYING(10) NOT NULL,
 	composite_figi CHARACTER(12)         NOT NULL,
@@ -133,7 +136,8 @@ CREATE INDEX %[1]s_key_ticker_event_date_idx ON %[1]s(key, ticker, event_date DE
 		IsPartitioned: false,
 	},
 	EconomicIndicatorKey: {
-		Name: EconomicIndicatorKey,
+		Name:     EconomicIndicatorKey,
+		ViewName: "economic_indicators",
 		Schema: `CREATE TABLE %[1]s (
 			series     TEXT NOT NULL,
 			event_date DATE NOT NULL,
@@ -145,7 +149,8 @@ CREATE INDEX %[1]s_key_ticker_event_date_idx ON %[1]s(key, ticker, event_date DE
 		IsPartitioned: false,
 	},
 	EODKey: {
-		Name: EODKey,
+		Name:     EODKey,
+		ViewName: "eod",
 		Schema: `CREATE TABLE %[1]s (
 ticker         CHARACTER VARYING(10) NOT NULL,
 composite_figi CHARACTER(12)         NOT NULL,
@@ -174,7 +179,8 @@ EXECUTE PROCEDURE adj_close_default();`,
 		IsPartitioned: true,
 	},
 	FundamentalsKey: {
-		Name: FundamentalsKey,
+		Name:     FundamentalsKey,
+		ViewName: "fundamentals",
 		Schema: `CREATE TABLE %[1]s (
 	event_date DATE,
 	ticker TEXT,
@@ -292,7 +298,8 @@ CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, dimension);`,
 		IsPartitioned: false,
 	},
 	MarketHolidaysKey: {
-		Name: MarketHolidaysKey,
+		Name:     MarketHolidaysKey,
+		ViewName: "market_holidays",
 		Schema: `CREATE TABLE %[1]s (
 holiday TEXT NOT NULL,
 event_date DATE NOT NULL,
@@ -306,7 +313,8 @@ PRIMARY KEY (event_date, market)
 		IsPartitioned: false,
 	},
 	MetricKey: {
-		Name: MetricKey,
+		Name:     MetricKey,
+		ViewName: "metrics",
 		Schema: `CREATE TABLE %[1]s (
 ticker         CHARACTER VARYING(10) NOT NULL,
 composite_figi CHARACTER(12)         NOT NULL,
@@ -330,7 +338,8 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 		IsPartitioned: true,
 	},
 	QuoteKey: {
-		Name: MetricKey,
+		Name:     QuoteKey,
+		ViewName: "quotes",
 		Schema: `CREATE TABLE %[1]s (
 ticker         CHARACTER VARYING(10) NOT NULL,
 composite_figi CHARACTER(12)         NOT NULL,
@@ -349,7 +358,8 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 		IsPartitioned: false,
 	},
 	RatingKey: {
-		Name: RatingKey,
+		Name:     RatingKey,
+		ViewName: "ratings",
 		Schema: `CREATE TABLE %[1]s (
 	ticker         CHARACTER VARYING(10) NOT NULL,
 	composite_figi CHARACTER(12)         NOT NULL,

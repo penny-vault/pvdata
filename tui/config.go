@@ -56,7 +56,6 @@ func (m ConfigModel) renderConfig() string {
 		key   string
 	}{
 		{"Database URL", "db.url"},
-		{"Default Asset Table", "default.asset_table"},
 		{"OpenFIGI API Key", "openfigi.apikey"},
 		{"Web Port", "web.port"},
 		{"Config File", ""},

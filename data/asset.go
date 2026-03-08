@@ -24,7 +24,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
 )
 
 type AssetType string
@@ -88,10 +87,7 @@ type Asset struct {
 func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*Asset, error) {
 	var assetTable string
 	if len(tables) == 0 {
-		assetTable = viper.GetString("default.asset_table")
-		if assetTable == "" {
-			return nil, errors.New("default.asset_table not set, list of active assets is not possible")
-		}
+		assetTable = "assets"
 	} else {
 		assetTable = tables[0]
 	}

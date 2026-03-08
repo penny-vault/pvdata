@@ -3,15 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/charmbracelet/huh"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pelletier/go-toml/v2"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
 )
 
 // PreflightResult holds the results of pre-flight validation.
@@ -28,8 +24,8 @@ func RunPreflight(ctx context.Context, myLibrary *library.Library, subscriptionI
 	}
 	conn.Release()
 
-	// Step 2: Validate default.asset_table
-	if err := validateAssetTable(ctx, myLibrary.Pool); err != nil {
+	// Step 2: Validate preferred views
+	if err := validatePreferredViews(ctx, myLibrary); err != nil {
 		return nil, err
 	}
 
@@ -59,102 +55,84 @@ func RunPreflight(ctx context.Context, myLibrary *library.Library, subscriptionI
 	}, nil
 }
 
-func validateAssetTable(ctx context.Context, pool *pgxpool.Pool) error {
-	assetTable := viper.GetString("default.asset_table")
-	if assetTable != "" {
-		return nil
-	}
-
-	conn, err := pool.Acquire(ctx)
+// validatePreferredViews checks that preferred views exist for all data types
+// that have subscriptions. If only one subscription provides a data type, the
+// view is auto-created. If multiple subscriptions provide it, the user is
+// prompted to choose.
+func validatePreferredViews(ctx context.Context, myLibrary *library.Library) error {
+	existingViews, err := library.PreferredViews(ctx, myLibrary.Pool)
 	if err != nil {
-		return fmt.Errorf("could not acquire connection: %w", err)
+		return fmt.Errorf("could not query preferred views: %w", err)
 	}
-	defer conn.Release()
 
-	rows, err := conn.Query(ctx,
-		`SELECT DISTINCT unnest(data_tables)
-		 FROM subscriptions
-		 WHERE data_types @> ARRAY['asset-description']::datatype[]`)
+	allSubs, err := myLibrary.Subscriptions(ctx)
 	if err != nil {
-		return fmt.Errorf("could not query asset tables: %w", err)
+		return fmt.Errorf("could not load subscriptions: %w", err)
 	}
-	defer rows.Close()
 
-	var tables []string
-	for rows.Next() {
-		var table string
-		if err := rows.Scan(&table); err != nil {
-			return fmt.Errorf("could not scan asset table: %w", err)
+	// Build a map: data type key -> list of (subscription, table name)
+	type subTable struct {
+		sub       *library.Subscription
+		tableName string
+	}
+	dataTypeProviders := make(map[string][]subTable)
+	for _, sub := range allSubs {
+		if !sub.Active {
+			continue
 		}
-		tables = append(tables, table)
-	}
-
-	if len(tables) == 0 {
-		return fmt.Errorf("no asset tables found; create an asset subscription first")
-	}
-
-	if len(tables) == 1 {
-		assetTable = tables[0]
-		log.Info().Str("AssetTable", assetTable).Msg("auto-selected asset table")
-	} else {
-		options := make([]huh.Option[string], len(tables))
-		for i, t := range tables {
-			options[i] = huh.NewOption(t, t)
-		}
-
-		form := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Select the default asset table:").
-					Description("This table is used to look up active assets for data providers.").
-					Options(options...).
-					Value(&assetTable),
-			),
-		)
-
-		if err := form.Run(); err != nil {
-			return fmt.Errorf("asset table selection cancelled: %w", err)
+		for _, dtKey := range sub.DataTypes {
+			tableName := sub.DataTablesMap[dtKey]
+			if tableName != "" {
+				dataTypeProviders[dtKey] = append(dataTypeProviders[dtKey], subTable{sub, tableName})
+			}
 		}
 	}
 
-	viper.Set("default.asset_table", assetTable)
+	// For each data type that has providers but no view, create one
+	for dtKey, providers := range dataTypeProviders {
+		dt := data.DataTypes[dtKey]
+		if dt == nil || dt.ViewName == "" {
+			continue
+		}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("could not determine home directory: %w", err)
-	}
+		if _, exists := existingViews[dt.ViewName]; exists {
+			continue
+		}
 
-	configFN := filepath.Join(home, ".pvdata.toml")
+		if len(providers) == 1 {
+			// Auto-create
+			if err := library.SetPreferredView(ctx, myLibrary.Pool, dtKey, providers[0].tableName); err != nil {
+				return fmt.Errorf("could not auto-create view %s: %w", dt.ViewName, err)
+			}
+			log.Info().Str("View", dt.ViewName).Str("Table", providers[0].tableName).Msg("auto-created preferred view")
+		} else {
+			// Prompt user to choose
+			options := make([]huh.Option[string], len(providers))
+			for i, p := range providers {
+				label := fmt.Sprintf("%s (%s/%s) -> %s", p.sub.Name, p.sub.Provider, p.sub.Dataset, p.tableName)
+				options[i] = huh.NewOption(label, p.tableName)
+			}
 
-	existingData, err := os.ReadFile(configFN)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("could not read config file: %w", err)
-	}
+			var selected string
+			form := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title(fmt.Sprintf("Select the preferred table for '%s' view:", dt.ViewName)).
+						Description("Multiple subscriptions provide this data type. Choose which one the view should point to.").
+						Options(options...).
+						Value(&selected),
+				),
+			)
 
-	configMap := make(map[string]any)
-	if len(existingData) > 0 {
-		if err := toml.Unmarshal(existingData, &configMap); err != nil {
-			return fmt.Errorf("could not parse config file: %w", err)
+			if err := form.Run(); err != nil {
+				return fmt.Errorf("view selection for %s cancelled: %w", dt.ViewName, err)
+			}
+
+			if err := library.SetPreferredView(ctx, myLibrary.Pool, dtKey, selected); err != nil {
+				return fmt.Errorf("could not create view %s: %w", dt.ViewName, err)
+			}
 		}
 	}
-
-	defaultSection, ok := configMap["default"].(map[string]any)
-	if !ok {
-		defaultSection = make(map[string]any)
-	}
-	defaultSection["asset_table"] = assetTable
-	configMap["default"] = defaultSection
-
-	newData, err := toml.Marshal(configMap)
-	if err != nil {
-		return fmt.Errorf("could not marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configFN, newData, 0644); err != nil {
-		return fmt.Errorf("could not write config file: %w", err)
-	}
-
-	log.Info().Str("AssetTable", assetTable).Str("ConfigFile", configFN).Msg("saved default asset table to config")
 
 	return nil
 }
