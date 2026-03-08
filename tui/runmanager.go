@@ -81,7 +81,8 @@ func (rm *RunManager) Statuses() []*SubscriptionStatus {
 
 	result := make([]*SubscriptionStatus, 0, len(rm.statuses))
 	for _, s := range rm.statuses {
-		result = append(result, s)
+		copy := *s
+		result = append(result, &copy)
 	}
 	return result
 }
@@ -191,6 +192,7 @@ func (rm *RunManager) countObservations(in <-chan *data.Observation, out chan<- 
 
 		out <- obs
 	}
+	close(out)
 }
 
 func (rm *RunManager) emit(event RunEvent) {

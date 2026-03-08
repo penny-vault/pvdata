@@ -23,12 +23,14 @@ type SessionRun struct {
 type HistoryModel struct {
 	viewport    viewport.Model
 	sessionRuns []SessionRun
+	startTimes  map[uuid.UUID]time.Time
 	ready       bool
 }
 
 func NewHistoryModel() HistoryModel {
 	return HistoryModel{
 		sessionRuns: make([]SessionRun, 0),
+		startTimes:  make(map[uuid.UUID]time.Time),
 	}
 }
 
@@ -44,12 +46,17 @@ func (m HistoryModel) Update(msg tea.Msg) (HistoryModel, tea.Cmd) {
 		m.refreshContent()
 
 	case RunEvent:
+		if msg.Type == EventStarted {
+			m.startTimes[msg.SubscriptionID] = msg.Timestamp
+		}
 		if msg.Type == EventCompleted || msg.Type == EventFailed {
+			startTime := m.startTimes[msg.SubscriptionID]
 			m.sessionRuns = append(m.sessionRuns, SessionRun{
 				SubscriptionID:   msg.SubscriptionID,
 				SubscriptionName: msg.SubscriptionName,
 				Status:           msg.Type,
 				RecordsCount:     msg.RecordsCount,
+				StartTime:        startTime,
 				EndTime:          msg.Timestamp,
 			})
 			m.refreshContent()
