@@ -46,10 +46,42 @@ type ssData struct {
 	Value string `xml:",chardata"`
 }
 
+// sanitizeAmpersands replaces bare & characters that are not part of valid
+// XML entity references. iShares files contain malformed HTML in their
+// disclaimer text (e.g., "&style" without a semicolon).
+func sanitizeAmpersands(data []byte) []byte {
+	validEntities := []string{"amp;", "lt;", "gt;", "quot;", "apos;", "#"}
+	var result []byte
+	for i := 0; i < len(data); i++ {
+		if data[i] == '&' {
+			rest := string(data[i+1:])
+			isValid := false
+			for _, ent := range validEntities {
+				if strings.HasPrefix(rest, ent) {
+					isValid = true
+					break
+				}
+			}
+			if isValid {
+				result = append(result, '&')
+			} else {
+				result = append(result, []byte("&amp;")...)
+			}
+		} else {
+			result = append(result, data[i])
+		}
+	}
+	return result
+}
+
 func parseISharesXML(xmlData []byte) (*iSharesParseResult, error) {
 	// Strip BOM (possibly duplicated)
 	xmlData = bytes.TrimPrefix(xmlData, []byte("\xef\xbb\xbf"))
 	xmlData = bytes.TrimPrefix(xmlData, []byte("\xef\xbb\xbf"))
+
+	// Sanitize bare ampersands in disclaimer text (iShares files contain
+	// invalid XML like "&style" without semicolons in their HTML content)
+	xmlData = sanitizeAmpersands(xmlData)
 
 	var workbook ssWorkbook
 	if err := xml.Unmarshal(xmlData, &workbook); err != nil {

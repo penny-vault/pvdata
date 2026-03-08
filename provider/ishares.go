@@ -184,7 +184,8 @@ func downloadSingleISharesETF(
 	logger.Info().Str("URL", productURL).Str("IndexName", etf.IndexName).Msg("navigating to iShares product page")
 
 	if _, err := page.Goto(productURL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateNetworkidle,
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		Timeout:   playwright.Float(60000),
 	}); err != nil {
 		return 0, fmt.Errorf("could not navigate to %s: %w", productURL, err)
 	}

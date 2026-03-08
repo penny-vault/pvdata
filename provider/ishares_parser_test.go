@@ -1,17 +1,11 @@
 package provider
 
 import (
-	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestISharesParser(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "iShares Parser Suite")
-}
 
 var _ = Describe("parseISharesXML", func() {
 	sampleXML := []byte(`<?xml version="1.0"?>

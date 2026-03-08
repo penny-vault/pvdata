@@ -17,7 +17,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -117,15 +116,16 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	logger.Info().Str("URL", NASDAQ_NDX_URL).Msg("navigating to Nasdaq NDX-100 page")
 
 	if _, err := page.Goto(NASDAQ_NDX_URL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateNetworkidle,
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+		Timeout:   playwright.Float(60000),
 	}); err != nil {
 		logger.Error().Err(err).Msg("could not navigate to Nasdaq NDX-100 page")
 		runSummary.Status = data.RunFailed
 		return
 	}
 
-	// Wait for the constituents table to load
-	tableSelector := "table.nasdaq-screener__table"
+	// Wait for the ARIA role-based table to load
+	tableSelector := "[role='table']"
 	if err := page.Locator(tableSelector).WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(30000),
@@ -135,8 +135,8 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 		return
 	}
 
-	// Extract rows from the table body
-	rows, err := page.Locator(fmt.Sprintf("%s tbody tr", tableSelector)).All()
+	// Extract data rows only (they have data-row-index attribute, unlike the header row)
+	rows, err := page.Locator(fmt.Sprintf("%s [data-row-index]", tableSelector)).All()
 	if err != nil {
 		logger.Error().Err(err).Msg("could not locate table rows")
 		runSummary.Status = data.RunFailed
@@ -147,12 +147,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	holdings := make([]nasdaqHolding, 0, len(rows))
 	for _, row := range rows {
-		cells, err := row.Locator("td").All()
-		if err != nil || len(cells) < 2 {
-			continue
-		}
-
-		tickerText, err := cells[0].InnerText()
+		// Ticker is in the first cell, wrapped in an <a> tag
+		tickerLink := row.Locator("a[href*='/market-activity/stocks/']").First()
+		tickerText, err := tickerLink.InnerText()
 		if err != nil {
 			continue
 		}
@@ -161,19 +158,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 			continue
 		}
 
-		// Try to get weight from the last column
-		var weight float64
-		lastCell := cells[len(cells)-1]
-		weightText, err := lastCell.InnerText()
-		if err == nil {
-			weightText = strings.TrimSpace(weightText)
-			weightText = strings.Replace(weightText, "%", "", 1)
-			weight, _ = strconv.ParseFloat(weightText, 64)
-		}
-
+		// Nasdaq does not provide weight data; weight will be 0
 		holdings = append(holdings, nasdaqHolding{
 			Ticker: ticker,
-			Weight: weight,
 		})
 	}
 
