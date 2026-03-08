@@ -31,37 +31,39 @@ import (
 )
 
 type Subscription struct {
-	ID   uuid.UUID
-	Name string
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 
-	Provider string
-	Dataset  string
-	Config   map[string]string
+	Provider string            `json:"provider"`
+	Dataset  string            `json:"dataset"`
+	Config   map[string]string `json:"config"`
 
-	DataTables    []string
-	DataTypes     []string
-	DataTablesMap map[string]string
-	IsPartitioned bool
+	DataTables    []string          `json:"data_tables"`
+	DataTypes     []string          `json:"data_types"`
+	DataTablesMap map[string]string `json:"data_tables_map"`
+	IsPartitioned bool              `json:"is_partitioned"`
 
-	TotalRecords         int64
-	NumRecordsLastImport int64
+	TotalRecords         int64 `json:"total_records"`
+	NumRecordsLastImport int64 `json:"num_records_last_import"`
 
-	TotalSecurities         int64
-	NumSecuritiesLastImport int64
+	TotalSecurities         int64 `json:"total_securities"`
+	NumSecuritiesLastImport int64 `json:"num_securities_last_import"`
 
-	FirstObsDate time.Time
-	LastObsDate  time.Time
+	FirstObsDate time.Time `json:"first_obs_date"`
+	LastObsDate  time.Time `json:"last_obs_date"`
 
-	Schedule      string
-	HealthCheckID string
-	LastRun       time.Time
-	Active        bool
-	SchemaVersion int
+	Schedule      string    `json:"schedule"`
+	HealthCheckID string    `json:"health_check_id"`
+	NextRun       time.Time `json:"next_run"`
+	NextRunHuman  string    `json:"next_run_human"`
+	LastRun       time.Time `json:"last_run"`
+	Active        bool      `json:"active"`
+	SchemaVersion int       `json:"schema_version"`
 
-	CreatedOn time.Time
-	CreatedBy string
+	CreatedOn time.Time `json:"created_on"`
+	CreatedBy string    `json:"created_by"`
 
-	Library *Library
+	Library *Library `json:"-"`
 }
 
 type dateRange struct {
