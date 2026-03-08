@@ -251,6 +251,9 @@ func (ticker *sharadarTicker) ToAsset() *data.Asset {
 	ticker.RelatedTickers = strings.TrimSpace(ticker.RelatedTickers)
 	if ticker.RelatedTickers != "" {
 		asset.SimilarTickers = strings.Split(ticker.RelatedTickers, " ")
+		for idx, val := range asset.SimilarTickers {
+			asset.SimilarTickers[idx] = strings.ReplaceAll(val, ".", "/")
+		}
 	}
 
 	// try and parse CIK from SC filings URL

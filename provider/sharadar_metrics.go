@@ -16,6 +16,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -99,7 +100,7 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 		ticker := &sharadarSP500{
 			Date:   val.Get("0").String(),
 			Action: val.Get("1").String(),
-			Ticker: val.Get("2").String(),
+			Ticker: strings.ReplaceAll(val.Get("2").String(), ".", "/"),
 		}
 
 		sp500Map[ticker.Ticker] = true
@@ -129,7 +130,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
 
 	// download daily metrics
-	tickerUrl := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/DAILY"
+	dailyUrl := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/DAILY"
 	req := client.R()
 
 	if cursor != "" {
@@ -138,13 +139,13 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 		req.SetQueryParam("date", forDate)
 	}
 
-	resp, err := req.Get(tickerUrl)
+	resp, err := req.Get(dailyUrl)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to download tickers")
+		logger.Error().Err(err).Msg("failed to download daily metrics from sharadar")
 	}
 
 	if resp.StatusCode() >= 400 {
-		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", tickerUrl).Bytes("Body", resp.Body()).Msg("error when requesting url")
+		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", dailyUrl).Bytes("Body", resp.Body()).Msg("error when requesting url")
 		return ""
 	}
 
@@ -180,7 +181,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 
 func (metric *sharadarMetric) PvMetric(sp500Map map[string]bool, figiMap map[string]string, loc *time.Location) *data.Metric {
 	pvMetric := &data.Metric{
-		Ticker:     metric.Ticker,
+		Ticker:     strings.ReplaceAll(metric.Ticker, ".", "/"),
 		MarketCap:  int64(metric.MarketCap * 1e6),
 		EV:         int64(metric.EV * 1e6),
 		PE:         metric.PE,

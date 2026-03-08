@@ -16,6 +16,7 @@ package provider
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -190,15 +191,21 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 		client.SetQueryParam("qopts.cursor_id", cursor)
 	}
 
+	lastUpdated := time.Now().Add(-1 * time.Hour * 24 * 10)
+	client.SetQueryParam("lastupdated.gte", lastUpdated.Format("2006-01-02"))
+
 	resp, err := client.R().Get(url)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to download fundamentals")
+		return ""
 	}
 
 	if resp.StatusCode() >= 400 {
 		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", url).Bytes("Body", resp.Body()).Msg("error when requesting url")
 		return ""
 	}
+
+	logger.Debug().Str("URL", resp.Request.URL).Send()
 
 	responseBody := string(resp.Body())
 	result := gjson.Get(responseBody, "datatable.data")
@@ -318,7 +325,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 		}
 
 		// convert to pv asset type
-		pvFundamental := fundamental.ToPv(figiMap)
+		pvFundamental := fundamental.PvFundamental(figiMap)
 
 		out <- &data.Observation{
 			Fundamental:      pvFundamental,
@@ -331,8 +338,8 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 	return gjson.Get(responseBody, "meta.next_cursor_id").String()
 }
 
-// ToPv converts the sharadar
-func (fundamental *sharadarFundamental) ToPv(figiMap map[string]string) *data.Fundamental {
+// PvFundamental converts the sharadar
+func (fundamental *sharadarFundamental) PvFundamental(figiMap map[string]string) *data.Fundamental {
 	var err error
 
 	// get nyc timezone
@@ -343,7 +350,7 @@ func (fundamental *sharadarFundamental) ToPv(figiMap map[string]string) *data.Fu
 	}
 
 	ff := &data.Fundamental{
-		Ticker:                                  fundamental.Ticker,
+		Ticker:                                  strings.ReplaceAll(fundamental.Ticker, ".", "/"),
 		Dimension:                               fundamental.Dimension,
 		AccumulatedOtherComprehensiveIncome:     fundamental.AccumulatedOtherComprehensiveIncome,
 		TotalAssets:                             fundamental.TotalAssets,
