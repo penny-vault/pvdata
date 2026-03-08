@@ -1,0 +1,98 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
+)
+
+// SessionRun tracks a completed run in the current session.
+type SessionRun struct {
+	SubscriptionID   uuid.UUID
+	SubscriptionName string
+	Status           EventType
+	RecordsCount     int
+	StartTime        time.Time
+	EndTime          time.Time
+}
+
+type HistoryModel struct {
+	viewport    viewport.Model
+	sessionRuns []SessionRun
+	ready       bool
+}
+
+func NewHistoryModel() HistoryModel {
+	return HistoryModel{
+		sessionRuns: make([]SessionRun, 0),
+	}
+}
+
+func (m HistoryModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m HistoryModel) Update(msg tea.Msg) (HistoryModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.viewport = viewport.New(msg.Width, msg.Height-4)
+		m.ready = true
+		m.refreshContent()
+
+	case RunEvent:
+		if msg.Type == EventCompleted || msg.Type == EventFailed {
+			m.sessionRuns = append(m.sessionRuns, SessionRun{
+				SubscriptionID:   msg.SubscriptionID,
+				SubscriptionName: msg.SubscriptionName,
+				Status:           msg.Type,
+				RecordsCount:     msg.RecordsCount,
+				EndTime:          msg.Timestamp,
+			})
+			m.refreshContent()
+		}
+	}
+
+	if m.ready {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+func (m HistoryModel) View() string {
+	if !m.ready {
+		return "Initializing history..."
+	}
+	return m.viewport.View()
+}
+
+func (m *HistoryModel) refreshContent() {
+	if !m.ready {
+		return
+	}
+
+	var b strings.Builder
+
+	b.WriteString("-- Current Session --\n\n")
+	if len(m.sessionRuns) == 0 {
+		b.WriteString("  No completed runs yet.\n")
+	} else {
+		for _, run := range m.sessionRuns {
+			status := "done"
+			if run.Status == EventFailed {
+				status = "FAILED"
+			}
+			duration := run.EndTime.Sub(run.StartTime).Round(time.Second)
+			b.WriteString(fmt.Sprintf("  %-30s  %-8s  %d records  %s\n",
+				run.SubscriptionName, status, run.RecordsCount, duration))
+		}
+	}
+
+	m.viewport.SetContent(b.String())
+}
