@@ -46,6 +46,8 @@ type Observation struct {
 	EodQuote          *Eod
 	Estimate          *Estimate
 	Fundamental       *Fundamental
+	IndexChange       *IndexChange
+	IndexSnapshot     *IndexSnapshot
 	MarketHoliday     *MarketHoliday
 	Metric            *Metric
 	Rating            *AnalystRating
@@ -72,6 +74,7 @@ const (
 	EODKey               = "eod"
 	EstimateKey          = "estimate"
 	FundamentalsKey      = "fundamental"
+	IndexKey             = "index"
 	MarketHolidaysKey    = "market-holidays"
 	MetricKey            = "metric"
 	QuoteKey             = "quote"
@@ -222,6 +225,32 @@ EXECUTE PROCEDURE adj_close_default();`,
 
 CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker, series);
 CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, series);`,
+		Migrations:    []string{},
+		Version:       0,
+		IsPartitioned: false,
+	},
+	IndexKey: {
+		Name:     IndexKey,
+		ViewName: "indices",
+		Schema: `CREATE TABLE %[1]s_snapshot (
+    composite_figi CHARACTER(12)         NOT NULL,
+    ticker         CHARACTER VARYING(10) NOT NULL,
+    index_name     TEXT                  NOT NULL,
+    snapshot_date  DATE                  NOT NULL,
+    PRIMARY KEY (composite_figi, index_name, snapshot_date)
+);
+
+CREATE TABLE %[1]s_changelog (
+    composite_figi CHARACTER(12)         NOT NULL,
+    ticker         CHARACTER VARYING(10) NOT NULL,
+    index_name     TEXT                  NOT NULL,
+    event_date     DATE                  NOT NULL,
+    action         TEXT                  NOT NULL,
+    PRIMARY KEY (composite_figi, index_name, event_date)
+);
+
+CREATE INDEX %[1]s_snapshot_index_name_idx ON %[1]s_snapshot(index_name, snapshot_date);
+CREATE INDEX %[1]s_changelog_index_name_idx ON %[1]s_changelog(index_name, event_date);`,
 		Migrations:    []string{},
 		Version:       0,
 		IsPartitioned: false,

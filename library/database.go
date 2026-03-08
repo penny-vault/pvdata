@@ -222,6 +222,18 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 			}
 		}
 
+		if elem.IndexSnapshot != nil {
+			if err := elem.IndexSnapshot.SaveDB(ctx, subscription.DataTablesMap[data.IndexKey], conn); err != nil {
+				log.Error().Err(err).Msg("cannot save index snapshot to database")
+			}
+		}
+
+		if elem.IndexChange != nil {
+			if err := elem.IndexChange.SaveDB(ctx, subscription.DataTablesMap[data.IndexKey], conn); err != nil {
+				log.Error().Err(err).Msg("cannot save index change to database")
+			}
+		}
+
 		if elem.MarketHoliday != nil {
 			if err := elem.MarketHoliday.SaveDB(ctx, subscription.DataTablesMap[data.MarketHolidaysKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save market holiday to database")
