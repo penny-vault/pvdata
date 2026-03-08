@@ -18,6 +18,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 )
 
@@ -27,8 +28,9 @@ var (
 )
 
 // NewSubscription returns a new subscription object with the dataset
-// properly filled out
-func NewSubscription(providerName, datasetName string, config map[string]string, myLibrary *library.Library) (*library.Subscription, error) {
+// properly filled out. If selectedTypes is non-empty, only data types
+// whose key appears in selectedTypes are included.
+func NewSubscription(providerName, datasetName string, config map[string]string, selectedTypes []string, myLibrary *library.Library) (*library.Subscription, error) {
 	providerObj, ok := Map[providerName]
 	if !ok {
 		return nil, ErrProviderNotFound
@@ -40,6 +42,21 @@ func NewSubscription(providerName, datasetName string, config map[string]string,
 	}
 
 	dataTypes := datasetObj.DataTypes
+
+	// filter to selected types if specified
+	if len(selectedTypes) > 0 {
+		selected := make(map[string]bool, len(selectedTypes))
+		for _, t := range selectedTypes {
+			selected[t] = true
+		}
+		filtered := make([]*data.DataType, 0, len(selectedTypes))
+		for _, dt := range dataTypes {
+			if selected[dt.Name] {
+				filtered = append(filtered, dt)
+			}
+		}
+		dataTypes = filtered
+	}
 
 	subscription := &library.Subscription{
 		ID:        uuid.New(),

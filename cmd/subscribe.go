@@ -146,6 +146,42 @@ Also see: subscriptions, unsubscribe`,
 			log.Fatal().Err(err).Msg("failed to create wizard")
 		}
 
+		// if the selected dataset has multiple data types, let user choose which to include
+		var selectedDataTypes []string
+		datasetObj := dataProvider.Datasets()[subDataset]
+		if len(datasetObj.DataTypes) > 1 {
+			dtOptions := make([]huh.Option[string], 0, len(datasetObj.DataTypes))
+			allKeys := make([]string, 0, len(datasetObj.DataTypes))
+			for _, dt := range datasetObj.DataTypes {
+				viewName := dt.ViewName
+				if viewName == "" {
+					viewName = dt.Name
+				}
+				dtOptions = append(dtOptions, huh.NewOption[string](viewName, dt.Name))
+				allKeys = append(allKeys, dt.Name)
+			}
+			selectedDataTypes = allKeys // all selected by default
+
+			dtForm := huh.NewForm(
+				huh.NewGroup(
+					huh.NewMultiSelect[string]().
+						Title("Which data types do you want to include?").
+						Options(dtOptions...).
+						Value(&selectedDataTypes),
+				),
+			)
+			if err := dtForm.Run(); err != nil {
+				log.Fatal().Err(err).Msg("failed to create data type selection form")
+			}
+
+			if len(selectedDataTypes) == 0 {
+				fmt.Println("No data types selected. At least one is required.")
+				os.Exit(1)
+			}
+		} else if len(datasetObj.DataTypes) == 1 {
+			selectedDataTypes = []string{datasetObj.DataTypes[0].Name}
+		}
+
 		// build configuration map
 		subConfig := make(map[string]string, len(config))
 		for k, v := range config {
@@ -153,7 +189,7 @@ Also see: subscriptions, unsubscribe`,
 		}
 
 		// create a new subscription
-		subscription, err := provider.NewSubscription(providerName, subDataset, subConfig, myLibrary)
+		subscription, err := provider.NewSubscription(providerName, subDataset, subConfig, selectedDataTypes, myLibrary)
 		if err != nil {
 			log.Fatal().Err(err).Msg("unexpected error occurred when creating subscription")
 		}

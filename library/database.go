@@ -184,7 +184,7 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 			filer = data.NewFilerFromString(filerPath)
 		}
 
-		if elem.AssetObject != nil {
+		if elem.AssetObject != nil && subscription.DataTablesMap[data.AssetKey] != "" {
 			if filer != nil {
 				err := elem.AssetObject.SaveFiles(ctx, filer)
 				if err != nil {
@@ -198,67 +198,67 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 			}
 		}
 
-		if elem.CustomObject != nil {
+		if elem.CustomObject != nil && subscription.DataTablesMap[data.CustomKey] != "" {
 			if err := elem.CustomObject.SaveDB(ctx, subscription.DataTablesMap[data.CustomKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save custom data to database")
 			}
 		}
 
-		if elem.EconomicIndicator != nil {
+		if elem.EconomicIndicator != nil && subscription.DataTablesMap[data.EconomicIndicatorKey] != "" {
 			if err := elem.EconomicIndicator.SaveDB(ctx, subscription.DataTablesMap[data.EconomicIndicatorKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save economic indicator to database")
 			}
 		}
 
-		if elem.EodQuote != nil {
+		if elem.EodQuote != nil && subscription.DataTablesMap[data.EODKey] != "" {
 			if err := elem.EodQuote.SaveDB(ctx, subscription.DataTablesMap[data.EODKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save eod quote to database")
 			}
 		}
 
-		if elem.Fundamental != nil {
+		if elem.Fundamental != nil && subscription.DataTablesMap[data.FundamentalsKey] != "" {
 			if err := elem.Fundamental.SaveDB(ctx, subscription.DataTablesMap[data.FundamentalsKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save fundamental to database")
 			}
 		}
 
-		if elem.IndexSnapshot != nil {
+		if elem.IndexSnapshot != nil && subscription.DataTablesMap[data.IndexKey] != "" {
 			if err := elem.IndexSnapshot.SaveDB(ctx, subscription.DataTablesMap[data.IndexKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save index snapshot to database")
 			}
 		}
 
-		if elem.IndexChange != nil {
+		if elem.IndexChange != nil && subscription.DataTablesMap[data.IndexKey] != "" {
 			if err := elem.IndexChange.SaveDB(ctx, subscription.DataTablesMap[data.IndexKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save index change to database")
 			}
 		}
 
-		if elem.MarketHoliday != nil {
+		if elem.MarketHoliday != nil && subscription.DataTablesMap[data.MarketHolidaysKey] != "" {
 			if err := elem.MarketHoliday.SaveDB(ctx, subscription.DataTablesMap[data.MarketHolidaysKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save market holiday to database")
 			}
 		}
 
-		if elem.Metric != nil {
+		if elem.Metric != nil && subscription.DataTablesMap[data.MetricKey] != "" {
 			if err := elem.Metric.SaveDB(ctx, subscription.DataTablesMap[data.MetricKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save metric to database")
 			}
 		}
 
-		if elem.Rating != nil {
+		if elem.Rating != nil && subscription.DataTablesMap[data.RatingKey] != "" {
 			if err := elem.Rating.SaveDB(ctx, subscription.DataTablesMap[data.RatingKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save rating to database")
 			}
 		}
 
-		if elem.Consensus != nil {
+		if elem.Consensus != nil && subscription.DataTablesMap[data.ConsensusKey] != "" {
 			if err := elem.Consensus.SaveDB(ctx, subscription.DataTablesMap[data.ConsensusKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save consensus to database")
 			}
 		}
 
-		if elem.Estimate != nil {
+		if elem.Estimate != nil && subscription.DataTablesMap[data.EstimateKey] != "" {
 			if err := elem.Estimate.SaveDB(ctx, subscription.DataTablesMap[data.EstimateKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save estimate to database")
 			}
