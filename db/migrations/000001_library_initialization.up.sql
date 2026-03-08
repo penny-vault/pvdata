@@ -17,7 +17,7 @@ CREATE TYPE assettype AS ENUM (
 CREATE TYPE datatype AS ENUM (
     'asset-description',
     'analyst-rating',
-    'custom'
+    'custom',
     'economic-indicator',
     'eod',
     'fundamental',
@@ -86,7 +86,7 @@ BEGIN
 END
 $func$;
 
-CREATE VIEW market_holidays AS SELECT generate_series(date'2024-01-01', date'2024-01-01');
+CREATE VIEW market_holidays AS SELECT generate_series(date'2024-01-01', date'2024-01-01', interval '1 day') AS event_date, 'NYSE'::text AS market WHERE false;
 
 CREATE OR REPLACE FUNCTION trading_days(DATE, DATE)
 RETURNS SETOF DATE
