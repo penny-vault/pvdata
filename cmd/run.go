@@ -1,17 +1,17 @@
 /*
-Copyright © 2024 NAME HERE <EMAIL ADDRESS>
+Copyright 2024
 */
 package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
-	"sync"
+	"path/filepath"
 
-	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
-	"github.com/penny-vault/pvdata/provider"
-	"github.com/penny-vault/pvdata/web"
+	"github.com/penny-vault/pvdata/tui"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -22,9 +22,8 @@ var runCmd = &cobra.Command{
 	Use:   "run [subscription-id...]",
 	Short: "Run data import subscriptions",
 	Long: `The run sub-command executes subscriptions and saves the data they generate. If no
-arguments are provided then run will execute as a daemon and execute each subscription at the
-scheduled times. If subscription IDs are provided then each subscription will execute
-sequentially (ignoring any set schedule).`,
+arguments are provided then run will present a subscription picker. If subscription IDs are
+provided then each subscription will execute sequentially.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
 
@@ -34,73 +33,36 @@ sequentially (ignoring any set schedule).`,
 			log.Fatal().Err(err).Msg("could not connect to library")
 		}
 
-		outChan := make(chan *data.Observation, 1000)
-		exitChan := make(chan data.RunSummary, 5)
+		// Set up dual logging (file + TUI channel)
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not determine home directory")
+		}
+		logFile := filepath.Join(home, ".pvdata.log")
+		logWriter, err := tui.NewDualWriter(logFile)
+		if err != nil {
+			log.Fatal().Err(err).Str("LogFile", logFile).Msg("could not create log writer")
+		}
+		defer logWriter.Close()
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go myLibrary.SaveObservations(outChan, &wg)
+		// Configure zerolog to use the dual writer with console formatting
+		consoleWriter := zerolog.ConsoleWriter{Out: logWriter}
+		log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
 
-		// check if we are running in daemon mode
-		if len(args) == 0 {
-			// no args provided -- run as a daemon
-
-			// start the web server
-			app := web.CreateFiberApp()
-
-			port := viper.GetString("web.port")
-			if port == "" {
-				port = "3000"
-			}
-
-			app.Listen(":" + port)
-
-			os.Exit(0)
+		// Run pre-flight validation
+		result, err := tui.RunPreflight(ctx, myLibrary, args)
+		if err != nil {
+			log.Fatal().Err(err).Msg("pre-flight validation failed")
 		}
 
-		// not daemon mode, execute each subscription individually
-		for _, subscriptionID := range args {
-			subscription, err := myLibrary.SubscriptionFromID(ctx, subscriptionID)
-			if err != nil {
-				log.Fatal().Err(err).Str("SubscriptionID", subscriptionID).Msg("could not load subscription")
-			}
+		// Create RunManager
+		runManager := tui.NewRunManager(myLibrary, result.Subscriptions)
 
-			var (
-				subProvider provider.Provider
-				subDataset  provider.Dataset
-				ok          bool
-			)
-
-			// create any needed partitions
-			err = subscription.ManagePartitions(ctx)
-			if err != nil {
-				log.Error().Err(err).Msg("ManagePartitions returned an error")
-			}
-
-			if subProvider, ok = provider.Map[subscription.Provider]; !ok {
-				log.Fatal().Str("ProviderKey", subscription.Provider).Msg("subscription is mis-configured, provider not found")
-			}
-
-			if subDataset, ok = subProvider.Datasets()[subscription.Dataset]; !ok {
-				log.Fatal().Str("ProviderKey", subscription.Provider).Str("DatasetKey", subscription.Dataset).
-					Msg("subscription is mis-configured, dataset not found")
-			}
-
-			fetchLogger := log.With().Str("SubscriptionID", subscriptionID).Logger()
-			ctx = fetchLogger.WithContext(ctx)
-
-			subDataset.Fetch(ctx, subscription, outChan, exitChan)
-
-			// read the exit message from exitChan
-			summaryMsg := <-exitChan
-			fetchLogger.Info().Time("StartTime", summaryMsg.StartTime).Time("EndTime", summaryMsg.EndTime).Str("RunTime", summaryMsg.EndTime.Sub(summaryMsg.StartTime).String()).Msg("finished running subscription")
+		// Launch TUI
+		if err := tui.Run(ctx, myLibrary, runManager, logWriter); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
-
-		// close the output channel
-		close(outChan)
-
-		// wait for library SaveObservations to finish
-		wg.Wait()
 	},
 }
 
