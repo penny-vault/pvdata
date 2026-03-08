@@ -77,7 +77,42 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 		figiMap[asset.Ticker] = asset.CompositeFigi
 	}
 
+	// fetch current SP500 constituents and emit index snapshots
+	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
+	sp500Url := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/SP500"
+	resp, err := client.R().SetQueryParam("action", "current").Get(sp500Url)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to download SP500 constituents")
+	}
+
 	forDate := time.Now().Format("2006-01-02")
+	today, _ := time.Parse("2006-01-02", forDate)
+
+	if resp != nil && resp.StatusCode() < 400 {
+		responseBody := string(resp.Body())
+		result := gjson.Get(responseBody, "datatable.data")
+		for _, val := range result.Array() {
+			ticker := strings.ReplaceAll(val.Get("2").String(), ".", "/")
+			figi, ok := figiMap[ticker]
+			if !ok {
+				continue
+			}
+			out <- &data.Observation{
+				IndexSnapshot: &data.IndexSnapshot{
+					Ticker:        ticker,
+					CompositeFigi: figi,
+					IndexName:     "sp500",
+					SnapshotDate:  today,
+				},
+				ObservationDate:  time.Now(),
+				SubscriptionID:   subscription.ID,
+				SubscriptionName: subscription.Name,
+			}
+			numObs++
+		}
+	} else if resp != nil {
+		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", sp500Url).Bytes("Body", resp.Body()).Msg("error when requesting SP500 url")
+	}
 
 	cursor := ""
 	for {

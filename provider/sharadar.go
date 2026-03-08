@@ -52,7 +52,7 @@ func (sharadar *Sharadar) Datasets() map[string]Dataset {
 		"Metrics": {
 			Name:        "Metrics",
 			Description: "Download daily stock metrics.",
-			DataTypes:   []*data.DataType{data.DataTypes[data.MetricKey]},
+			DataTypes:   []*data.DataType{data.DataTypes[data.MetricKey], data.DataTypes[data.IndexKey]},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2007, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},

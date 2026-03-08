@@ -63,6 +63,7 @@ func (zacks *Zacks) Datasets() map[string]Dataset {
 				data.DataTypes[data.MetricKey],
 				data.DataTypes[data.EstimateKey],
 				data.DataTypes[data.ConsensusKey],
+				data.DataTypes[data.IndexKey],
 			},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
@@ -330,6 +331,22 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 		emitEstimate(record, "eps-surprise-last", float64(record.LastEpsSurprisePercent), 0, 0, subscription, out, &numObs)
 		emitEstimate(record, "eps-surprise-prev", float64(record.PreviousEpsSurprisePercent), 0, 0, subscription, out, &numObs)
 		emitEstimate(record, "eps-surprise-avg-4q", float64(record.AvgEpsSurpriseLast4Qtrs), 0, 0, subscription, out, &numObs)
+
+		// Index membership
+		if record.InSp500 {
+			out <- &data.Observation{
+				IndexSnapshot: &data.IndexSnapshot{
+					Ticker:        record.Ticker,
+					CompositeFigi: record.CompositeFigi,
+					IndexName:     "sp500",
+					SnapshotDate:  record.EventDate,
+				},
+				ObservationDate:  time.Now(),
+				SubscriptionID:   subscription.ID,
+				SubscriptionName: subscription.Name,
+			}
+			numObs++
+		}
 	}
 
 	runSummary.Status = data.RunSuccess
