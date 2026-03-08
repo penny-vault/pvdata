@@ -38,7 +38,7 @@ import (
 
 var (
 	ErrInvalidStatusCode = errors.New("invalid status code received")
-	polygonExchangeMap   = map[string]data.Exchange{
+	massiveExchangeMap   = map[string]data.Exchange{
 		"XNAS": data.NasdaqExchange,
 		"BATS": data.BATSExchange,
 		"XASE": data.NYSEMktExchange,
@@ -46,26 +46,26 @@ var (
 	}
 )
 
-type Polygon struct {
+type Massive struct {
 }
 
-func (polygon *Polygon) Name() string {
-	return "polygon"
+func (massive *Massive) Name() string {
+	return "massive"
 }
 
-func (polygon *Polygon) ConfigDescription() map[string]string {
+func (massive *Massive) ConfigDescription() map[string]string {
 	return map[string]string{
-		"apiKey":    "Enter your polygon.io API key:",
+		"apiKey":    "Enter your Massive API key:",
 		"rateLimit": "What is the maximum number of requests per minute?",
 		"filer":     "Where should logos and icons be saved? (e.g. file:///path/)",
 	}
 }
 
-func (polygon *Polygon) Description() string {
-	return `The Polygon.io Stocks API provides REST endpoints that let you query the latest market data from all US stock exchanges. You can also find data on company financials, stock market holidays, corporate actions, and more.`
+func (massive *Massive) Description() string {
+	return `The Massive Stocks API provides REST endpoints that let you query the latest market data from all US stock exchanges. You can also find data on company financials, stock market holidays, corporate actions, and more.`
 }
 
-func (polygon *Polygon) Datasets() map[string]Dataset {
+func (massive *Massive) Datasets() map[string]Dataset {
 	return map[string]Dataset{
 		"Market Holidays": {
 			Name:        "Market Holidays",
@@ -74,7 +74,7 @@ func (polygon *Polygon) Datasets() map[string]Dataset {
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
-			Fetch: downloadPolygonMarketHolidays,
+			Fetch: downloadMassiveMarketHolidays,
 		},
 
 		"Stock Tickers": {
@@ -84,14 +84,14 @@ func (polygon *Polygon) Datasets() map[string]Dataset {
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1949, 4, 19, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
-			Fetch: downloadPolygonAssets,
+			Fetch: downloadMassiveAssets,
 		},
 	}
 }
 
 // Private interfaces
 
-type polygonHoliday struct {
+type massiveHoliday struct {
 	Date     string `json:"date"`
 	Exchange string `json:"exchange"`
 	Name     string `json:"name"`
@@ -100,14 +100,14 @@ type polygonHoliday struct {
 	Status   string `json:"status"`
 }
 
-type polygonAssetFetcher struct {
+type massiveAssetFetcher struct {
 	subscription *library.Subscription
 	client       *resty.Client
 	limiter      *rate.Limiter
 	publishChan  chan<- *data.Observation
 }
 
-type polygonResponse struct {
+type massiveResponse struct {
 	Results   *json.RawMessage `json:"results"`
 	Status    string           `json:"status"`
 	RequestID string           `json:"request_id"`
@@ -115,19 +115,19 @@ type polygonResponse struct {
 	Next      string           `json:"next_url"`
 }
 
-type polygonAddress struct {
+type massiveAddress struct {
 	Address1   string `json:"address1"`
 	City       string `json:"city"`
 	State      string `json:"state"`
 	PostalCode string `json:"postal_code"`
 }
 
-type polygonBranding struct {
+type massiveBranding struct {
 	LogoURL string `json:"logo_url"`
 	IconURL string `json:"icon_url"`
 }
 
-type polygonStock struct {
+type massiveStock struct {
 	Ticker          string          `json:"ticker"`
 	Name            string          `json:"name"`
 	Description     string          `json:"description"`
@@ -141,12 +141,12 @@ type polygonStock struct {
 	CorporateURL    string          `json:"homepage_url"`
 	ListDate        string          `json:"list_date"`
 	DelistDate      string          `json:"delisted_utc"`
-	Branding        polygonBranding `json:"branding"`
-	Address         polygonAddress  `json:"address"`
+	Branding        massiveBranding `json:"branding"`
+	Address         massiveAddress  `json:"address"`
 	LastUpdated     string          `json:"last_updated_utc"`
 }
 
-func downloadPolygonAssets(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
+func downloadMassiveAssets(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	logger := zerolog.Ctx(ctx)
 
 	runSummary := data.RunSummary{
@@ -175,7 +175,7 @@ func downloadPolygonAssets(ctx context.Context, subscription *library.Subscripti
 		rateLimit = 5000
 	}
 
-	api := &polygonAssetFetcher{
+	api := &massiveAssetFetcher{
 		subscription: subscription,
 		client:       resty.New().SetQueryParam("apiKey", subscription.Config["apiKey"]),
 		limiter:      rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1),
@@ -191,7 +191,7 @@ func downloadPolygonAssets(ctx context.Context, subscription *library.Subscripti
 		}
 	}
 
-	logger.Info().Int("Count", len(assets)).Msg("got assets from polygon")
+	logger.Info().Int("Count", len(assets)).Msg("got assets from massive")
 
 	// remove any assets that haven't been updated since our last
 	// look
@@ -202,7 +202,7 @@ func downloadPolygonAssets(ctx context.Context, subscription *library.Subscripti
 	}
 
 	// fetch asset details
-	logger.Info().Int("NumToQueryDetailsFor", len(assetDetail)).Msg("querying polygon for asset details")
+	logger.Info().Int("NumToQueryDetailsFor", len(assetDetail)).Msg("querying massive for asset details")
 
 	api.assetDetails(ctx, assetDetail)
 
@@ -214,7 +214,7 @@ func downloadPolygonAssets(ctx context.Context, subscription *library.Subscripti
 	}
 }
 
-func downloadPolygonMarketHolidays(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
+func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	logger := zerolog.Ctx(ctx)
 
 	runSummary := data.RunSummary{
@@ -257,34 +257,34 @@ func downloadPolygonMarketHolidays(ctx context.Context, subscription *library.Su
 		log.Panic().Err(err).Msg("rate limit wait failed")
 	}
 
-	respContent := make([]*polygonHoliday, 0)
+	respContent := make([]*massiveHoliday, 0)
 	resp, err := client.R().
 		SetResult(&respContent).
-		Get("https://api.polygon.io/v1/marketstatus/upcoming")
+		Get("https://api.massive.com/v1/marketstatus/upcoming")
 	if err != nil {
 		logger.Error().Err(err).Msg("resty returned an error when querying reference/tickers")
 		return
 	}
 
 	if resp.StatusCode() >= 300 {
-		logger.Error().Int("StatusCode", resp.StatusCode()).Msg("polygon returned an invalid HTTP response")
+		logger.Error().Int("StatusCode", resp.StatusCode()).Msg("massive returned an invalid HTTP response")
 		return
 	}
 
 	for _, holiday := range respContent {
-		polygonDate, err := time.Parse("2006-01-02", holiday.Date)
+		massiveDate, err := time.Parse("2006-01-02", holiday.Date)
 		if err != nil {
-			logger.Error().Err(err).Str("polygonDate", holiday.Date).Msg("could not parse date from polygon object")
+			logger.Error().Err(err).Str("massiveDate", holiday.Date).Msg("could not parse date from massive object")
 			continue
 		}
 
-		eventDate := time.Date(polygonDate.Year(), polygonDate.Month(), polygonDate.Day(), 9, 30, 0, 0, nyc)
+		eventDate := time.Date(massiveDate.Year(), massiveDate.Month(), massiveDate.Day(), 9, 30, 0, 0, nyc)
 
-		closeTime := time.Date(polygonDate.Year(), polygonDate.Month(), polygonDate.Day(), 16, 0, 0, 0, nyc)
+		closeTime := time.Date(massiveDate.Year(), massiveDate.Month(), massiveDate.Day(), 16, 0, 0, 0, nyc)
 		if holiday.Close != "" {
 			closeTime, err = time.Parse(time.RFC3339Nano, holiday.Close)
 			if err != nil {
-				logger.Error().Err(err).Str("polygonClose", holiday.Close).Msg("could not parse close date from polygon object")
+				logger.Error().Err(err).Str("massiveClose", holiday.Close).Msg("could not parse close date from massive object")
 				return
 			}
 
@@ -308,7 +308,7 @@ func downloadPolygonMarketHolidays(ctx context.Context, subscription *library.Su
 	}
 }
 
-func (api *polygonAssetFetcher) publish(asset *data.Asset) {
+func (api *massiveAssetFetcher) publish(asset *data.Asset) {
 	if asset.CompositeFigi == "" {
 		figi.Enrich(asset)
 	}
@@ -320,7 +320,7 @@ func (api *polygonAssetFetcher) publish(asset *data.Asset) {
 	// make a copy of the asset and fix ticker to match pv-data standard
 	// e.g. BRK.A -> BRK/A
 	asset2 := *asset
-	asset2.Ticker = polygonTicker2PvTicker(asset2.Ticker)
+	asset2.Ticker = massiveTicker2PvTicker(asset2.Ticker)
 
 	api.publishChan <- &data.Observation{
 		AssetObject:      &asset2,
@@ -330,10 +330,10 @@ func (api *polygonAssetFetcher) publish(asset *data.Asset) {
 	}
 }
 
-func (api *polygonAssetFetcher) assets(ctx context.Context, assetType string) ([]*data.Asset, error) {
+func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string) ([]*data.Asset, error) {
 	logger := zerolog.Ctx(ctx)
 
-	var respContent polygonResponse
+	var respContent massiveResponse
 	assets := make([]*data.Asset, 0, 6000)
 
 	// first we query the reference endpoint which is faster than the details endpoint
@@ -360,7 +360,7 @@ func (api *polygonAssetFetcher) assets(ctx context.Context, assetType string) ([
 		SetQueryParam("type", assetType).
 		SetQueryParam("limit", "1000").
 		SetResult(&respContent).
-		Get("https://api.polygon.io/v3/reference/tickers")
+		Get("https://api.massive.com/v3/reference/tickers")
 	if err != nil {
 		logger.Error().Err(err).Msg("resty returned an error when querying reference/tickers")
 		return assets, err
@@ -369,21 +369,21 @@ func (api *polygonAssetFetcher) assets(ctx context.Context, assetType string) ([
 	for ii := 0; ii < maxQueries; ii++ {
 		if resp.StatusCode() >= 300 {
 			logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
-				Str("URL", "https://api.polygon.io/v3/reference/tickers").
-				Msg("received an invalid status code when querying polygon reference/tickers endpoint")
+				Str("URL", "https://api.massive.com/v3/reference/tickers").
+				Msg("received an invalid status code when querying massive reference/tickers endpoint")
 			return assets, fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
 		}
 
 		// de-serealize stock content
-		polygonTickers := make([]*polygonStock, 0, 1000)
-		if err := json.Unmarshal(*respContent.Results, &polygonTickers); err != nil {
-			log.Error().Err(err).Msg("could not unmarshal response of polygon tickers")
+		massiveTickers := make([]*massiveStock, 0, 1000)
+		if err := json.Unmarshal(*respContent.Results, &massiveTickers); err != nil {
+			log.Error().Err(err).Msg("could not unmarshal response of massive tickers")
 			return nil, err
 		}
 
-		logger.Debug().Int("ReceivedNAssets", len(polygonTickers)).Str("AssetType", assetType).Msg("got tickers")
+		logger.Debug().Int("ReceivedNAssets", len(massiveTickers)).Str("AssetType", assetType).Msg("got tickers")
 
-		for _, ticker := range polygonTickers {
+		for _, ticker := range massiveTickers {
 			lastUpdated, err := time.Parse(time.RFC3339, ticker.LastUpdated)
 			if err != nil {
 				logger.Error().Err(err).Str("Ticker", ticker.Ticker).Msg("could not parse last updated string for tickers")
@@ -392,18 +392,18 @@ func (api *polygonAssetFetcher) assets(ctx context.Context, assetType string) ([
 
 			lastUpdated = lastUpdated.In(nyc)
 
-			polygonAsset := &data.Asset{
+			massiveAsset := &data.Asset{
 				Ticker:          ticker.Ticker,
 				Name:            ticker.Name,
 				CompositeFigi:   ticker.CompositeFIGI,
 				ShareClassFigi:  ticker.ShareClassFIGI,
-				PrimaryExchange: polygonExchangeMap[ticker.PrimaryExchange],
+				PrimaryExchange: massiveExchangeMap[ticker.PrimaryExchange],
 				AssetType:       data.AssetType(ticker.Type),
 				LastUpdated:     lastUpdated,
 				CIK:             ticker.CIK,
 			}
 
-			assets = append(assets, polygonAsset)
+			assets = append(assets, massiveAsset)
 		}
 
 		// check if all results have been returned
@@ -433,7 +433,7 @@ func (api *polygonAssetFetcher) assets(ctx context.Context, assetType string) ([
 	return assets, nil
 }
 
-func (api *polygonAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, assets []*data.Asset) ([]*data.Asset, error) {
+func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, assets []*data.Asset) ([]*data.Asset, error) {
 	logger := zerolog.Ctx(ctx)
 
 	assetDetail := make([]*data.Asset, 0, len(assets))
@@ -471,7 +471,7 @@ func (api *polygonAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 			ctx,
 			sql,
 			asset.CompositeFigi,
-			polygonTicker2PvTicker(asset.Ticker),
+			massiveTicker2PvTicker(asset.Ticker),
 		).Scan(&lastUpdated)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -511,7 +511,7 @@ func (api *polygonAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 	return assetDetail, nil
 }
 
-func (api *polygonAssetFetcher) delistedAssets(ctx context.Context, assets []*data.Asset) error {
+func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*data.Asset) error {
 	logger := zerolog.Ctx(ctx)
 
 	nyc, err := time.LoadLocation("America/New_York")
@@ -569,7 +569,7 @@ func (api *polygonAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 	}
 
 	// for all active database assets that are not in the response
-	// of active assets in polygon, add to the potentially inactive list
+	// of active assets in massive, add to the potentially inactive list
 	for _, asset := range dbActiveAssets {
 		if _, ok := assetMap[asset.ID()]; !ok {
 			inactive = append(inactive, asset)
@@ -591,8 +591,8 @@ func (api *polygonAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 	deactivated := make(map[string]*data.Asset, len(inactiveMap))
 
 	for _, assetType := range []string{"CS", "ADRC", "ETF"} {
-		// query polygon for inactive assets
-		var respContent polygonResponse
+		// query massive for inactive assets
+		var respContent massiveResponse
 
 		if err := api.limiter.Wait(ctx); err != nil {
 			log.Panic().Err(err).Msg("rate limit failed")
@@ -605,7 +605,7 @@ func (api *polygonAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 			SetQueryParam("limit", "1000").
 			SetQueryParam("type", assetType).
 			SetResult(&respContent).
-			Get("https://api.polygon.io/v3/reference/tickers")
+			Get("https://api.massive.com/v3/reference/tickers")
 		if err != nil {
 			logger.Error().Err(err).Msg("error when retrieving inactive assets")
 		}
@@ -618,37 +618,37 @@ func (api *polygonAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 		for ii := 0; ii < maxQueries; ii++ {
 			if resp.StatusCode() >= 300 {
 				logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
-					Str("URL", "https://api.polygon.io/v3/reference/tickers").
-					Msg("received an invalid status code when querying polygon reference/tickers endpoint")
+					Str("URL", "https://api.massive.com/v3/reference/tickers").
+					Msg("received an invalid status code when querying massive reference/tickers endpoint")
 				return fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
 			}
 
 			// de-serealize stock content
-			polygonAssets := make([]*polygonStock, 0, 1000)
-			if err := json.Unmarshal(*respContent.Results, &polygonAssets); err != nil {
-				log.Error().Err(err).Msg("json unmarshal of polygon assets failed")
+			massiveAssets := make([]*massiveStock, 0, 1000)
+			if err := json.Unmarshal(*respContent.Results, &massiveAssets); err != nil {
+				log.Error().Err(err).Msg("json unmarshal of massive assets failed")
 				return err
 			}
 
-			logger.Debug().Int("ReceivedNAssets", len(polygonAssets)).Msg("got inactive tickers")
+			logger.Debug().Int("ReceivedNAssets", len(massiveAssets)).Msg("got inactive tickers")
 
-			for _, polygonAsset := range polygonAssets {
-				lastUpdated, err := time.Parse(time.RFC3339, polygonAsset.LastUpdated)
+			for _, massiveAsset := range massiveAssets {
+				lastUpdated, err := time.Parse(time.RFC3339, massiveAsset.LastUpdated)
 				if err != nil {
-					logger.Error().Err(err).Str("Ticker", polygonAsset.Ticker).Msg("could not parse last updated string for tickers")
+					logger.Error().Err(err).Str("Ticker", massiveAsset.Ticker).Msg("could not parse last updated string for tickers")
 				}
 
 				lastUpdated = lastUpdated.In(nyc)
 
 				asset := data.Asset{
-					Ticker:        polygonAsset.Ticker,
-					CompositeFigi: polygonAsset.CompositeFIGI,
+					Ticker:        massiveAsset.Ticker,
+					CompositeFigi: massiveAsset.CompositeFIGI,
 				}
 
 				// lookup the completely filled out asset and update its values
 				// publish the updated asset
 				if inactiveAsset, ok := inactiveMap[asset.ID()]; ok {
-					inactiveAsset.DelistingDate = strings.Split(polygonAsset.DelistDate, "T")[0]
+					inactiveAsset.DelistingDate = strings.Split(massiveAsset.DelistDate, "T")[0]
 					inactiveAsset.LastUpdated = lastUpdated
 					inactiveAsset.Active = false
 					deactivated[asset.ID()] = inactiveAsset
@@ -702,7 +702,7 @@ func (api *polygonAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 	return nil
 }
 
-func (api *polygonAssetFetcher) assetDetails(ctx context.Context, assets []*data.Asset) {
+func (api *massiveAssetFetcher) assetDetails(ctx context.Context, assets []*data.Asset) {
 	logger := zerolog.Ctx(ctx)
 
 	sometimes := rate.Sometimes{Interval: 60 * time.Second}
@@ -711,7 +711,7 @@ func (api *polygonAssetFetcher) assetDetails(ctx context.Context, assets []*data
 	for idx, asset := range assets {
 		fullAsset, err := api.assetDetail(ctx, asset)
 		if err != nil {
-			logger.Error().Err(err).Msg("received an error when querying polygon details")
+			logger.Error().Err(err).Msg("received an error when querying massive details")
 			continue
 		}
 
@@ -725,11 +725,11 @@ func (api *polygonAssetFetcher) assetDetails(ctx context.Context, assets []*data
 	}
 }
 
-func (api *polygonAssetFetcher) assetDetail(ctx context.Context, asset *data.Asset) (*data.Asset, error) {
-	var respContent polygonResponse
+func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Asset) (*data.Asset, error) {
+	var respContent massiveResponse
 
 	logger := zerolog.Ctx(ctx)
-	detailsURL := fmt.Sprintf("https://api.polygon.io/v3/reference/tickers/%s", asset.Ticker)
+	detailsURL := fmt.Sprintf("https://api.massive.com/v3/reference/tickers/%s", asset.Ticker)
 
 	if err := api.limiter.Wait(ctx); err != nil {
 		log.Panic().Err(err).Msg("rate limit failed")
@@ -746,24 +746,24 @@ func (api *polygonAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 	if resp.StatusCode() >= 300 {
 		logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
 			Str("URL", detailsURL).
-			Msg("received an invalid status code when querying polygon reference/tickers details endpoint")
+			Msg("received an invalid status code when querying massive reference/tickers details endpoint")
 		return nil, fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
 	}
 
 	// de-serealize stock content
-	var polygonAsset polygonStock
-	err = json.Unmarshal(*respContent.Results, &polygonAsset)
+	var massiveAsset massiveStock
+	err = json.Unmarshal(*respContent.Results, &massiveAsset)
 	if err != nil {
 		logger.Error().Err(err).Msg("error when unmarshalling json from details response")
 		return nil, err
 	}
 
 	location := ""
-	if polygonAsset.Address.City != "" {
-		location = fmt.Sprintf("%s, %s", polygonAsset.Address.City, polygonAsset.Address.State)
+	if massiveAsset.Address.City != "" {
+		location = fmt.Sprintf("%s, %s", massiveAsset.Address.City, massiveAsset.Address.State)
 	}
 
-	sicCode, err := strconv.Atoi(polygonAsset.SIC)
+	sicCode, err := strconv.Atoi(massiveAsset.SIC)
 	if err != nil {
 		sicCode = 0
 	}
@@ -771,12 +771,12 @@ func (api *polygonAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 	// fetch icon and logo
 	var icon []byte
 	var iconMimeType string
-	if polygonAsset.Branding.IconURL != "" {
+	if massiveAsset.Branding.IconURL != "" {
 		if err := api.limiter.Wait(ctx); err != nil {
 			log.Panic().Err(err).Msg("rate limit failed")
 		}
 
-		resp, err := api.client.R().Get(polygonAsset.Branding.IconURL)
+		resp, err := api.client.R().Get(massiveAsset.Branding.IconURL)
 		if err != nil {
 			logger.Error().Err(err).Msg("error when fetching asset icon")
 			return nil, err
@@ -788,12 +788,12 @@ func (api *polygonAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 
 	var logo []byte
 	var logoMimeType string
-	if polygonAsset.Branding.LogoURL != "" {
+	if massiveAsset.Branding.LogoURL != "" {
 		if err := api.limiter.Wait(ctx); err != nil {
 			log.Panic().Err(err).Msg("rate limit failed")
 		}
 
-		resp, err := api.client.R().Get(polygonAsset.Branding.LogoURL)
+		resp, err := api.client.R().Get(massiveAsset.Branding.LogoURL)
 		if err != nil {
 			logger.Error().Err(err).Msg("error when fetching asset logo")
 			return nil, err
@@ -805,29 +805,29 @@ func (api *polygonAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 
 	// build Asset object
 	assetDetail := &data.Asset{
-		Ticker:               polygonAsset.Ticker,
-		CompositeFigi:        polygonAsset.CompositeFIGI,
-		ShareClassFigi:       polygonAsset.ShareClassFIGI,
-		Name:                 polygonAsset.Name,
-		Description:          polygonAsset.Description,
-		Active:               polygonAsset.Active,
-		PrimaryExchange:      polygonExchangeMap[polygonAsset.PrimaryExchange],
-		AssetType:            data.AssetType(polygonAsset.Type),
+		Ticker:               massiveAsset.Ticker,
+		CompositeFigi:        massiveAsset.CompositeFIGI,
+		ShareClassFigi:       massiveAsset.ShareClassFIGI,
+		Name:                 massiveAsset.Name,
+		Description:          massiveAsset.Description,
+		Active:               massiveAsset.Active,
+		PrimaryExchange:      massiveExchangeMap[massiveAsset.PrimaryExchange],
+		AssetType:            data.AssetType(massiveAsset.Type),
 		HeadquartersLocation: location,
-		CIK:                  polygonAsset.CIK,
+		CIK:                  massiveAsset.CIK,
 		SIC:                  sicCode,
-		CorporateUrl:         polygonAsset.CorporateURL,
+		CorporateUrl:         massiveAsset.CorporateURL,
 		Icon:                 icon,
 		IconMimeType:         iconMimeType,
 		Logo:                 logo,
 		LogoMimeType:         logoMimeType,
-		ListingDate:          polygonAsset.ListDate,
+		ListingDate:          massiveAsset.ListDate,
 		LastUpdated:          asset.LastUpdated,
 	}
 
 	return assetDetail, nil
 }
 
-func polygonTicker2PvTicker(ticker string) string {
+func massiveTicker2PvTicker(ticker string) string {
 	return strings.ReplaceAll(ticker, ".", "/")
 }

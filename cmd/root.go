@@ -40,7 +40,7 @@ including:
 
 	* [Tiingo](https://www.tiingo.com)
 	* [Nasdaq Data Link](https://data.nasdaq.com)
-	* [Polygon.io](https://polygon.io)
+	* [Massive](https://massive.com)
 	* custom datasets
 
 Even though the data from each of these sources may be similar they all have
