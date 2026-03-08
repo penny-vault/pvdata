@@ -273,9 +273,87 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 				SubscriptionName: subscription.Name,
 			}
 		}
+
+		// Metrics
+		out <- &data.Observation{
+			Metric: &data.Metric{
+				Ticker:          record.Ticker,
+				CompositeFigi:   record.CompositeFigi,
+				EventDate:       record.EventDate,
+				MarketCap:       int64(record.MarketCapMil * 1e6),
+				PE:              float64(record.PeTrailing12Months),
+				PB:              float64(record.PriceToBook),
+				PS:              float64(record.PriceToSales),
+				PEForward:       float64(record.PeF1),
+				PEG:             float64(record.PegRatio),
+				PriceToCashFlow: float64(record.PriceToCashFlow),
+				Beta:            float64(record.Beta),
+			},
+			ObservationDate:  time.Now(),
+			SubscriptionID:   subscription.ID,
+			SubscriptionName: subscription.Name,
+		}
+		numObs++
+
+		// Consensus
+		out <- &data.Observation{
+			Consensus: &data.Consensus{
+				Ticker:              record.Ticker,
+				CompositeFigi:       record.CompositeFigi,
+				EventDate:           record.EventDate,
+				AvgRecommendation:   float64(record.CurrentAvgBrokerRec),
+				NumAnalysts:         record.NumBrokersInRating,
+				NumStrongBuyOrBuy:   record.NumRatingStrongBuyOrBuy,
+				NumHold:             record.NumRatingHold,
+				NumSellOrStrongSell: record.NumRatingStrongSellOrSell,
+				NumUpgrades:         record.NumberRatingUpgrades,
+				NumDowngrades:       record.NumberRatingDowngrades,
+				AvgTargetPrice:      record.AverageTargetPrice,
+			},
+			ObservationDate:  time.Now(),
+			SubscriptionID:   subscription.ID,
+			SubscriptionName: subscription.Name,
+		}
+		numObs++
+
+		// Estimates
+		emitEstimate(record, "eps-q0", float64(record.Q0ConsensusEstLastCompletedFiscalQtr), record.NumberOfAnalystsInQ0Consensus, 0, subscription, out, &numObs)
+		emitEstimate(record, "eps-q1", float64(record.Q1ConsensusEst), record.NumberOfAnalystsInQ1Consensus, float64(record.StdevQ1Q1ConsensusRatio), subscription, out, &numObs)
+		emitEstimate(record, "eps-q2", float64(record.Q2ConsensusEstNextFiscalQtr), record.NumberOfAnalystsInQ2Consensus, float64(record.StdevQ2Q2ConsensusRatio), subscription, out, &numObs)
+		emitEstimate(record, "eps-f0", float64(record.F0ConsensusEst), int(record.NumberOfAnalystsInF0Consensus), 0, subscription, out, &numObs)
+		emitEstimate(record, "eps-f1", float64(record.F1ConsensusEst), record.NumberOfAnalystsInF1Consensus, float64(record.StdevF1F1ConsensusRatio), subscription, out, &numObs)
+		emitEstimate(record, "eps-f2", float64(record.F2ConsensusEst), record.NumberOfAnalystsInF2Consensus, 0, subscription, out, &numObs)
+		emitEstimate(record, "sales-q1", float64(record.Q1ConsensusSalesEstMil), 0, 0, subscription, out, &numObs)
+		emitEstimate(record, "sales-f1", float64(record.F1ConsensusSalesEstMil), 0, 0, subscription, out, &numObs)
+		emitEstimate(record, "lt-growth", float64(record.LongTermGrowthConsensusEst), 0, 0, subscription, out, &numObs)
+		emitEstimate(record, "earnings-esp", float64(record.EarningsEsp), 0, 0, subscription, out, &numObs)
+		emitEstimate(record, "eps-surprise-last", float64(record.LastEpsSurprisePercent), 0, 0, subscription, out, &numObs)
+		emitEstimate(record, "eps-surprise-prev", float64(record.PreviousEpsSurprisePercent), 0, 0, subscription, out, &numObs)
+		emitEstimate(record, "eps-surprise-avg-4q", float64(record.AvgEpsSurpriseLast4Qtrs), 0, 0, subscription, out, &numObs)
 	}
 
 	runSummary.Status = data.RunSuccess
+}
+
+func emitEstimate(record *ZacksRecord, series string, value float64, numAnalysts int, stdDev float64, subscription *library.Subscription, out chan<- *data.Observation, numObs *int) {
+	if value == 0 && numAnalysts == 0 {
+		return
+	}
+	*numObs++
+	out <- &data.Observation{
+		Estimate: &data.Estimate{
+			Ticker:        record.Ticker,
+			CompositeFigi: record.CompositeFigi,
+			EventDate:     record.EventDate,
+			Series:        series,
+			Value:         value,
+			NumAnalysts:   numAnalysts,
+			StdDev:        stdDev,
+		},
+		ObservationDate:  time.Now(),
+		SubscriptionID:   subscription.ID,
+		SubscriptionName: subscription.Name,
+	}
 }
 
 type ZacksRecord struct {
