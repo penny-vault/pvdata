@@ -59,9 +59,18 @@ func rateLimit() *rate.Limiter {
 	return rate.NewLimiter(openFigiRate, 10)
 }
 
+func batchSize() int {
+	apiKey := viper.GetString("openfigi.apikey")
+	if apiKey == "" {
+		return 10
+	}
+	return 100
+}
+
 func mapFigis(query []*OpenFigiQuery) ([]*MappingResponse, error) {
-	if len(query) > 100 {
-		log.Error().Msg("programming error - too many assets in request")
+	maxBatch := batchSize()
+	if len(query) > maxBatch {
+		log.Error().Int("BatchSize", len(query)).Int("MaxBatch", maxBatch).Msg("programming error - too many assets in request")
 	}
 
 	apiKey := viper.GetString("openfigi.apikey")
@@ -144,7 +153,12 @@ func Enrich(assets ...*data.Asset) {
 }
 
 func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*OpenFigiAsset {
-	query := make([]*OpenFigiQuery, 0, 100)
+	maxBatch := batchSize()
+	if viper.GetString("openfigi.apikey") == "" {
+		log.Warn().Msg("no OpenFIGI API key configured -- using reduced batch size (10 per request); set openfigi.apikey in your config or re-run `pvdata init`")
+	}
+
+	query := make([]*OpenFigiQuery, 0, maxBatch)
 	result := make(map[string]*OpenFigiAsset)
 
 	for _, asset := range assets {
@@ -155,7 +169,7 @@ func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*Ope
 			MarketSectorDescription: "Equity",
 		})
 
-		if len(query) == 100 {
+		if len(query) == maxBatch {
 			if err := rateLimiter.Wait(context.Background()); err != nil {
 				log.Panic().Err(err).Msg("rate limiter failed")
 			}
@@ -166,7 +180,7 @@ func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*Ope
 					result[figiAsset.Ticker] = figiAsset
 				}
 			}
-			query = make([]*OpenFigiQuery, 0, 100)
+			query = make([]*OpenFigiQuery, 0, maxBatch)
 		}
 	}
 

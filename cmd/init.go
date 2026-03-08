@@ -38,6 +38,8 @@ var initCmd = &cobra.Command{
 
 		myLibrary := &library.Library{}
 
+		var openFigiAPIKey string
+
 		form := huh.NewForm(
 			// Gather details about the library and who owns it
 			huh.NewGroup(
@@ -59,6 +61,14 @@ var initCmd = &cobra.Command{
 						_, err := pgx.ParseConfig(dsn)
 						return err
 					}),
+			),
+
+			// API keys for enrichment services
+			huh.NewGroup(
+				huh.NewInput().
+					Title("OpenFIGI API key (optional, leave blank to skip):").
+					Description("Used to enrich assets with FIGI identifiers. Get one at https://www.openfigi.com/api").
+					Value(&openFigiAPIKey),
 			),
 		)
 
@@ -98,7 +108,20 @@ var initCmd = &cobra.Command{
 
 		configFN := filepath.Join(home, ".pvdata.toml")
 		log.Info().Str("ConfigFile", configFN).Msg("Saving database connection info to config file")
-		configData, err := toml.Marshal(myLibrary)
+		configMap := map[string]any{
+			"name":  myLibrary.Name,
+			"owner": myLibrary.Owner,
+			"db": map[string]any{
+				"url": myLibrary.DBUrl,
+			},
+		}
+
+		if openFigiAPIKey != "" {
+			configMap["openfigi"] = map[string]any{
+				"apikey": openFigiAPIKey,
+			}
+		}
+		configData, err := toml.Marshal(configMap)
 		if err != nil {
 			log.Fatal().Err(err).Msg("could not marshal configuration data")
 		}
