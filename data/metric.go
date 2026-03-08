@@ -25,17 +25,20 @@ import (
 )
 
 type Metric struct {
-	Ticker        string
-	CompositeFigi string
-	EventDate     time.Time
-	MarketCap     int64
-	EV            int64
-	PE            float64
-	PB            float64
-	PS            float64
-	EVtoEBIT      float64
-	EVtoEBITDA    float64
-	SP500         bool
+	Ticker          string
+	CompositeFigi   string
+	EventDate       time.Time
+	MarketCap       int64
+	EV              int64
+	PE              float64
+	PB              float64
+	PS              float64
+	EVtoEBIT        float64
+	EVtoEBITDA      float64
+	PEForward       float64
+	PEG             float64
+	PriceToCashFlow float64
+	Beta            float64
 }
 
 func (metric *Metric) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
@@ -65,9 +68,12 @@ func (metric *Metric) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Co
 		"ps",
 		"ev_ebit",
 		"ev_ebitda",
-		"sp500"
+		"pe_forward",
+		"peg",
+		"price_to_cash_flow",
+		"beta"
 	) VALUES (
-		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		ticker = EXCLUDED.ticker,
 		market_cap = EXCLUDED.market_cap,
@@ -77,7 +83,10 @@ func (metric *Metric) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Co
 		ps = EXCLUDED.ps,
 		ev_ebit = EXCLUDED.ev_ebit,
 		ev_ebitda = EXCLUDED.ev_ebitda,
-		sp500 = EXCLUDED.sp500`, tbl)
+		pe_forward = EXCLUDED.pe_forward,
+		peg = EXCLUDED.peg,
+		price_to_cash_flow = EXCLUDED.price_to_cash_flow,
+		beta = EXCLUDED.beta`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
 		metric.Ticker,
@@ -90,7 +99,10 @@ func (metric *Metric) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Co
 		metric.PS,
 		metric.EVtoEBIT,
 		metric.EVtoEBITDA,
-		metric.SP500,
+		metric.PEForward,
+		metric.PEG,
+		metric.PriceToCashFlow,
+		metric.Beta,
 	)
 
 	if err != nil {

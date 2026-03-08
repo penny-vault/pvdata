@@ -396,22 +396,31 @@ PRIMARY KEY (event_date, market)
 ticker         CHARACTER VARYING(10) NOT NULL,
 composite_figi CHARACTER(12)         NOT NULL,
 event_date     DATE                  NOT NULL,
-market_cap     BIGINT                NOT NULL DEFAULT 0.0,
-ev             BIGINT                NOT NULL DEFAULT 0.0,
+market_cap     BIGINT                NOT NULL DEFAULT 0,
+ev             BIGINT                NOT NULL DEFAULT 0,
 pe             REAL                  NOT NULL DEFAULT 0.0,
 pb             REAL                  NOT NULL DEFAULT 0.0,
 ps             REAL                  NOT NULL DEFAULT 0.0,
 ev_ebit        REAL                  NOT NULL DEFAULT 0.0,
 ev_ebitda      REAL                  NOT NULL DEFAULT 0.0,
-sp500          BOOLEAN               DEFAULT false,
+pe_forward     REAL                  NOT NULL DEFAULT 0.0,
+peg            REAL                  NOT NULL DEFAULT 0.0,
+price_to_cash_flow REAL              NOT NULL DEFAULT 0.0,
+beta           REAL                  NOT NULL DEFAULT 0.0,
 CHECK (LENGTH(TRIM(BOTH composite_figi)) = 12),
 PRIMARY KEY (composite_figi, event_date)
 ) PARTITION BY RANGE (event_date);
 
 CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date);
 CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
-		Migrations:    []string{},
-		Version:       0,
+		Migrations: []string{
+			`ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS pe_forward REAL NOT NULL DEFAULT 0.0;
+     ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS peg REAL NOT NULL DEFAULT 0.0;
+     ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS price_to_cash_flow REAL NOT NULL DEFAULT 0.0;
+     ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS beta REAL NOT NULL DEFAULT 0.0;
+     ALTER TABLE %[1]s DROP COLUMN IF EXISTS sp500;`,
+		},
+		Version:       1,
 		IsPartitioned: true,
 	},
 	QuoteKey: {

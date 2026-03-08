@@ -40,12 +40,6 @@ type sharadarMetric struct {
 	PS          float64
 }
 
-type sharadarSP500 struct {
-	Ticker string
-	Date   string
-	Action string
-}
-
 func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	logger := zerolog.Ctx(ctx)
 
@@ -83,46 +77,19 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 		figiMap[asset.Ticker] = asset.CompositeFigi
 	}
 
-	// get a map of sp500 constituents
-	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
-	sp500Url := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/SP500"
-	resp, err := client.R().SetQueryParam("action", "current").Get(sp500Url)
-	if err != nil {
-		logger.Error().Err(err).Msg("failed to download tickers")
-	}
-
-	if resp.StatusCode() >= 400 {
-		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", sp500Url).Bytes("Body", resp.Body()).Msg("error when requesting url")
-		return
-	}
-
-	sp500Map := make(map[string]bool, 500)
-	currDate := ""
-
-	responseBody := string(resp.Body())
-	result := gjson.Get(responseBody, "datatable.data")
-	for _, val := range result.Array() {
-		ticker := &sharadarSP500{
-			Date:   val.Get("0").String(),
-			Action: val.Get("1").String(),
-			Ticker: strings.ReplaceAll(val.Get("2").String(), ".", "/"),
-		}
-
-		sp500Map[ticker.Ticker] = true
-		currDate = ticker.Date
-	}
+	forDate := time.Now().Format("2006-01-02")
 
 	cursor := ""
 	for {
 		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar tickers")
-		cursor = downloadSharadarMetrics(ctx, subscription, cursor, out, currDate, sp500Map, figiMap)
+		cursor = downloadSharadarMetrics(ctx, subscription, cursor, out, forDate, figiMap)
 		if cursor == "" {
 			break
 		}
 	}
 }
 
-func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscription, cursor string, out chan<- *data.Observation, forDate string, sp500Map map[string]bool, figiMap map[string]string) string {
+func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscription, cursor string, out chan<- *data.Observation, forDate string, figiMap map[string]string) string {
 	logger := zerolog.Ctx(ctx)
 
 	// get nyc timezone
@@ -171,7 +138,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 		}
 
 		// convert to pv metric type
-		pvMetric := metric.PvMetric(sp500Map, figiMap, nyc)
+		pvMetric := metric.PvMetric(figiMap, nyc)
 
 		out <- &data.Observation{
 			Metric:           pvMetric,
@@ -184,7 +151,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 	return gjson.Get(responseBody, "meta.next_cursor_id").String()
 }
 
-func (metric *sharadarMetric) PvMetric(sp500Map map[string]bool, figiMap map[string]string, loc *time.Location) *data.Metric {
+func (metric *sharadarMetric) PvMetric(figiMap map[string]string, loc *time.Location) *data.Metric {
 	pvMetric := &data.Metric{
 		Ticker:     strings.ReplaceAll(metric.Ticker, ".", "/"),
 		MarketCap:  int64(metric.MarketCap * 1e6),
@@ -204,10 +171,6 @@ func (metric *sharadarMetric) PvMetric(sp500Map map[string]bool, figiMap map[str
 		pvMetric.EventDate = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 	} else {
 		log.Error().Err(err).Msg("error parsing metric date")
-	}
-
-	if _, ok := sp500Map[pvMetric.Ticker]; ok {
-		pvMetric.SP500 = true
 	}
 
 	return pvMetric
