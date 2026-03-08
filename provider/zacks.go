@@ -58,7 +58,12 @@ func (zacks *Zacks) Datasets() map[string]Dataset {
 		"Zacks Screener Data": {
 			Name:        "Zacks Screener Data",
 			Description: "Download data using Zacks stock screener tool.",
-			DataTypes:   []*data.DataType{data.DataTypes[data.RatingKey]},
+			DataTypes: []*data.DataType{
+				data.DataTypes[data.RatingKey],
+				data.DataTypes[data.MetricKey],
+				data.DataTypes[data.EstimateKey],
+				data.DataTypes[data.ConsensusKey],
+			},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
