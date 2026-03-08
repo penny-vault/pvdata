@@ -28,6 +28,7 @@ type IndexSnapshot struct {
 	CompositeFigi string
 	IndexName     string
 	SnapshotDate  time.Time
+	Weight        float64
 }
 
 func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
@@ -50,16 +51,19 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 		"composite_figi",
 		"ticker",
 		"index_name",
-		"snapshot_date"
+		"snapshot_date",
+		"weight"
 	) VALUES (
-		$1, $2, $3, $4
-	) ON CONFLICT ON CONSTRAINT %[1]s_snapshot_pkey DO NOTHING`, tbl)
+		$1, $2, $3, $4, $5
+	) ON CONFLICT ON CONSTRAINT %[1]s_snapshot_pkey DO UPDATE SET
+		weight = EXCLUDED.weight`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
 		idx.CompositeFigi,
 		idx.Ticker,
 		idx.IndexName,
 		idx.SnapshotDate,
+		idx.Weight,
 	)
 
 	if err != nil {

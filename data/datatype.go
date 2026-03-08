@@ -237,6 +237,7 @@ CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, series);`,
     ticker         CHARACTER VARYING(10) NOT NULL,
     index_name     TEXT                  NOT NULL,
     snapshot_date  DATE                  NOT NULL,
+    weight         REAL                  NOT NULL DEFAULT 0.0,
     PRIMARY KEY (composite_figi, index_name, snapshot_date)
 );
 
@@ -251,8 +252,10 @@ CREATE TABLE %[1]s_changelog (
 
 CREATE INDEX %[1]s_snapshot_index_name_idx ON %[1]s_snapshot(index_name, snapshot_date);
 CREATE INDEX %[1]s_changelog_index_name_idx ON %[1]s_changelog(index_name, event_date);`,
-		Migrations:    []string{},
-		Version:       0,
+		Migrations: []string{
+			`ALTER TABLE %[1]s_snapshot ADD COLUMN IF NOT EXISTS weight REAL NOT NULL DEFAULT 0.0;`,
+		},
+		Version: 1,
 		IsPartitioned: false,
 	},
 	FundamentalsKey: {
