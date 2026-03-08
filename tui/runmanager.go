@@ -118,6 +118,11 @@ func (rm *RunManager) RunAll(ctx context.Context) {
 			log.Error().Err(err).Msg("ManagePartitions returned an error")
 		}
 
+		// run any pending schema migrations
+		if err := subscription.RunMigrations(ctx); err != nil {
+			log.Error().Err(err).Msg("RunMigrations returned an error")
+		}
+
 		// resolve provider and dataset
 		subProvider, ok := provider.Map[subscription.Provider]
 		if !ok {

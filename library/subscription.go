@@ -459,6 +459,53 @@ func (subscription *Subscription) PartitionTables() []string {
 	return tables
 }
 
+// RunMigrations applies any pending schema migrations for the subscription's data types
+func (subscription *Subscription) RunMigrations(ctx context.Context) error {
+	conn, err := subscription.Library.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	maxVersion := 0
+
+	for idx, dataTypeName := range subscription.DataTypes {
+		dataType := data.DataTypes[dataTypeName]
+		if dataType == nil {
+			continue
+		}
+
+		if dataType.Version > maxVersion {
+			maxVersion = dataType.Version
+		}
+
+		if subscription.SchemaVersion >= dataType.Version {
+			continue
+		}
+
+		dataTable := subscription.DataTables[idx]
+
+		for i := subscription.SchemaVersion; i < dataType.Version; i++ {
+			if i < len(dataType.Migrations) {
+				migrationSQL := fmt.Sprintf(dataType.Migrations[i], dataTable)
+				log.Info().Str("Table", dataTable).Int("Migration", i).Msg("running migration")
+				if _, err := conn.Exec(ctx, migrationSQL); err != nil {
+					return fmt.Errorf("migration %d for %s failed: %w", i, dataTable, err)
+				}
+			}
+		}
+	}
+
+	if maxVersion > subscription.SchemaVersion {
+		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET schema_version=$1 WHERE id=$2", maxVersion, subscription.ID); err != nil {
+			return fmt.Errorf("failed to update schema version: %w", err)
+		}
+		subscription.SchemaVersion = maxVersion
+	}
+
+	return nil
+}
+
 func (subscription *Subscription) createTables(ctx context.Context, tx pgx.Tx) error {
 	for idx, dataTypeName := range subscription.DataTypes {
 		dataType := data.DataTypes[dataTypeName]
