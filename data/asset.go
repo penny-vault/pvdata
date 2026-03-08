@@ -85,13 +85,12 @@ type Asset struct {
 	LastUpdated          time.Time `json:"last_updated" parquet:"name=last_updated, type=INT64"`
 }
 
-func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) []*Asset {
+func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*Asset, error) {
 	var assetTable string
 	if len(tables) == 0 {
 		assetTable = viper.GetString("default.asset_table")
 		if assetTable == "" {
-			log.Panic().Msg("default.asset_table not set list of active assets is not possible")
-			return nil
+			return nil, errors.New("default.asset_table not set, list of active assets is not possible")
 		}
 	} else {
 		assetTable = tables[0]
@@ -124,17 +123,16 @@ func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) [
 
 	rows, err := dbConn.Query(ctx, sql)
 	if err != nil {
-		log.Error().Err(err).Str("SQL", sql).Msg("save asset to DB failed")
-		return nil
+		return nil, fmt.Errorf("query active assets from %s: %w", assetTable, err)
 	}
 
 	var dbActiveAssets []*Asset
 	err = pgxscan.ScanAll(&dbActiveAssets, rows)
 	if err != nil {
-		log.Error().Err(err).Msg("error when scanning values into dbActiveAssets")
+		return nil, fmt.Errorf("scan active assets: %w", err)
 	}
 
-	return dbActiveAssets
+	return dbActiveAssets, nil
 }
 
 func (asset *Asset) ID() string {

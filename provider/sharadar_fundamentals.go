@@ -178,7 +178,11 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 
 	defer conn.Release()
 
-	assets := data.ActiveAssets(ctx, conn)
+	assets, err := data.ActiveAssets(ctx, conn)
+	if err != nil {
+		logger.Error().Err(err).Msg("could not load active assets")
+		return ""
+	}
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
 		figiMap[asset.Ticker] = asset.CompositeFigi

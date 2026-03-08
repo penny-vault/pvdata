@@ -160,7 +160,12 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 
 	defer conn.Release()
 
-	assets := data.ActiveAssets(ctx, conn)
+	assets, err := data.ActiveAssets(ctx, conn)
+	if err != nil {
+		logger.Error().Err(err).Msg("could not load active assets")
+		runSummary.Status = data.RunFailed
+		return
+	}
 
 	log.Debug().Int("NumAssets", len(assets)).Msg("downloading EOD quotes from Tiingo")
 
@@ -374,7 +379,11 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 
 	defer conn.Release()
 
-	activeDBAssets := data.ActiveAssets(ctx, conn, subscription.DataTablesMap[data.AssetKey])
+	activeDBAssets, err := data.ActiveAssets(ctx, conn, subscription.DataTablesMap[data.AssetKey])
+	if err != nil {
+		logger.Error().Err(err).Msg("could not load active assets from database")
+		return
+	}
 
 	// determine which assets are no longer active
 	for _, dbAsset := range activeDBAssets {
