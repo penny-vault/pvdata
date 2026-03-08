@@ -69,6 +69,7 @@ const (
 	FundamentalsKey      = "fundamental"
 	MarketHolidaysKey    = "market-holidays"
 	MetricKey            = "metric"
+	QuoteKey             = "quote"
 	RatingKey            = "rating"
 )
 
@@ -327,6 +328,25 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 		Migrations:    []string{},
 		Version:       0,
 		IsPartitioned: true,
+	},
+	QuoteKey: {
+		Name: MetricKey,
+		Schema: `CREATE TABLE %[1]s (
+ticker         CHARACTER VARYING(10) NOT NULL,
+composite_figi CHARACTER(12)         NOT NULL,
+event_date     TIMESTAMP             NOT NULL,
+price          REAL                  NOT NULL,
+change         REAL                  NOT NULL,
+change_pct     REAL                  NOT NULL,
+CHECK (LENGTH(TRIM(BOTH composite_figi)) = 12),
+PRIMARY KEY (composite_figi, event_date)
+);
+
+CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date);
+CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
+		Migrations:    []string{},
+		Version:       0,
+		IsPartitioned: false,
 	},
 	RatingKey: {
 		Name: RatingKey,
