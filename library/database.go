@@ -239,6 +239,12 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 				log.Error().Err(err).Msg("cannot save rating to database")
 			}
 		}
+
+		if elem.Estimate != nil {
+			if err := elem.Estimate.SaveDB(ctx, subscription.DataTablesMap[data.EstimateKey], conn); err != nil {
+				log.Error().Err(err).Msg("cannot save estimate to database")
+			}
+		}
 	}
 }
 

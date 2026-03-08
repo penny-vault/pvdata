@@ -43,6 +43,7 @@ type Observation struct {
 	CustomObject      *Custom
 	EconomicIndicator *EconomicIndicator
 	EodQuote          *Eod
+	Estimate          *Estimate
 	Fundamental       *Fundamental
 	MarketHoliday     *MarketHoliday
 	Metric            *Metric
@@ -67,6 +68,7 @@ const (
 	CustomKey            = "custom"
 	EconomicIndicatorKey = "economic-indicator"
 	EODKey               = "eod"
+	EstimateKey          = "estimate"
 	FundamentalsKey      = "fundamental"
 	MarketHolidaysKey    = "market-holidays"
 	MetricKey            = "metric"
@@ -177,6 +179,26 @@ EXECUTE PROCEDURE adj_close_default();`,
 		Migrations:    []string{},
 		Version:       0,
 		IsPartitioned: true,
+	},
+	EstimateKey: {
+		Name:     EstimateKey,
+		ViewName: "estimates",
+		Schema: `CREATE TABLE %[1]s (
+	ticker         CHARACTER VARYING(10) NOT NULL,
+	composite_figi CHARACTER(12)         NOT NULL,
+	event_date     DATE                  NOT NULL,
+	series         TEXT                  NOT NULL,
+	value          REAL                  NOT NULL,
+	num_analysts   INT,
+	std_dev        REAL,
+	PRIMARY KEY (composite_figi, series, event_date)
+);
+
+CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker, series);
+CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, series);`,
+		Migrations:    []string{},
+		Version:       0,
+		IsPartitioned: false,
 	},
 	FundamentalsKey: {
 		Name:     FundamentalsKey,
