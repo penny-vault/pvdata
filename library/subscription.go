@@ -73,6 +73,17 @@ type dateRange struct {
 
 // Delete the subscription from database along with all associated tables
 func (subscription *Subscription) Delete(ctx context.Context) error {
+	// Before dropping tables, check published views for references
+	for _, tblName := range subscription.DataTables {
+		referenced, err := PublishedViewReferencesTable(ctx, subscription.Library.Pool, tblName)
+		if err != nil {
+			return fmt.Errorf("could not check published views: %w", err)
+		}
+		if referenced {
+			return fmt.Errorf("cannot delete subscription: table %s is used by a published view. Run 'pvdata publish' to remove it first", tblName)
+		}
+	}
+
 	conn, err := subscription.Library.Pool.Acquire(ctx)
 	if err != nil {
 		return err
@@ -111,29 +122,6 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 
 	if err := tx.Commit(ctx); err != nil {
 		return err
-	}
-
-	// clean up preferred views that pointed to deleted tables
-	existingViews, viewErr := PreferredViews(ctx, subscription.Library.Pool)
-	if viewErr != nil {
-		log.Warn().Err(viewErr).Msg("could not query preferred views during deletion")
-	} else {
-		deletedTables := make(map[string]bool, len(tables))
-		for _, t := range tables {
-			deletedTables[t] = true
-		}
-
-		for _, dataTypeKey := range subscription.DataTypes {
-			dt := data.DataTypes[dataTypeKey]
-			if dt == nil || dt.ViewName == "" {
-				continue
-			}
-			if targetTable, ok := existingViews[dt.ViewName]; ok && deletedTables[targetTable] {
-				if err := DropPreferredView(ctx, subscription.Library.Pool, dataTypeKey); err != nil {
-					log.Warn().Err(err).Str("View", dt.ViewName).Msg("could not drop preferred view for deleted table")
-				}
-			}
-		}
 	}
 
 	// now that all database related modification has succeeded delete any corresponding health check
@@ -281,24 +269,37 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 		return err
 	}
 
-	// auto-create preferred views for data types that don't have one yet
-	existingViews, err := PreferredViews(ctx, subscription.Library.Pool)
+	// auto-create published views for data types that don't have one yet
+	existingViews, err := LoadPublishedViews(ctx, subscription.Library.Pool)
 	if err != nil {
-		log.Warn().Err(err).Msg("could not query existing preferred views")
+		log.Warn().Err(err).Msg("could not query existing published views")
 	} else {
+		existingSet := make(map[string]bool)
+		for _, pv := range existingViews {
+			existingSet[pv.ViewName] = true
+		}
+
 		for _, dataTypeKey := range subscription.DataTypes {
 			dt := data.DataTypes[dataTypeKey]
 			if dt == nil || dt.ViewName == "" {
 				continue
 			}
-			if _, exists := existingViews[dt.ViewName]; !exists {
-				tableName := subscription.DataTablesMap[dataTypeKey]
-				if tableName == "" {
-					continue
-				}
-				if err := SetPreferredView(ctx, subscription.Library.Pool, dataTypeKey, tableName); err != nil {
-					log.Warn().Err(err).Str("DataType", dataTypeKey).Msg("could not auto-create preferred view")
-				}
+			if existingSet[dt.ViewName] {
+				continue
+			}
+			tableName := subscription.DataTablesMap[dataTypeKey]
+			if tableName == "" {
+				continue
+			}
+			pv := &PublishedView{
+				ViewName:    dt.ViewName,
+				DataTypeKey: dataTypeKey,
+				Sources: []ViewSource{
+					{TableName: tableName, SubscriptionID: subscription.ID.String()},
+				},
+			}
+			if err := SavePublishedView(ctx, subscription.Library.Pool, pv); err != nil {
+				log.Warn().Err(err).Str("DataType", dataTypeKey).Msg("could not auto-create published view")
 			}
 		}
 	}
