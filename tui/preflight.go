@@ -24,8 +24,8 @@ func RunPreflight(ctx context.Context, myLibrary *library.Library, subscriptionI
 	}
 	conn.Release()
 
-	// Step 2: Validate preferred views
-	if err := validatePreferredViews(ctx, myLibrary); err != nil {
+	// Step 2: Validate published views
+	if err := validatePublishedViews(ctx, myLibrary); err != nil {
 		return nil, err
 	}
 
@@ -55,14 +55,19 @@ func RunPreflight(ctx context.Context, myLibrary *library.Library, subscriptionI
 	}, nil
 }
 
-// validatePreferredViews checks that preferred views exist for all data types
+// validatePublishedViews checks that published views exist for all data types
 // that have subscriptions. If only one subscription provides a data type, the
 // view is auto-created. If multiple subscriptions provide it, the user is
 // prompted to choose.
-func validatePreferredViews(ctx context.Context, myLibrary *library.Library) error {
-	existingViews, err := library.PreferredViews(ctx, myLibrary.Pool)
+func validatePublishedViews(ctx context.Context, myLibrary *library.Library) error {
+	existingViews, err := library.LoadPublishedViews(ctx, myLibrary.Pool)
 	if err != nil {
-		return fmt.Errorf("could not query preferred views: %w", err)
+		return fmt.Errorf("could not load published views: %w", err)
+	}
+
+	existingSet := make(map[string]bool)
+	for _, pv := range existingViews {
+		existingSet[pv.ViewName] = true
 	}
 
 	allSubs, err := myLibrary.Subscriptions(ctx)
@@ -70,7 +75,7 @@ func validatePreferredViews(ctx context.Context, myLibrary *library.Library) err
 		return fmt.Errorf("could not load subscriptions: %w", err)
 	}
 
-	// Build a map: data type key -> list of (subscription, table name)
+	// Build map: data type key -> list of (subscription, table name)
 	type subTable struct {
 		sub       *library.Subscription
 		tableName string
@@ -88,25 +93,29 @@ func validatePreferredViews(ctx context.Context, myLibrary *library.Library) err
 		}
 	}
 
-	// For each data type that has providers but no view, create one
 	for dtKey, providers := range dataTypeProviders {
 		dt := data.DataTypes[dtKey]
 		if dt == nil || dt.ViewName == "" {
 			continue
 		}
 
-		if _, exists := existingViews[dt.ViewName]; exists {
+		if existingSet[dt.ViewName] {
 			continue
 		}
 
 		if len(providers) == 1 {
-			// Auto-create
-			if err := library.SetPreferredView(ctx, myLibrary.Pool, dtKey, providers[0].tableName); err != nil {
-				return fmt.Errorf("could not auto-create view %s: %w", dt.ViewName, err)
+			pv := &library.PublishedView{
+				ViewName:    dt.ViewName,
+				DataTypeKey: dtKey,
+				Sources: []library.ViewSource{
+					{TableName: providers[0].tableName, SubscriptionID: providers[0].sub.ID.String()},
+				},
 			}
-			log.Info().Str("View", dt.ViewName).Str("Table", providers[0].tableName).Msg("auto-created preferred view")
+			if err := library.SavePublishedView(ctx, myLibrary.Pool, pv); err != nil {
+				return fmt.Errorf("could not auto-create published view %s: %w", dt.ViewName, err)
+			}
+			log.Info().Str("View", dt.ViewName).Str("Table", providers[0].tableName).Msg("auto-created published view")
 		} else {
-			// Prompt user to choose
 			options := make([]huh.Option[string], len(providers))
 			for i, p := range providers {
 				label := fmt.Sprintf("%s (%s/%s) -> %s", p.sub.Name, p.sub.Provider, p.sub.Dataset, p.tableName)
@@ -117,8 +126,8 @@ func validatePreferredViews(ctx context.Context, myLibrary *library.Library) err
 			form := huh.NewForm(
 				huh.NewGroup(
 					huh.NewSelect[string]().
-						Title(fmt.Sprintf("Select the preferred table for '%s' view:", dt.ViewName)).
-						Description("Multiple subscriptions provide this data type. Choose which one the view should point to.").
+						Title(fmt.Sprintf("Select the initial table for '%s' published view:", dt.ViewName)).
+						Description("Multiple subscriptions provide this data type. Choose one to start. Use 'pvdata publish' to add more sources.").
 						Options(options...).
 						Value(&selected),
 				),
@@ -128,9 +137,35 @@ func validatePreferredViews(ctx context.Context, myLibrary *library.Library) err
 				return fmt.Errorf("view selection for %s cancelled: %w", dt.ViewName, err)
 			}
 
-			if err := library.SetPreferredView(ctx, myLibrary.Pool, dtKey, selected); err != nil {
-				return fmt.Errorf("could not create view %s: %w", dt.ViewName, err)
+			var subID string
+			for _, p := range providers {
+				if p.tableName == selected {
+					subID = p.sub.ID.String()
+					break
+				}
 			}
+
+			pv := &library.PublishedView{
+				ViewName:    dt.ViewName,
+				DataTypeKey: dtKey,
+				Sources: []library.ViewSource{
+					{TableName: selected, SubscriptionID: subID},
+				},
+			}
+			if err := library.SavePublishedView(ctx, myLibrary.Pool, pv); err != nil {
+				return fmt.Errorf("could not create published view %s: %w", dt.ViewName, err)
+			}
+		}
+	}
+
+	// Re-apply all published views to ensure Postgres views are in sync
+	allViews, err := library.LoadPublishedViews(ctx, myLibrary.Pool)
+	if err != nil {
+		return fmt.Errorf("could not reload published views: %w", err)
+	}
+	for _, pv := range allViews {
+		if err := library.ApplyPublishedView(ctx, myLibrary.Pool, pv); err != nil {
+			log.Warn().Err(err).Str("View", pv.ViewName).Msg("could not re-apply published view")
 		}
 	}
 
