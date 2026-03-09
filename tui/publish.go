@@ -105,8 +105,10 @@ func (m *PublishModel) loadViews() {
 	if err != nil {
 		m.message = fmt.Sprintf("Error loading views: %v", err)
 		m.views = nil
+
 		return
 	}
+
 	m.views = views
 }
 
@@ -123,6 +125,7 @@ func (m *PublishModel) buildViewsTable() table.Model {
 		if dt, ok := data.DataTypes[v.DataTypeKey]; ok {
 			dtName = dt.Name
 		}
+
 		rows = append(rows, table.Row{
 			v.ViewName,
 			dtName,
@@ -155,20 +158,24 @@ func (m *PublishModel) buildSourcesTable() table.Model {
 	}
 
 	rows := make([]table.Row, 0)
+
 	if m.selectedView != nil {
 		for _, s := range m.selectedView.Sources {
 			fromStr := ""
 			if s.FromDate != nil {
 				fromStr = s.FromDate.Format("2006-01-02")
 			}
+
 			untilStr := ""
 			if s.UntilDate != nil {
 				untilStr = s.UntilDate.Format("2006-01-02")
 			}
+
 			subLabel := s.SubscriptionID
 			if len(subLabel) > 12 {
 				subLabel = subLabel[:12]
 			}
+
 			rows = append(rows, table.Row{
 				s.TableName,
 				subLabel,
@@ -269,6 +276,7 @@ func tableStyles() table.Styles {
 		Foreground(lipgloss.Color("229")).
 		Background(lipgloss.Color("57")).
 		Bold(false)
+
 	return s
 }
 
@@ -288,10 +296,12 @@ func (m PublishModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
 		m.viewsTable = m.buildViewsTable()
 		if m.selectedView != nil {
 			m.sourcesTable = m.buildSourcesTable()
 		}
+
 		return m, nil
 	}
 
@@ -326,25 +336,32 @@ func (m PublishModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sourcesTable = m.buildSourcesTable()
 				m.screen = screenDetail
 			}
+
 			return m, nil
 		case "n":
 			m.prepareNewView()
+
 			if len(m.newViewDataTypes) == 0 {
 				m.message = "No data types available for new views (all already have views)."
 				return m, nil
 			}
+
 			m.screen = screenNewView
+
 			return m, nil
 		case "r":
 			m.loadViews()
 			m.viewsTable = m.buildViewsTable()
 			m.message = "Views refreshed."
+
 			return m, nil
 		}
 	}
 
 	var cmd tea.Cmd
+
 	m.viewsTable, cmd = m.viewsTable.Update(msg)
+
 	return m, cmd
 }
 
@@ -359,15 +376,19 @@ func (m PublishModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedView = nil
 			m.loadViews()
 			m.viewsTable = m.buildViewsTable()
+
 			return m, nil
 		case "a":
 			m.prepareCandidates()
+
 			if len(m.candidateTables) == 0 {
 				m.message = "No candidate tables available for this data type."
 				return m, nil
 			}
+
 			m.addTable = m.buildAddTable()
 			m.screen = screenAddSource
+
 			return m, nil
 		case "e":
 			idx := m.sourcesTable.Cursor()
@@ -375,8 +396,10 @@ func (m PublishModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.editingSourceIdx = idx
 				m.prepareEditInputs(idx)
 				m.screen = screenEditBoundary
+
 				return m, textinput.Blink
 			}
+
 			return m, nil
 		case "d", "x":
 			idx := m.sourcesTable.Cursor()
@@ -384,12 +407,15 @@ func (m PublishModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.removeSourceIdx = idx
 				m.screen = screenConfirmRemove
 			}
+
 			return m, nil
 		}
 	}
 
 	var cmd tea.Cmd
+
 	m.sourcesTable, cmd = m.sourcesTable.Update(msg)
+
 	return m, cmd
 }
 
@@ -406,6 +432,7 @@ func (m PublishModel) updateAddSource(msg tea.Msg) (tea.Model, tea.Cmd) {
 			idx := m.addTable.Cursor()
 			if idx >= 0 && idx < len(m.candidateTables) {
 				candidate := m.candidateTables[idx]
+
 				m.selectedView.Sources = append(m.selectedView.Sources, library.ViewSource{
 					TableName:      candidate.TableName,
 					SubscriptionID: candidate.SubscriptionID,
@@ -417,15 +444,19 @@ func (m PublishModel) updateAddSource(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.message = fmt.Sprintf("Added source %s.", candidate.TableName)
 				}
+
 				m.sourcesTable = m.buildSourcesTable()
 				m.screen = screenDetail
 			}
+
 			return m, nil
 		}
 	}
 
 	var cmd tea.Cmd
+
 	m.addTable, cmd = m.addTable.Update(msg)
+
 	return m, cmd
 }
 
@@ -447,6 +478,7 @@ func (m PublishModel) updateEditBoundary(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fromInput.Blur()
 				m.untilInput.Focus()
 			}
+
 			return m, textinput.Blink
 		case "enter":
 			fromStr := strings.TrimSpace(m.fromInput.Value())
@@ -464,6 +496,7 @@ func (m PublishModel) updateEditBoundary(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.message = fmt.Sprintf("Invalid from date: %v", err)
 					return m, nil
 				}
+
 				source.FromDate = &t
 			}
 
@@ -475,6 +508,7 @@ func (m PublishModel) updateEditBoundary(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.message = fmt.Sprintf("Invalid until date: %v", err)
 					return m, nil
 				}
+
 				source.UntilDate = &t
 			}
 
@@ -485,8 +519,10 @@ func (m PublishModel) updateEditBoundary(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.message = "Dates updated."
 			}
+
 			m.sourcesTable = m.buildSourcesTable()
 			m.screen = screenDetail
+
 			return m, nil
 		}
 	}
@@ -497,6 +533,7 @@ func (m PublishModel) updateEditBoundary(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else {
 		m.untilInput, cmd = m.untilInput.Update(msg)
 	}
+
 	return m, cmd
 }
 
@@ -538,15 +575,18 @@ func (m PublishModel) updateConfirmRemove(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.message = fmt.Sprintf("Removed source %s.", tableName)
 				}
+
 				m.sourcesTable = m.buildSourcesTable()
 				m.screen = screenDetail
 			}
+
 			return m, nil
 		case "n", "N", "esc":
 			m.screen = screenDetail
 			return m, nil
 		}
 	}
+
 	return m, nil
 }
 
@@ -564,6 +604,7 @@ func (m PublishModel) updateNewView(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if idx >= 0 && idx < len(m.newViewDataTypes) {
 				dtKey := m.newViewDataTypes[idx]
 				dt := data.DataTypes[dtKey]
+
 				pv := &library.PublishedView{
 					ViewName:    dt.ViewName,
 					DataTypeKey: dtKey,
@@ -582,6 +623,7 @@ func (m PublishModel) updateNewView(msg tea.Msg) (tea.Model, tea.Cmd) {
 							break
 						}
 					}
+
 					if m.selectedView != nil {
 						m.sourcesTable = m.buildSourcesTable()
 						m.screen = screenDetail
@@ -592,12 +634,15 @@ func (m PublishModel) updateNewView(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+
 			return m, nil
 		}
 	}
 
 	var cmd tea.Cmd
+
 	m.newViewTable, cmd = m.newViewTable.Update(msg)
+
 	return m, cmd
 }
 
@@ -649,8 +694,10 @@ func (m PublishModel) viewDetail() string {
 
 	viewName := ""
 	dtName := ""
+
 	if m.selectedView != nil {
 		viewName = m.selectedView.ViewName
+
 		dtName = m.selectedView.DataTypeKey
 		if dt, ok := data.DataTypes[m.selectedView.DataTypeKey]; ok {
 			dtName = dt.Name
@@ -724,6 +771,7 @@ func (m PublishModel) viewEditBoundary() string {
 	} else {
 		b.WriteString(InactiveTabStyle.Render(fromLabel))
 	}
+
 	b.WriteString(m.fromInput.View())
 	b.WriteString("\n\n")
 
@@ -732,6 +780,7 @@ func (m PublishModel) viewEditBoundary() string {
 	} else {
 		b.WriteString(InactiveTabStyle.Render(untilLabel))
 	}
+
 	b.WriteString(m.untilInput.View())
 	b.WriteString("\n\n")
 
@@ -751,6 +800,7 @@ func (m PublishModel) viewConfirmRemove() string {
 
 	tableName := ""
 	viewName := ""
+
 	if m.selectedView != nil && m.removeSourceIdx < len(m.selectedView.Sources) {
 		tableName = m.selectedView.Sources[m.removeSourceIdx].TableName
 		viewName = m.selectedView.ViewName
@@ -800,6 +850,7 @@ func (m *PublishModel) prepareEditInputs(idx int) {
 	m.fromInput = textinput.New()
 	m.fromInput.Placeholder = "YYYY-MM-DD"
 	m.fromInput.CharLimit = 10
+
 	m.fromInput.Width = 12
 	if source.FromDate != nil {
 		m.fromInput.SetValue(source.FromDate.Format("2006-01-02"))
@@ -808,6 +859,7 @@ func (m *PublishModel) prepareEditInputs(idx int) {
 	m.untilInput = textinput.New()
 	m.untilInput.Placeholder = "YYYY-MM-DD"
 	m.untilInput.CharLimit = 10
+
 	m.untilInput.Width = 12
 	if source.UntilDate != nil {
 		m.untilInput.SetValue(source.UntilDate.Format("2006-01-02"))
@@ -845,9 +897,11 @@ func (m *PublishModel) prepareCandidates() {
 		if !ok || tableName == "" {
 			continue
 		}
+
 		if existing[tableName] {
 			continue
 		}
+
 		m.candidateTables = append(m.candidateTables, candidateSource{
 			TableName:      tableName,
 			SubscriptionID: sub.ID.String(),
@@ -871,9 +925,11 @@ func (m *PublishModel) prepareNewView() {
 		if dt.ViewName == "" {
 			continue
 		}
+
 		if existingViewNames[dt.ViewName] {
 			continue
 		}
+
 		m.newViewDataTypes = append(m.newViewDataTypes, dtKey)
 	}
 

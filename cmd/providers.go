@@ -29,7 +29,6 @@ var providersCmd = &cobra.Command{
 	Use:   "providers <name>",
 	Short: "List all providers available or get details about a specific provider",
 	Run: func(cmd *cobra.Command, args []string) {
-
 		r, _ := glamour.NewTermRenderer(
 			// detect background color and pick either the default dark or light theme
 			glamour.WithAutoStyle(),
@@ -41,18 +40,20 @@ var providersCmd = &cobra.Command{
 
 		if len(args) > 0 {
 			if provider, ok := provider.Map[args[0]]; ok {
-				builder.WriteString(fmt.Sprintf("# %s\n", provider.Name()))
+				fmt.Fprintf(&builder, "# %s\n", provider.Name())
 				builder.WriteString(provider.Description())
 				builder.WriteString("\n\n## Datasets\n")
+
 				for _, dataset := range provider.Datasets() {
 					start, end := dataset.DateRange()
-					builder.WriteString(fmt.Sprintf("- %s (%s to %s): %s\n", dataset.Name, start.Format("2006-01-02"), end.Format("2006-01-02"), dataset.Description))
+					fmt.Fprintf(&builder, "- %s (%s to %s): %s\n", dataset.Name, start.Format("2006-01-02"), end.Format("2006-01-02"), dataset.Description)
 				}
 			}
 		} else {
 			builder.WriteString("# Available Providers\n")
+
 			for _, provider := range provider.Map {
-				builder.WriteString(fmt.Sprintf("\n## %s\n", provider.Name()))
+				fmt.Fprintf(&builder, "\n## %s\n", provider.Name())
 				builder.WriteString(provider.Description())
 			}
 		}

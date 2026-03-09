@@ -55,16 +55,19 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
+
 		exitNotification <- runSummary
 	}()
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
 		rateLimit = 5000
 	}
 
@@ -85,9 +88,12 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	assets, err := data.ActiveAssets(ctx, conn)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
+
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
 		figiMap[asset.Ticker] = asset.CompositeFigi
@@ -106,11 +112,14 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 
 	if err := limiter.Wait(ctx); err != nil {
 		logger.Error().Err(err).Msg("rate limit wait failed")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
 	sp500Url := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/SP500"
+
 	resp, err := client.R().SetQueryParam("action", "current").Get(sp500Url)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to download SP500 constituents")
@@ -121,13 +130,16 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 
 	if resp != nil && resp.StatusCode() < 400 {
 		responseBody := string(resp.Body())
+
 		result := gjson.Get(responseBody, "datatable.data")
 		for _, val := range result.Array() {
 			ticker := strings.ReplaceAll(val.Get("2").String(), ".", "/")
+
 			figi, ok := figiMap[ticker]
 			if !ok {
 				continue
 			}
+
 			out <- &data.Observation{
 				IndexSnapshot: &data.IndexSnapshot{
 					Ticker:        ticker,
@@ -139,6 +151,7 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 				SubscriptionID:   subscription.ID,
 				SubscriptionName: subscription.Name,
 			}
+
 			numObs++
 		}
 	} else if resp != nil {
@@ -148,9 +161,12 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	cursor := ""
 	for {
 		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar metrics")
+
 		var n int
+
 		cursor, n = downloadSharadarMetrics(ctx, subscription, client, limiter, cursor, out, forDate, figiMap)
 		numObs += n
+
 		if cursor == "" {
 			break
 		}
@@ -196,6 +212,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 	responseBody := string(resp.Body())
 	result := gjson.Get(responseBody, "datatable.data")
 	count := 0
+
 	for _, val := range result.Array() {
 		metric := &sharadarMetric{
 			Ticker:      val.Get("0").String(),
@@ -219,6 +236,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+
 		count++
 	}
 

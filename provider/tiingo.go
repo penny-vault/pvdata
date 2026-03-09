@@ -124,17 +124,21 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
+
 		exitNotification <- runSummary
 	}()
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -176,7 +180,9 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 	assets, err := data.ActiveAssets(ctx, conn)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -192,6 +198,7 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 		url := fmt.Sprintf("https://api.tiingo.com/tiingo/daily/%s/prices", ticker)
 
 		respContent := make([]*tiingoEod, 0)
+
 		resp, err := client.R().
 			SetQueryParam("startDate", startDateStr).
 			SetResult(&respContent).
@@ -235,6 +242,7 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 				SubscriptionID:   subscription.ID,
 				SubscriptionName: subscription.Name,
 			}
+
 			numObs++
 		}
 	}
@@ -253,10 +261,12 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
+
 		exitNotification <- runSummary
 	}()
 
@@ -290,6 +300,7 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 
 	// unzip downloaded data
 	body := resp.Body()
+
 	if err != nil {
 		logger.Error().Err(err).Msg("could not read response body when downloading supported tickers from tiingo")
 		return
@@ -303,12 +314,14 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 
 	// Read all the files from zip archive
 	var tickerCsvBytes []byte
+
 	if len(zipReader.File) == 0 {
 		logger.Error().Msg("no files contained in tiingo supported tickers zip file")
 		return
 	}
 
 	zipFile := zipReader.File[0]
+
 	tickerCsvBytes, err = readZipFile(zipFile)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to read ticker csv from tiingo supported tickers zip file")
@@ -322,14 +335,17 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 
 	validExchanges := []string{"BATS", "NASDAQ", "NMFQS", "NYSE", "NYSE ARCA", "NYSE MKT"}
 	commonAssets := make([]*data.Asset, 0, 25000)
+
 	for _, tiingoAsset := range assets {
 		// remove assets on invalid exchanges
 		keep := false
+
 		for _, exchange := range validExchanges {
 			if tiingoAsset.Exchange == exchange {
 				keep = true
 			}
 		}
+
 		if !keep {
 			continue
 		}
@@ -371,6 +387,7 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 			endDate = endDate.In(nyc)
 
 			now := time.Now().In(nyc)
+
 			age := now.Sub(endDate)
 			if age < (time.Hour * 24 * 7) {
 				pvAsset.DelistingDate = ""
@@ -435,6 +452,7 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+
 		numObs++
 	}
 }
@@ -461,5 +479,6 @@ func readZipFile(zf *zip.File) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
+
 	return io.ReadAll(f)
 }

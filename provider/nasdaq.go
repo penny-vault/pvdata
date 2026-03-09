@@ -78,6 +78,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		exitNotification <- runSummary
 	}()
@@ -91,7 +92,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	conn, err := subscription.Library.Pool.Acquire(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not acquire database connection")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 	defer conn.Release()
@@ -99,7 +102,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	assets, err := data.ActiveAssets(ctx, conn)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -120,7 +125,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 		Timeout:   playwright.Float(60000),
 	}); err != nil {
 		logger.Error().Err(err).Msg("could not navigate to Nasdaq NDX-100 page")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -131,7 +138,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 		Timeout: playwright.Float(30000),
 	}); err != nil {
 		logger.Error().Err(err).Msg("timed out waiting for NDX-100 constituents table")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -139,7 +148,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	rows, err := page.Locator(fmt.Sprintf("%s [data-row-index]", tableSelector)).All()
 	if err != nil {
 		logger.Error().Err(err).Msg("could not locate table rows")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -149,10 +160,12 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	for _, row := range rows {
 		// Ticker is in the first cell, wrapped in an <a> tag
 		tickerLink := row.Locator("a[href*='/market-activity/stocks/']").First()
+
 		tickerText, err := tickerLink.InnerText()
 		if err != nil {
 			continue
 		}
+
 		ticker := strings.TrimSpace(tickerText)
 		if ticker == "" {
 			continue
@@ -166,7 +179,9 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	if len(holdings) == 0 {
 		logger.Warn().Msg("no holdings found in NDX-100 constituents table")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -218,6 +233,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 				SubscriptionID:   subscription.ID,
 				SubscriptionName: subscription.Name,
 			}
+
 			numObs++
 		}
 

@@ -101,6 +101,7 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		exitNotification <- runSummary
 	}()
@@ -109,7 +110,9 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 	tickerStr := subscription.Config["tickers"]
 	if tickerStr == "" {
 		logger.Error().Msg("no tickers configured for iShares provider")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -127,7 +130,9 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 	conn, err := subscription.Library.Pool.Acquire(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not acquire database connection")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 	defer conn.Release()
@@ -135,7 +140,9 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 	assets, err := data.ActiveAssets(ctx, conn)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -161,6 +168,7 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 			logger.Error().Err(err).Str("Ticker", ticker).Msg("failed to download iShares ETF holdings")
 			continue
 		}
+
 		numObs += n
 	}
 
@@ -279,6 +287,7 @@ func downloadSingleISharesETF(
 				SubscriptionID:   subscription.ID,
 				SubscriptionName: subscription.Name,
 			}
+
 			numObs++
 		}
 

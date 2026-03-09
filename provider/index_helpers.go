@@ -18,6 +18,7 @@ func shouldTakeSnapshot(lastSnapshotDate time.Time, frequency string) bool {
 	}
 
 	var interval time.Duration
+
 	switch frequency {
 	case "daily":
 		interval = 24 * time.Hour
@@ -65,12 +66,15 @@ func lastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexName 
 	defer conn.Release()
 
 	var snapshotDate time.Time
+
 	sql := fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s_snapshot WHERE index_name = $1`, table)
+
 	err = conn.QueryRow(ctx, sql, indexName).Scan(&snapshotDate)
 	if err != nil {
 		log.Error().Err(err).Msg("could not query last snapshot date")
 		return time.Time{}
 	}
+
 	return snapshotDate
 }
 
@@ -97,14 +101,17 @@ func previousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 	defer rows.Close()
 
 	result := make(map[string]string)
+
 	for rows.Next() {
 		var ticker, figi string
 		if err := rows.Scan(&ticker, &figi); err != nil {
 			log.Error().Err(err).Msg("error scanning previous snapshot row")
 			continue
 		}
+
 		result[ticker] = figi
 	}
+
 	return result
 }
 

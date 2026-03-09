@@ -22,6 +22,7 @@ func RunPreflight(ctx context.Context, myLibrary *library.Library, subscriptionI
 	if err != nil {
 		return nil, fmt.Errorf("could not connect to database: %w", err)
 	}
+
 	conn.Release()
 
 	// Step 2: Validate published views
@@ -31,12 +32,14 @@ func RunPreflight(ctx context.Context, myLibrary *library.Library, subscriptionI
 
 	// Step 3: Resolve subscriptions
 	var subscriptions []*library.Subscription
+
 	if len(subscriptionIDs) > 0 {
 		for _, id := range subscriptionIDs {
 			sub, err := myLibrary.SubscriptionFromID(ctx, id)
 			if err != nil {
 				return nil, fmt.Errorf("could not load subscription %s: %w", id, err)
 			}
+
 			subscriptions = append(subscriptions, sub)
 		}
 	} else {
@@ -80,11 +83,14 @@ func validatePublishedViews(ctx context.Context, myLibrary *library.Library) err
 		sub       *library.Subscription
 		tableName string
 	}
+
 	dataTypeProviders := make(map[string][]subTable)
+
 	for _, sub := range allSubs {
 		if !sub.Active {
 			continue
 		}
+
 		for _, dtKey := range sub.DataTypes {
 			tableName := sub.DataTablesMap[dtKey]
 			if tableName != "" {
@@ -114,6 +120,7 @@ func validatePublishedViews(ctx context.Context, myLibrary *library.Library) err
 			if err := library.SavePublishedView(ctx, myLibrary.Pool, pv); err != nil {
 				return fmt.Errorf("could not auto-create published view %s: %w", dt.ViewName, err)
 			}
+
 			log.Info().Str("View", dt.ViewName).Str("Table", providers[0].tableName).Msg("auto-created published view")
 		} else {
 			options := make([]huh.Option[string], len(providers))
@@ -123,6 +130,7 @@ func validatePublishedViews(ctx context.Context, myLibrary *library.Library) err
 			}
 
 			var selected string
+
 			form := huh.NewForm(
 				huh.NewGroup(
 					huh.NewSelect[string]().
@@ -138,6 +146,7 @@ func validatePublishedViews(ctx context.Context, myLibrary *library.Library) err
 			}
 
 			var subID string
+
 			for _, p := range providers {
 				if p.tableName == selected {
 					subID = p.sub.ID.String()
@@ -163,6 +172,7 @@ func validatePublishedViews(ctx context.Context, myLibrary *library.Library) err
 	if err != nil {
 		return fmt.Errorf("could not reload published views: %w", err)
 	}
+
 	for _, pv := range allViews {
 		if err := library.ApplyPublishedView(ctx, myLibrary.Pool, pv); err != nil {
 			log.Warn().Err(err).Str("View", pv.ViewName).Msg("could not re-apply published view")
@@ -189,6 +199,7 @@ func selectSubscriptions(ctx context.Context, myLibrary *library.Library) ([]*li
 	}
 
 	var selectedIDs []string
+
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().

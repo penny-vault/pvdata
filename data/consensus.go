@@ -91,9 +91,9 @@ func (consensus *Consensus) SaveDB(ctx context.Context, tbl string, dbConn *pgxp
 		consensus.NumDowngrades,
 		consensus.AvgTargetPrice,
 	)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save consensus to DB failed")
+
 		if err2 := tx.Rollback(ctx); err2 != nil {
 			log.Error().Err(err).Msg("error rollingback tx")
 		}

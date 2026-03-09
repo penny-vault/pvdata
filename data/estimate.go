@@ -74,9 +74,9 @@ func (estimate *Estimate) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 		estimate.NumAnalysts,
 		estimate.StdDev,
 	)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save estimate to DB failed")
+
 		if err2 := tx.Rollback(ctx); err2 != nil {
 			log.Error().Err(err).Msg("error rollingback tx")
 		}

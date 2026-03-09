@@ -68,7 +68,6 @@ func (holiday *MarketHoliday) SaveDB(ctx context.Context, tbl string, dbConn *pg
 		close_time = EXCLUDED.close_time`, tbl)
 
 	_, err = tx.Exec(ctx, sql, holiday.Name, holiday.EventDate, holiday.Market, holiday.EarlyClose, holiday.CloseTime)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save market holiday to DB failed")
 		return err

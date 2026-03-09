@@ -49,12 +49,15 @@ func NewSubscription(providerName, datasetName string, config map[string]string,
 		for _, t := range selectedTypes {
 			selected[t] = true
 		}
+
 		filtered := make([]*data.DataType, 0, len(selectedTypes))
+
 		for _, dt := range dataTypes {
 			if selected[dt.Name] {
 				filtered = append(filtered, dt)
 			}
 		}
+
 		dataTypes = filtered
 	}
 

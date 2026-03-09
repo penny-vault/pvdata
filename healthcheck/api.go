@@ -57,12 +57,12 @@ func Create(name string, slug string, tags []string, schedule string) (string, e
 	result := createResp{}
 
 	client := resty.New()
+
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/json").
 		SetBody(command).
 		SetResult(&result).
 		Post("https://healthchecks.io/api/v3/checks/")
-
 	if err != nil {
 		return "", err
 	}
@@ -82,12 +82,12 @@ func Delete(id string) error {
 	result := createResp{}
 
 	client := resty.New()
+
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("X-Api-Key", viper.GetString("healthchecks.apikey")).
 		SetResult(&result).
 		Delete(fmt.Sprintf("https://healthchecks.io/api/v3/checks/%s", id))
-
 	if err != nil {
 		return err
 	}
@@ -104,12 +104,12 @@ func Pause(id string) error {
 	result := createResp{}
 
 	client := resty.New()
+
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("X-Api-Key", viper.GetString("healthchecks.apikey")).
 		SetResult(&result).
 		Post(fmt.Sprintf("https://healthchecks.io/api/v3/checks/%s/pause", id))
-
 	if err != nil {
 		return err
 	}
@@ -126,12 +126,12 @@ func Resume(id string) error {
 	result := createResp{}
 
 	client := resty.New()
+
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("X-Api-Key", viper.GetString("healthchecks.apikey")).
 		SetResult(&result).
 		Post(fmt.Sprintf("https://healthchecks.io/api/v3/checks/%s/resume", id))
-
 	if err != nil {
 		return err
 	}

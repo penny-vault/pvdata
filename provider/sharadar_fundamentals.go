@@ -156,16 +156,19 @@ func downloadAllSharadarFundamentals(ctx context.Context, subscription *library.
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
+
 		exitNotification <- runSummary
 	}()
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
 		rateLimit = 5000
 	}
 
@@ -188,9 +191,12 @@ func downloadAllSharadarFundamentals(ctx context.Context, subscription *library.
 	cursor := ""
 	for {
 		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar fundamentals")
+
 		var n int
+
 		cursor, n = downloadSharadarFundamentals(ctx, subscription, client, limiter, cursor, out)
 		numObs += n
+
 		if cursor == "" {
 			break
 		}
@@ -218,6 +224,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 		logger.Error().Err(err).Msg("could not load active assets")
 		return "", 0
 	}
+
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
 		figiMap[asset.Ticker] = asset.CompositeFigi
@@ -249,6 +256,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 	responseBody := string(resp.Body())
 	result := gjson.Get(responseBody, "datatable.data")
 	count := 0
+
 	for _, val := range result.Array() {
 		fundamental := &sharadarFundamental{
 			Ticker:                                  val.Get("0").String(),
@@ -373,6 +381,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+
 		count++
 	}
 
@@ -526,6 +535,7 @@ func (fundamental *sharadarFundamental) PvFundamental(figiMap map[string]string)
 		ff.LastUpdated, err = time.Parse("2006-01-02", fundamental.LastUpdated)
 		if err != nil {
 			log.Error().Err(err).Str("LastUpdated", fundamental.CalendarDate).Msg("could not parse date")
+
 			ff.LastUpdated = time.Now().In(nyc)
 		}
 
@@ -534,6 +544,7 @@ func (fundamental *sharadarFundamental) PvFundamental(figiMap map[string]string)
 
 	// get composite figi from ticker
 	var ok bool
+
 	ff.CompositeFigi, ok = figiMap[ff.Ticker]
 	if !ok {
 		ff.CompositeFigi = ""

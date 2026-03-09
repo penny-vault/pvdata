@@ -42,6 +42,7 @@ provided then each subscription will execute sequentially.`,
 			if err != nil {
 				log.Fatal().Err(err).Str("lookback", lookbackStr).Msg("invalid lookback value")
 			}
+
 			ctx = context.WithValue(ctx, provider.LookbackKey, lookback)
 		}
 
@@ -65,7 +66,9 @@ provided then each subscription will execute sequentially.`,
 			if err != nil {
 				log.Fatal().Err(err).Msg("could not determine home directory")
 			}
+
 			logFile := filepath.Join(home, ".pvdata.log")
+
 			logWriter, err := tui.NewDualWriter(logFile)
 			if err != nil {
 				log.Fatal().Err(err).Str("LogFile", logFile).Msg("could not create log writer")
@@ -93,8 +96,15 @@ provided then each subscription will execute sequentially.`,
 func init() {
 	runCmd.Flags().StringP("lookback", "l", "", "Override data lookback period (e.g. 14d, 4w, 6m, 1y)")
 	runCmd.Flags().BoolP("daemon", "d", false, "Run without TUI, logging to stderr")
-	viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback"))
-	viper.BindPFlag("daemon", runCmd.Flags().Lookup("daemon"))
+
+	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind lookback flag")
+	}
+
+	if err := viper.BindPFlag("daemon", runCmd.Flags().Lookup("daemon")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind daemon flag")
+	}
+
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -121,13 +131,16 @@ func runDaemon(ctx context.Context, myLibrary *library.Library, filterIDs []stri
 	}
 
 	var subscriptions []*library.Subscription
+
 	for _, sub := range allSubs {
 		if !sub.Active {
 			continue
 		}
+
 		if len(filterSet) > 0 && !filterSet[sub.ID.String()] {
 			continue
 		}
+
 		subscriptions = append(subscriptions, sub)
 	}
 
@@ -138,6 +151,7 @@ func runDaemon(ctx context.Context, myLibrary *library.Library, filterIDs []stri
 	// Schedule each subscription on its cron schedule
 	for _, sub := range subscriptions {
 		sub := sub // capture loop variable
+
 		_, err := scheduler.NewJob(
 			gocron.CronJob(sub.Schedule, false),
 			gocron.NewTask(func() {
@@ -147,6 +161,7 @@ func runDaemon(ctx context.Context, myLibrary *library.Library, filterIDs []stri
 		if err != nil {
 			log.Fatal().Err(err).Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("could not schedule subscription")
 		}
+
 		log.Info().Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("scheduled subscription")
 	}
 
@@ -159,7 +174,10 @@ func runDaemon(ctx context.Context, myLibrary *library.Library, filterIDs []stri
 	<-sigCh
 
 	log.Info().Msg("shutting down daemon")
-	scheduler.Shutdown()
+
+	if err := scheduler.Shutdown(); err != nil {
+		log.Error().Err(err).Msg("error shutting down scheduler")
+	}
 }
 
 func runSubscription(ctx context.Context, myLibrary *library.Library, subscription *library.Subscription) {
@@ -170,6 +188,7 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 	if err := subscription.ManagePartitions(ctx); err != nil {
 		logger.Error().Err(err).Msg("ManagePartitions failed")
 	}
+
 	if err := subscription.RunMigrations(ctx); err != nil {
 		logger.Error().Err(err).Msg("RunMigrations failed")
 	}
@@ -191,6 +210,7 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 
 	var wg sync.WaitGroup
 	wg.Add(1)
+
 	go myLibrary.SaveObservations(outChan, &wg)
 
 	fetchLogger := logger.With().Str("SubscriptionID", subscription.ID.String()).Logger()
@@ -199,6 +219,7 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 	subDataset.Fetch(fetchCtx, subscription, outChan, exitChan)
 
 	summary := <-exitChan
+
 	close(outChan)
 	wg.Wait()
 

@@ -104,9 +104,9 @@ func (metric *Metric) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Co
 		metric.PriceToCashFlow,
 		metric.Beta,
 	)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Object("Metric", metric).Msg("save metric to DB failed")
+
 		if err2 := tx.Rollback(ctx); err2 != nil {
 			log.Error().Err(err).Msg("error rollingback tx")
 		}

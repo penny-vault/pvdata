@@ -31,6 +31,7 @@ type FSFiler struct {
 func (fs *FSFiler) CreateFile(name string, data []byte) (string, error) {
 	filePath := path.Join(fs.BasePath, name)
 	err := os.WriteFile(filePath, data, 0644)
+
 	return filePath, err
 }
 
@@ -41,5 +42,6 @@ func NewFilerFromString(spec string) Filer {
 			BasePath: strings.TrimPrefix(spec, "file://"),
 		}
 	}
+
 	return nil
 }

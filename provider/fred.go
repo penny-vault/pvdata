@@ -74,16 +74,19 @@ func downloadAllFredIndicators(ctx context.Context, subscription *library.Subscr
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
+
 		exitNotification <- runSummary
 	}()
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
 		rateLimit = 120
 	}
 
@@ -133,7 +136,6 @@ func downloadIndicator(ctx context.Context, subscription *library.Subscription, 
 		SetQueryParam("series_id", seriesId).
 		SetQueryParam("sort_order", "desc").
 		SetResult(&resp).Get("https://api.stlouisfed.org/fred/series/observations")
-
 	if err != nil {
 		logger.Error().Err(err).Msg("downloading economic indicators failed")
 		return 0
@@ -145,6 +147,7 @@ func downloadIndicator(ctx context.Context, subscription *library.Subscription, 
 	}
 
 	count := 0
+
 	for _, obs := range resp.Observations {
 		indicator := &data.EconomicIndicator{
 			Series: seriesId,
@@ -175,6 +178,7 @@ func downloadIndicator(ctx context.Context, subscription *library.Subscription, 
 			SubscriptionID:    subscription.ID,
 			SubscriptionName:  subscription.Name,
 		}
+
 		count++
 	}
 

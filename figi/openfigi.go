@@ -56,6 +56,7 @@ type OpenFigiQuery struct {
 func rateLimit() *rate.Limiter {
 	dur := (time.Second * 6) / 25
 	openFigiRate := rate.Every(dur)
+
 	return rate.NewLimiter(openFigiRate, 10)
 }
 
@@ -64,6 +65,7 @@ func batchSize() int {
 	if apiKey == "" {
 		return 10
 	}
+
 	return 100
 }
 
@@ -101,6 +103,7 @@ func Enrich(assets ...*data.Asset) {
 	rateLimiter := rateLimit()
 
 	emptyFigis := make([]*data.Asset, 0, 100)
+
 	for _, asset := range assets {
 		if (asset.CompositeFigi == "" || asset.AssetType == data.UnknownAsset) && asset.DelistingDate == "" {
 			emptyFigis = append(emptyFigis, asset)
@@ -137,6 +140,7 @@ func Enrich(assets ...*data.Asset) {
 							Str("CompositeFigi", assetFigi.CompositeFIGI).
 							Msg("asset type is unknown and openfigi security type 2 is unknown")
 					}
+
 					asset.AssetType = data.MutualFund
 				case "":
 				default:
@@ -154,6 +158,7 @@ func Enrich(assets ...*data.Asset) {
 
 func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*OpenFigiAsset {
 	maxBatch := batchSize()
+
 	if viper.GetString("openfigi.apikey") == "" {
 		log.Warn().Msg("no OpenFIGI API key configured -- using reduced batch size (10 per request); set openfigi.apikey in your config or re-run `pvdata init`")
 	}
@@ -180,6 +185,7 @@ func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*Ope
 					result[figiAsset.Ticker] = figiAsset
 				}
 			}
+
 			query = make([]*OpenFigiQuery, 0, maxBatch)
 		}
 	}

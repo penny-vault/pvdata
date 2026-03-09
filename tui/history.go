@@ -49,6 +49,7 @@ func (m HistoryModel) Update(msg tea.Msg) (HistoryModel, tea.Cmd) {
 		if msg.Type == EventStarted {
 			m.startTimes[msg.SubscriptionID] = msg.Timestamp
 		}
+
 		if msg.Type == EventCompleted || msg.Type == EventFailed {
 			startTime := m.startTimes[msg.SubscriptionID]
 			m.sessionRuns = append(m.sessionRuns, SessionRun{
@@ -65,7 +66,9 @@ func (m HistoryModel) Update(msg tea.Msg) (HistoryModel, tea.Cmd) {
 
 	if m.ready {
 		var cmd tea.Cmd
+
 		m.viewport, cmd = m.viewport.Update(msg)
+
 		return m, cmd
 	}
 
@@ -76,6 +79,7 @@ func (m HistoryModel) View() string {
 	if !m.ready {
 		return "Initializing history..."
 	}
+
 	return m.viewport.View()
 }
 
@@ -87,6 +91,7 @@ func (m *HistoryModel) refreshContent() {
 	var b strings.Builder
 
 	b.WriteString("-- Current Session --\n\n")
+
 	if len(m.sessionRuns) == 0 {
 		b.WriteString("  No completed runs yet.\n")
 	} else {
@@ -95,9 +100,10 @@ func (m *HistoryModel) refreshContent() {
 			if run.Status == EventFailed {
 				status = "FAILED"
 			}
+
 			duration := run.EndTime.Sub(run.StartTime).Round(time.Second)
-			b.WriteString(fmt.Sprintf("  %-30s  %-8s  %d records  %s\n",
-				run.SubscriptionName, status, run.RecordsCount, duration))
+			fmt.Fprintf(&b, "  %-30s  %-8s  %d records  %s\n",
+				run.SubscriptionName, status, run.RecordsCount, duration)
 		}
 	}
 

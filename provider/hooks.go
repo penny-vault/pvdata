@@ -45,6 +45,7 @@ func ComputeAdjustedClose(rows []EodRow) []EodRow {
 			adjustFactor = 1.0
 		}
 	}
+
 	return rows
 }
 
@@ -63,6 +64,7 @@ func PurgeExpiredData(ctx context.Context, subscription *library.Subscription) e
 	}
 
 	cutoff := time.Now().Add(-subDataset.TTL)
+
 	conn, err := subscription.Library.Pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire connection for purge: %w", err)
@@ -78,6 +80,7 @@ func PurgeExpiredData(ctx context.Context, subscription *library.Subscription) e
 			log.Error().Err(err).Str("Table", tableName).Msg("purge expired data failed")
 			continue
 		}
+
 		if tag.RowsAffected() > 0 {
 			log.Info().Str("Table", tableName).Int64("Deleted", tag.RowsAffected()).Time("Cutoff", cutoff).Msg("purged expired data")
 		}
@@ -93,6 +96,7 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 	if tableName == "" {
 		return nil
 	}
+
 	log.Info().Str("Table", tableName).Msg("adjusting EOD prices")
 
 	conn, err := subscription.Library.Pool.Acquire(ctx)
@@ -108,14 +112,17 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 	}
 
 	var figis []string
+
 	for figiRows.Next() {
 		var figi string
 		if err := figiRows.Scan(&figi); err != nil {
 			figiRows.Close()
 			return err
 		}
+
 		figis = append(figis, figi)
 	}
+
 	figiRows.Close()
 
 	if err := figiRows.Err(); err != nil {
@@ -134,15 +141,19 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 			EventDate any
 			EodRow
 		}
+
 		var records []eodWithDate
+
 		for rows.Next() {
 			var r eodWithDate
 			if err := rows.Scan(&r.EventDate, &r.Close, &r.Dividend, &r.SplitFactor); err != nil {
 				rows.Close()
 				return err
 			}
+
 			records = append(records, r)
 		}
+
 		rows.Close()
 
 		if err := rows.Err(); err != nil {
@@ -158,6 +169,7 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 		for i, r := range records {
 			eodRows[i] = r.EodRow
 		}
+
 		ComputeAdjustedClose(eodRows)
 
 		// Batch update
@@ -170,7 +182,10 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 			if _, err := tx.Exec(ctx,
 				fmt.Sprintf("UPDATE %s SET adj_close = $1 WHERE composite_figi = $2 AND event_date = $3", tableName),
 				eodRows[i].AdjClose, figi, r.EventDate); err != nil {
-				tx.Rollback(ctx)
+				if rbErr := tx.Rollback(ctx); rbErr != nil {
+					log.Error().Err(rbErr).Msg("failed to rollback transaction")
+				}
+
 				return err
 			}
 		}
@@ -181,5 +196,6 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 	}
 
 	log.Info().Str("Table", tableName).Int("Assets", len(figis)).Msg("EOD price adjustment complete")
+
 	return nil
 }

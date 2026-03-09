@@ -38,5 +38,6 @@ func Migrate(databaseURL string) error {
 	}
 
 	err = migration.Up()
+
 	return err
 }

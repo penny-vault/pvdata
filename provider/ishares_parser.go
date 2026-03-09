@@ -51,17 +51,21 @@ type ssData struct {
 // disclaimer text (e.g., "&style" without a semicolon).
 func sanitizeAmpersands(data []byte) []byte {
 	validEntities := []string{"amp;", "lt;", "gt;", "quot;", "apos;", "#"}
+
 	var result []byte
+
 	for i := 0; i < len(data); i++ {
 		if data[i] == '&' {
 			rest := string(data[i+1:])
 			isValid := false
+
 			for _, ent := range validEntities {
 				if strings.HasPrefix(rest, ent) {
 					isValid = true
 					break
 				}
 			}
+
 			if isValid {
 				result = append(result, '&')
 			} else {
@@ -71,6 +75,7 @@ func sanitizeAmpersands(data []byte) []byte {
 			result = append(result, data[i])
 		}
 	}
+
 	return result
 }
 
@@ -91,12 +96,14 @@ func parseISharesXML(xmlData []byte) (*iSharesParseResult, error) {
 	result := &iSharesParseResult{}
 
 	var holdingsSheet *ssWorksheet
+
 	for i := range workbook.Worksheets {
 		if workbook.Worksheets[i].Name == "Holdings" {
 			holdingsSheet = &workbook.Worksheets[i]
 			break
 		}
 	}
+
 	if holdingsSheet == nil {
 		return nil, xml.UnmarshalError("Holdings worksheet not found")
 	}
@@ -113,6 +120,7 @@ func parseISharesXML(xmlData []byte) (*iSharesParseResult, error) {
 
 	// Find header row
 	headerIdx := -1
+
 	for i, row := range rows {
 		if len(row.Cells) > 0 && row.Cells[0].StyleID == "headerstyle" &&
 			row.Cells[0].Data.Value == "Ticker" {
@@ -120,6 +128,7 @@ func parseISharesXML(xmlData []byte) (*iSharesParseResult, error) {
 			break
 		}
 	}
+
 	if headerIdx < 0 {
 		return result, nil
 	}

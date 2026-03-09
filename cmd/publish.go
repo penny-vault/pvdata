@@ -37,6 +37,7 @@ filters to compose data from multiple sources (e.g., legacy data + current provi
 Opens a TUI for adding, removing, and editing view sources.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
+
 		myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
 		if err != nil {
 			log.Fatal().Err(err).Msg("could not connect to library")
@@ -44,6 +45,7 @@ Opens a TUI for adding, removing, and editing view sources.`,
 		defer myLibrary.Close()
 
 		model := tui.NewPublishModel(ctx, myLibrary)
+
 		p := tea.NewProgram(model, tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

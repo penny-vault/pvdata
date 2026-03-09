@@ -65,9 +65,9 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 		idx.SnapshotDate,
 		idx.Weight,
 	)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save index snapshot to DB failed")
+
 		if err2 := tx.Rollback(ctx); err2 != nil {
 			log.Error().Err(err).Msg("error rollingback tx")
 		}
@@ -118,9 +118,9 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 		idx.EventDate,
 		idx.Action,
 	)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save index change to DB failed")
+
 		if err2 := tx.Rollback(ctx); err2 != nil {
 			log.Error().Err(err).Msg("error rollingback tx")
 		}

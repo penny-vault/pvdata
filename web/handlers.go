@@ -32,6 +32,7 @@ func GetSubscriptions(c *fiber.Ctx) error {
 	myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
 	if err != nil {
 		log.Fatal().Err(err).Msg("could not load library info")
+
 		return c.JSON(HttpError{
 			Code:    "501",
 			Message: "could not load library info",
@@ -41,6 +42,7 @@ func GetSubscriptions(c *fiber.Ctx) error {
 	subscriptions, err := myLibrary.Subscriptions(ctx)
 	if err != nil {
 		log.Fatal().Err(err).Msg("could not load subscriptions")
+
 		return c.JSON(HttpError{
 			Code:    "501",
 			Message: "could not load library info",

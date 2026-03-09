@@ -969,9 +969,9 @@ func (fundamental *Fundamental) SaveDB(ctx context.Context, tbl string, dbConn *
 		fundamental.TangibleAssetsBookValuePerShare,
 		fundamental.WorkingCapital,
 	)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save fundamental to DB failed")
+
 		if err2 := tx.Rollback(ctx); err2 != nil {
 			log.Error().Err(err).Msg("error rollingback tx")
 		}

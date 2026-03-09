@@ -123,6 +123,7 @@ func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) (
 	}
 
 	var dbActiveAssets []*Asset
+
 	err = pgxscan.ScanAll(&dbActiveAssets, rows)
 	if err != nil {
 		return nil, fmt.Errorf("scan active assets: %w", err)
@@ -257,7 +258,6 @@ func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn
 		asset.CorporateUrl, asset.Sector, asset.Industry, asset.SIC, asset.CIK,
 		asset.CUSIP, asset.ISIN, asset.OtherIdentifiers, asset.SimilarTickers, asset.Tags,
 		listingDate, delistingDate, asset.LastUpdated)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save asset to DB failed")
 		return err

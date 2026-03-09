@@ -59,9 +59,9 @@ func (custom *Custom) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Co
 		value = EXCLUDED.value`, tbl)
 
 	_, err = tx.Exec(ctx, sql, custom.Ticker, custom.CompositeFigi, custom.EventDate, custom.Key, custom.Value)
-
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save custom data to DB failed")
+
 		if err2 := tx.Rollback(ctx); err2 != nil {
 			log.Error().Err(err).Msg("error rollingback tx")
 		}

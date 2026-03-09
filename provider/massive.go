@@ -157,10 +157,12 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 	// get a list of all active assets
 	assets := make([]*data.Asset, 0, 6000)
+
 	var assetDetail []*data.Asset
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = len(assetDetail)
 		exitNotification <- runSummary
 	}()
@@ -228,6 +230,7 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = len(holidays)
 		exitNotification <- runSummary
 	}()
@@ -258,6 +261,7 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 	}
 
 	respContent := make([]*massiveHoliday, 0)
+
 	resp, err := client.R().
 		SetResult(&respContent).
 		Get("https://api.massive.com/v1/marketstatus/upcoming")
@@ -334,6 +338,7 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string) ([
 	logger := zerolog.Ctx(ctx)
 
 	var respContent massiveResponse
+
 	assets := make([]*data.Asset, 0, 6000)
 
 	// first we query the reference endpoint which is faster than the details endpoint
@@ -371,6 +376,7 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string) ([
 			logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
 				Str("URL", "https://api.massive.com/v3/reference/tickers").
 				Msg("received an invalid status code when querying massive reference/tickers endpoint")
+
 			return assets, fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
 		}
 
@@ -467,6 +473,7 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 		}
 
 		sql := fmt.Sprintf("SELECT COALESCE(last_updated, '0001-01-01'::timestamp) as last_updated FROM %s WHERE composite_figi=$1 AND ticker=$2 LIMIT 1", api.subscription.DataTablesMap[data.AssetKey])
+
 		err := dbConn.QueryRow(
 			ctx,
 			sql,
@@ -480,6 +487,7 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 			}
 
 			logger.Error().Err(err).Str("SQL", sql).Str("CompositeFIGI", asset.CompositeFigi).Str("Ticker", asset.Ticker).Msg("error when querying database for asset")
+
 			return nil, err
 		}
 
@@ -534,6 +542,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 
 	// get a list of assets that are currently active in the database
 	inactive := make([]*data.Asset, 0, 50)
+
 	rows, err := dbConn.Query(ctx, fmt.Sprintf(`SELECT
 		ticker,
 		composite_figi,
@@ -563,6 +572,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 	}
 
 	var dbActiveAssets []*data.Asset
+
 	err = pgxscan.ScanAll(&dbActiveAssets, rows)
 	if err != nil {
 		logger.Error().Err(err).Msg("error when scanning values into dbActiveAssets")
@@ -620,6 +630,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 				logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
 					Str("URL", "https://api.massive.com/v3/reference/tickers").
 					Msg("received an invalid status code when querying massive reference/tickers endpoint")
+
 				return fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
 			}
 
@@ -653,6 +664,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 					inactiveAsset.Active = false
 					deactivated[asset.ID()] = inactiveAsset
 					api.publish(inactiveAsset)
+
 					updatedCount++
 				}
 			}
@@ -747,11 +759,13 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
 			Str("URL", detailsURL).
 			Msg("received an invalid status code when querying massive reference/tickers details endpoint")
+
 		return nil, fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
 	}
 
 	// de-serealize stock content
 	var massiveAsset massiveStock
+
 	err = json.Unmarshal(*respContent.Results, &massiveAsset)
 	if err != nil {
 		logger.Error().Err(err).Msg("error when unmarshalling json from details response")
@@ -769,8 +783,11 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 	}
 
 	// fetch icon and logo
-	var icon []byte
-	var iconMimeType string
+	var (
+		icon         []byte
+		iconMimeType string
+	)
+
 	if massiveAsset.Branding.IconURL != "" {
 		if err := api.limiter.Wait(ctx); err != nil {
 			log.Panic().Err(err).Msg("rate limit failed")
@@ -786,8 +803,11 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		iconMimeType = resp.Header().Get("Content-Type")
 	}
 
-	var logo []byte
-	var logoMimeType string
+	var (
+		logo         []byte
+		logoMimeType string
+	)
+
 	if massiveAsset.Branding.LogoURL != "" {
 		if err := api.limiter.Wait(ctx); err != nil {
 			log.Panic().Err(err).Msg("rate limit failed")

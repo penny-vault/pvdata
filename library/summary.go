@@ -30,7 +30,7 @@ func (myLibrary *Library) Summary(ctx context.Context) (string, error) {
 	p := message.NewPrinter(language.English)
 	builder := strings.Builder{}
 
-	if _, err := builder.WriteString(fmt.Sprintf("# %s\n", myLibrary.Name)); err != nil {
+	if _, err := fmt.Fprintf(&builder, "# %s\n", myLibrary.Name); err != nil {
 		return "", err
 	}
 
@@ -39,7 +39,7 @@ func (myLibrary *Library) Summary(ctx context.Context) (string, error) {
 	}
 
 	// Database connection string
-	if _, err := builder.WriteString(fmt.Sprintf("Database: %s\n\n", myLibrary.DBUrl)); err != nil {
+	if _, err := fmt.Fprintf(&builder, "Database: %s\n\n", myLibrary.DBUrl); err != nil {
 		return "", err
 	}
 
@@ -86,7 +86,7 @@ func (myLibrary *Library) Summary(ctx context.Context) (string, error) {
 			return "", err
 		}
 	} else {
-		if _, err := builder.WriteString(fmt.Sprintf("Last Updated: %s (%s)\n\n", age, lastUpdated.Local().Format("01/02/2006"))); err != nil {
+		if _, err := fmt.Fprintf(&builder, "Last Updated: %s (%s)\n\n", age, lastUpdated.Local().Format("01/02/2006")); err != nil {
 			return "", err
 		}
 	}

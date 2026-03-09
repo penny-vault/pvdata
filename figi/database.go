@@ -46,6 +46,7 @@ func LoadCacheFromDB(ctx context.Context, dbConn *pgxpool.Conn) {
 	}
 
 	var dbActiveAssets []*data.Asset
+
 	err = pgxscan.ScanAll(&dbActiveAssets, rows)
 	if err != nil {
 		log.Error().Err(err).Msg("error when scanning values into dbActiveAssets")

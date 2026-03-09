@@ -86,6 +86,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		exitNotification <- runSummary
 	}()
@@ -93,7 +94,9 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	screenerData, outputFilename, err := downloadZacksScreenerData(subscription)
 	if err != nil {
 		logger.Error().Err(err).Msg("downloading zacks screen data failed")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -101,20 +104,26 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	// if that doesn't work use the current date
 	regex := regexp.MustCompile(`zacks_custom_screen_(\d{4}-\d{2}-\d{2})`)
 	match := regex.FindAllStringSubmatch(outputFilename, -1)
+
 	var dateStr string
 	if len(match) > 0 {
 		dateStr = match[0][1]
 	} else {
 		logger.Error().Str("FileName", outputFilename).Msg("cannot extract date from filename, expecting zacks_custom_screen_YYYY-MM-DD")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
 	ratings := loadZacksRatings(screenerData, dateStr)
 	log.Info().Int("NumRatings", len(ratings)).Msg("loaded ratings")
+
 	if len(ratings) == 0 {
 		logger.Error().Msg("no ratings returned")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -131,9 +140,12 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	assets, err := data.ActiveAssets(ctx, conn)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
+
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
 		figiMap[asset.Ticker] = asset.CompositeFigi
@@ -157,6 +169,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	dateStr = strings.ReplaceAll(dateStr, "-", "")
 	parquetFn := fmt.Sprintf("%s/zacks-%s.parquet", tmpdir, dateStr)
 	log.Info().Str("FileName", parquetFn).Msg("writing zacks ratings data to parquet")
+
 	if err := zacksSaveToParquet(ratings, parquetFn); err != nil {
 		logger.Error().Err(err).Msg("failed writing parquet file")
 	}
@@ -164,6 +177,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	if viper.GetString("backblaze.application_id") != "" {
 		year := string(dateStr[:4])
 		logger.Info().Str("Year", year).Str("Bucket", viper.GetString("backblaze.bucket")).Msg("data")
+
 		if err := backblaze.Upload(parquetFn, "zacks", year); err != nil {
 			logger.Error().Err(err).Msg("failed uploading parquet file to Backblaze")
 		}
@@ -201,6 +215,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 		// Value Score
 		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-value")
+
 		valueScore, ok := letterGradeToInt[record.ValueScore]
 		if (latest == nil || latest.Rating != valueScore) && ok {
 			out <- &data.Observation{
@@ -220,6 +235,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 		// Growth Score
 		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-growth")
+
 		growthScore, ok := letterGradeToInt[record.GrowthScore]
 		if (latest == nil || latest.Rating != growthScore) && ok {
 			out <- &data.Observation{
@@ -239,6 +255,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 		// Momentum Score
 		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-momentum")
+
 		momentumScore, ok := letterGradeToInt[record.MomentumScore]
 		if (latest == nil || latest.Rating != momentumScore) && ok {
 			out <- &data.Observation{
@@ -258,6 +275,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 		// Value-Growth-Momentum Score
 		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-vgm")
+
 		vgmScore, ok := letterGradeToInt[record.VgmScore]
 		if (latest == nil || latest.Rating != vgmScore) && ok {
 			out <- &data.Observation{
@@ -294,6 +312,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+
 		numObs++
 
 		// Consensus
@@ -315,6 +334,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+
 		numObs++
 
 		// Estimates
@@ -345,6 +365,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 				SubscriptionID:   subscription.ID,
 				SubscriptionName: subscription.Name,
 			}
+
 			numObs++
 		}
 	}
@@ -356,7 +377,9 @@ func emitEstimate(record *ZacksRecord, series string, value float64, numAnalysts
 	if value == 0 && numAnalysts == 0 {
 		return
 	}
+
 	*numObs++
+
 	out <- &data.Observation{
 		Estimate: &data.Estimate{
 			Ticker:        record.Ticker,
@@ -528,6 +551,7 @@ func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
 	records := []*ZacksRecord{}
 
 	stringData := string(ratingsData[:])
+
 	stringData = strings.ReplaceAll(stringData, `"NA"`, `"0"`)
 	if err := gocsv.UnmarshalString(stringData, &records); err != nil {
 		log.Error().Err(err).Msg("failed to unmarshal byte data")
@@ -586,7 +610,6 @@ func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
 				log.Warn().Str("Ticker", r.Ticker).Str("InputString", r.NextEpsReportDateStr).Msg("could not parse next eps report date")
 			}
 		}
-
 	}
 
 	return records
@@ -639,6 +662,7 @@ func downloadZacksScreenerData(subscription *library.Subscription) (fileData []b
 	zacksPdfFn := viper.GetString("zacks.pdf")
 	if zacksPdfFn != "" {
 		log.Info().Str("fn", zacksPdfFn).Msg("saving PDF")
+
 		if _, err = page.PDF(playwright.PagePdfOptions{
 			Path: playwright.String(zacksPdfFn),
 		}); err != nil {
@@ -658,6 +682,7 @@ func downloadZacksScreenerData(subscription *library.Subscription) (fileData []b
 		log.Error().Err(err).Msg("download failed")
 	} else {
 		outputFilename = download.SuggestedFilename()
+
 		fileData, err = os.ReadFile(path)
 		if err != nil {
 			log.Error().Err(err).Msg("reading data failed")
@@ -666,6 +691,7 @@ func downloadZacksScreenerData(subscription *library.Subscription) (fileData []b
 	}
 
 	playwright_helpers.StopPlaywright(page, context, browser, pw)
+
 	return
 }
 
@@ -725,6 +751,7 @@ func zacksSaveToParquet(records []*ZacksRecord, fn string) error {
 		log.Error().
 			Str("OriginalError", err.Error()).
 			Msg("Parquet write failed")
+
 		return err
 	}
 
@@ -748,5 +775,6 @@ func zacksSaveToParquet(records []*ZacksRecord, fn string) error {
 	}
 
 	log.Info().Int("NumRecords", len(records)).Msg("Parquet write finished")
+
 	return nil
 }

@@ -47,6 +47,7 @@ func (myLibrary *Library) Connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	myLibrary.Pool = pool
 
 	return nil
@@ -91,6 +92,7 @@ func (myLibrary *Library) SaveDB(ctx context.Context) error {
 	defer conn.Release()
 
 	_, err = conn.Exec(ctx, `INSERT INTO library ("name", "owner") VALUES ($1, $2)`, myLibrary.Name, myLibrary.Owner)
+
 	return err
 }
 
@@ -104,6 +106,7 @@ func (myLibrary *Library) NumSubscriptions(ctx context.Context) (int, error) {
 
 	count := 0
 	err = conn.QueryRow(ctx, "SELECT count(*) FROM subscriptions WHERE active='t'").Scan(&count)
+
 	return count, err
 }
 
@@ -116,6 +119,7 @@ func (myLibrary *Library) LastUpdated(ctx context.Context) (time.Time, error) {
 	defer conn.Release()
 
 	var lastUpdated time.Time
+
 	err = conn.QueryRow(ctx, "SELECT coalesce(max(last_run), '0001-01-01'::timestamp) FROM subscriptions WHERE active='t'").Scan(&lastUpdated)
 	if err != nil {
 		return time.Time{}, err
@@ -134,6 +138,7 @@ func (myLibrary *Library) TotalRecords(ctx context.Context) (int, error) {
 
 	count := 0
 	err = conn.QueryRow(ctx, "SELECT coalesce(sum(total_records), 0) FROM subscriptions WHERE active='t'").Scan(&count)
+
 	return count, err
 }
 
@@ -147,12 +152,14 @@ func (myLibrary *Library) TotalSecurities(ctx context.Context) (int, error) {
 
 	count := 0
 	err = conn.QueryRow(ctx, "SELECT coalesce(sum(total_records), 0) FROM subscriptions WHERE active='t'").Scan(&count)
+
 	return count, err
 }
 
 // SaveObservations continuously reads from the input queue
 func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *sync.WaitGroup) {
 	ctx := context.Background()
+
 	defer wg.Done()
 
 	conn, err := myLibrary.Pool.Acquire(ctx)
@@ -315,7 +322,9 @@ created_by FROM subscriptions`)
 		sub.NextRunHuman = strings.Replace(time.Until(sub.NextRun).Round(time.Minute).String(), "0s", "", 1)
 	}
 
-	scheduler.Shutdown()
+	if shutdownErr := scheduler.Shutdown(); shutdownErr != nil {
+		log.Warn().Err(shutdownErr).Msg("error shutting down scheduler")
+	}
 
 	return subscriptions, err
 }

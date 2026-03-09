@@ -79,6 +79,7 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("could not check published views: %w", err)
 		}
+
 		if referenced {
 			return fmt.Errorf("cannot delete subscription: table %s is used by a published view. Run 'pvdata publish' to remove it first", tblName)
 		}
@@ -109,6 +110,7 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 	// delete tables
 	for _, tblName := range tables {
 		log.Info().Str("TableName", tblName).Msg("delete table")
+
 		_, err := tx.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s;", tblName))
 		if err != nil {
 			return err
@@ -284,13 +286,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 			if dt == nil || dt.ViewName == "" {
 				continue
 			}
+
 			if existingSet[dt.ViewName] {
 				continue
 			}
+
 			tableName := subscription.DataTablesMap[dataTypeKey]
 			if tableName == "" {
 				continue
 			}
+
 			pv := &PublishedView{
 				ViewName:    dt.ViewName,
 				DataTypeKey: dataTypeKey,
@@ -310,6 +315,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 // Compute table names based on subscription data types
 func (subscription *Subscription) ComputeTableNames() {
 	ret := make([]string, len(subscription.DataTypes))
+
 	subscription.DataTablesMap = make(map[string]string, len(subscription.DataTypes))
 	for idx, dataType := range subscription.DataTypes {
 		tbl := slug.Make(fmt.Sprintf("%s %s %s %s", subscription.Provider, subscription.Dataset, dataType, subscription.ID.String()[:5]))
@@ -402,11 +408,13 @@ func (subscription *Subscription) managePartitionsWithTransaction(ctx context.Co
 			sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%d-01-01') TO ('%d-01-01');",
 				tableName, dataTable, dt.Start, dt.End)
 			log.Debug().Str("SQL", sql).Msg("creating partition table")
+
 			if _, err := tx.Exec(ctx, sql); err != nil {
 				return err
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -490,6 +498,7 @@ func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 			if i < len(dataType.Migrations) {
 				migrationSQL := fmt.Sprintf(dataType.Migrations[i], dataTable)
 				log.Info().Str("Table", dataTable).Int("Migration", i).Msg("running migration")
+
 				if _, err := conn.Exec(ctx, migrationSQL); err != nil {
 					return fmt.Errorf("migration %d for %s failed: %w", i, dataTable, err)
 				}
@@ -501,6 +510,7 @@ func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET schema_version=$1 WHERE id=$2", maxVersion, subscription.ID); err != nil {
 			return fmt.Errorf("failed to update schema version: %w", err)
 		}
+
 		subscription.SchemaVersion = maxVersion
 	}
 
@@ -511,10 +521,12 @@ func (subscription *Subscription) createTables(ctx context.Context, tx pgx.Tx) e
 	for idx, dataTypeName := range subscription.DataTypes {
 		dataType := data.DataTypes[dataTypeName]
 		schema := dataType.ExpandedSchema(subscription.DataTables[idx])
+
 		_, err := tx.Exec(ctx, schema)
 		if err != nil {
 			return err
 		}
 	}
+
 	return nil
 }

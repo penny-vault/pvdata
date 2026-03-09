@@ -32,7 +32,9 @@ func (m ConfigModel) Update(msg tea.Msg) (ConfigModel, tea.Cmd) {
 
 	if m.ready {
 		var cmd tea.Cmd
+
 		m.viewport, cmd = m.viewport.Update(msg)
+
 		return m, cmd
 	}
 
@@ -43,6 +45,7 @@ func (m ConfigModel) View() string {
 	if !m.ready {
 		return "Initializing config..."
 	}
+
 	return m.viewport.View()
 }
 
@@ -63,21 +66,24 @@ func (m ConfigModel) renderConfig() string {
 
 	for _, k := range keys {
 		if k.key == "" {
-			b.WriteString(fmt.Sprintf("  %-25s %s\n", k.label+":", viper.ConfigFileUsed()))
+			fmt.Fprintf(&b, "  %-25s %s\n", k.label+":", viper.ConfigFileUsed())
 		} else {
 			val := viper.GetString(k.key)
 			if val == "" {
 				val = "(not set)"
 			}
+
 			if strings.Contains(k.key, "apikey") && val != "(not set)" {
 				if len(val) > 4 {
 					val = val[:4] + strings.Repeat("*", len(val)-4)
 				}
 			}
+
 			if strings.Contains(k.key, "url") && val != "(not set)" {
 				val = maskDBPassword(val)
 			}
-			b.WriteString(fmt.Sprintf("  %-25s %s\n", k.label+":", val))
+
+			fmt.Fprintf(&b, "  %-25s %s\n", k.label+":", val)
 		}
 	}
 
@@ -94,5 +100,6 @@ func maskDBPassword(url string) string {
 			}
 		}
 	}
+
 	return url
 }

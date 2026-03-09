@@ -40,6 +40,7 @@ func Upload(fn, bucketName, dirname string) error {
 		log.Error().Err(err).Str("BucketName", bucketName).Msg("lookup bucket failed")
 		return err
 	}
+
 	if bucket == nil {
 		log.Error().Str("BucketName", bucketName).Msg("bucket does not exist")
 		return errors.New("bucket not found")
@@ -58,5 +59,6 @@ func Upload(fn, bucketName, dirname string) error {
 	}
 
 	log.Info().Str("FileName", file.Name).Int64("Size", file.ContentLength).Str("ID", file.ID).Msg("uploaded file to backblaze")
+
 	return nil
 }

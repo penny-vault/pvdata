@@ -84,6 +84,7 @@ func (rm *RunManager) Statuses() []*SubscriptionStatus {
 		copy := *s
 		result = append(result, &copy)
 	}
+
 	return result
 }
 
@@ -94,6 +95,7 @@ func (rm *RunManager) RunAll(ctx context.Context) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
+
 	go rm.myLibrary.SaveObservations(outChan, &wg)
 
 	// Create a counting channel that wraps outChan to track progress
@@ -156,6 +158,7 @@ func (rm *RunManager) RunAll(ctx context.Context) {
 
 		rm.mu.Lock()
 		status := rm.statuses[subscription.ID]
+
 		status.EndTime = summaryMsg.EndTime
 		if summaryMsg.Status == data.RunFailed {
 			status.Status = EventFailed
@@ -211,6 +214,7 @@ func (rm *RunManager) countObservations(in <-chan *data.Observation, out chan<- 
 
 		out <- obs
 	}
+
 	close(out)
 }
 

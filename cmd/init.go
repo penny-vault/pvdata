@@ -80,7 +80,8 @@ var initCmd = &cobra.Command{
 		log.Info().Msg("creating database tables")
 
 		// run migration
-		dbURL := strings.Replace(myLibrary.DBUrl, "postgres://", "pgx5://", -1)
+		dbURL := strings.ReplaceAll(myLibrary.DBUrl, "postgres://", "pgx5://")
+
 		err = db.Migrate(dbURL)
 		if err != nil {
 			log.Fatal().Err(err).Msg("error running database migration")
@@ -108,6 +109,7 @@ var initCmd = &cobra.Command{
 
 		configFN := filepath.Join(home, ".pvdata.toml")
 		log.Info().Str("ConfigFile", configFN).Msg("Saving database connection info to config file")
+
 		configMap := map[string]any{
 			"name":  myLibrary.Name,
 			"owner": myLibrary.Owner,
@@ -121,6 +123,7 @@ var initCmd = &cobra.Command{
 				"apikey": openFigiAPIKey,
 			}
 		}
+
 		configData, err := toml.Marshal(configMap)
 		if err != nil {
 			log.Fatal().Err(err).Msg("could not marshal configuration data")

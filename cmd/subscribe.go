@@ -92,6 +92,7 @@ Also see: subscriptions, unsubscribe`,
 
 		// create a new field group for configuring the provider
 		configFields := make([]huh.Field, 0, len(dataProvider.ConfigDescription()))
+
 		config := make(map[string]*string, len(dataProvider.ConfigDescription()))
 		for k, v := range dataProvider.ConfigDescription() {
 			val := ""
@@ -148,18 +149,22 @@ Also see: subscriptions, unsubscribe`,
 
 		// if the selected dataset has multiple data types, let user choose which to include
 		var selectedDataTypes []string
+
 		datasetObj := dataProvider.Datasets()[subDataset]
 		if len(datasetObj.DataTypes) > 1 {
 			dtOptions := make([]huh.Option[string], 0, len(datasetObj.DataTypes))
+
 			allKeys := make([]string, 0, len(datasetObj.DataTypes))
 			for _, dt := range datasetObj.DataTypes {
 				viewName := dt.ViewName
 				if viewName == "" {
 					viewName = dt.Name
 				}
+
 				dtOptions = append(dtOptions, huh.NewOption[string](viewName, dt.Name))
 				allKeys = append(allKeys, dt.Name)
 			}
+
 			selectedDataTypes = allKeys // all selected by default
 
 			dtForm := huh.NewForm(
@@ -201,6 +206,7 @@ Also see: subscriptions, unsubscribe`,
 		// Print subscription summary
 		{
 			var sb strings.Builder
+
 			keyword := func(s string) string {
 				return lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Render(s)
 			}
@@ -222,6 +228,7 @@ Also see: subscriptions, unsubscribe`,
 			)
 
 			fmt.Fprintln(&sb, lipgloss.NewStyle().Bold(true).Render("Provider Configuration"))
+
 			for k, v := range subscription.Config {
 				fmt.Fprintf(&sb, "\n%s: %s", k, keyword(v))
 			}
@@ -252,6 +259,7 @@ Also see: subscriptions, unsubscribe`,
 		if confirmed {
 			if monitored {
 				checkSlug := slug.Make(fmt.Sprintf("%s %s %s %s", subscription.Name, subscription.Provider, subscription.Dataset, subscription.ID.String()[:5]))
+
 				checkID, err := healthcheck.Create(
 					fmt.Sprintf("%s %s (%s)", subscription.Name, subscription.Dataset, subscription.ID.String()[:5]),
 					checkSlug,
@@ -261,6 +269,7 @@ Also see: subscriptions, unsubscribe`,
 				if err != nil {
 					log.Fatal().Err(err).Msg("creating healthcheck failed")
 				}
+
 				subscription.HealthCheckID = checkID
 			}
 

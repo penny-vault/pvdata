@@ -65,6 +65,7 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.pvdata.toml)")
 	infoCmd.PersistentFlags().String("dbUrl", "", "database connection string")
+
 	if err := viper.BindPFlag("db.url", infoCmd.PersistentFlags().Lookup("dbUrl")); err != nil {
 		log.Panic().Err(err).Msg("BindPFlag for db.url failed")
 	}

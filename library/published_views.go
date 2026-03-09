@@ -71,16 +71,20 @@ func generateUnionSQL(viewName, tableSuffix string, sources []ViewSource) string
 	if len(sources) == 1 {
 		s := sources[0]
 		tbl := s.TableName + tableSuffix
+
 		where := buildWhereClause(s)
 		if where == "" {
 			return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s", viewName, tbl)
 		}
+
 		return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s WHERE %s", viewName, tbl, where)
 	}
 
 	var legs []string
+
 	for _, s := range sources {
 		tbl := s.TableName + tableSuffix
+
 		where := buildWhereClause(s)
 		if where == "" {
 			legs = append(legs, fmt.Sprintf("SELECT * FROM %s", tbl))
@@ -99,9 +103,11 @@ func buildWhereClause(s ViewSource) string {
 	if s.FromDate != nil {
 		parts = append(parts, fmt.Sprintf("event_date >= '%s'", s.FromDate.Format("2006-01-02")))
 	}
+
 	if s.UntilDate != nil {
 		parts = append(parts, fmt.Sprintf("event_date < '%s'", s.UntilDate.Format("2006-01-02")))
 	}
+
 	return strings.Join(parts, " AND ")
 }
 
@@ -128,9 +134,11 @@ func (pv *PublishedView) ValidateSources() error {
 		if s.FromDate != nil {
 			b.from = *s.FromDate
 		}
+
 		if s.UntilDate != nil {
 			b.until = *s.UntilDate
 		}
+
 		items[i] = b
 	}
 
@@ -172,6 +180,7 @@ func ValidateSourceTables(ctx context.Context, pool *pgxpool.Pool, pv *Published
 
 		for _, tbl := range tables {
 			var exists bool
+
 			err := conn.QueryRow(ctx,
 				`SELECT EXISTS (
 				   SELECT 1 FROM information_schema.tables
@@ -180,6 +189,7 @@ func ValidateSourceTables(ctx context.Context, pool *pgxpool.Pool, pv *Published
 			if err != nil {
 				return fmt.Errorf("check table existence for %s: %w", tbl, err)
 			}
+
 			if !exists {
 				return fmt.Errorf("source table %s does not exist", tbl)
 			}
@@ -201,6 +211,7 @@ func ApplyPublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedVi
 	sqls := pv.GenerateViewSQL()
 	for _, sql := range sqls {
 		log.Info().Str("sql", sql).Msg("applying published view SQL")
+
 		if _, err := conn.Exec(ctx, sql); err != nil {
 			return fmt.Errorf("exec published view SQL: %w", err)
 		}
@@ -266,15 +277,19 @@ func LoadPublishedViews(ctx context.Context, pool *pgxpool.Pool) ([]*PublishedVi
 	defer rows.Close()
 
 	var views []*PublishedView
+
 	for rows.Next() {
 		pv := &PublishedView{}
+
 		var sourcesJSON []byte
 		if err := rows.Scan(&pv.ID, &pv.ViewName, &pv.DataTypeKey, &sourcesJSON); err != nil {
 			return nil, fmt.Errorf("scan published view: %w", err)
 		}
+
 		if err := json.Unmarshal(sourcesJSON, &pv.Sources); err != nil {
 			return nil, fmt.Errorf("unmarshal sources for %s: %w", pv.ViewName, err)
 		}
+
 		views = append(views, pv)
 	}
 
@@ -294,7 +309,9 @@ func LoadPublishedView(ctx context.Context, pool *pgxpool.Pool, viewName string)
 	defer conn.Release()
 
 	pv := &PublishedView{}
+
 	var sourcesJSON []byte
+
 	err = conn.QueryRow(ctx,
 		`SELECT id, view_name, data_type_key, sources FROM published_views WHERE view_name = $1`,
 		viewName,
@@ -341,6 +358,7 @@ func DeletePublishedView(ctx context.Context, pool *pgxpool.Pool, viewName strin
 	}
 
 	log.Info().Str("ViewName", viewName).Msg("deleted published view")
+
 	return nil
 }
 
@@ -355,6 +373,7 @@ func PublishedViewReferencesTable(ctx context.Context, pool *pgxpool.Pool, table
 	defer conn.Release()
 
 	var count int
+
 	err = conn.QueryRow(ctx,
 		`SELECT COUNT(*) FROM published_views
 		 WHERE EXISTS (

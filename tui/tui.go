@@ -29,8 +29,6 @@ type MainModel struct {
 	config        ConfigModel
 	statusBar     StatusBarModel
 	runManager    *RunManager
-	width         int
-	height        int
 	quitting      bool
 	confirmQuit   bool
 }
@@ -67,6 +65,7 @@ func (m MainModel) listenForEvents() tea.Cmd {
 		if !ok {
 			return nil
 		}
+
 		return event
 	}
 }
@@ -97,7 +96,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmQuit = true
 				return m, nil
 			}
+
 			m.quitting = true
+
 			return m, tea.Quit
 		case "tab", "right", "l":
 			m.activeTab = (m.activeTab + 1) % tabID(len(tabNames))
@@ -165,11 +166,13 @@ func (m MainModel) View() string {
 	}
 
 	b.WriteString("\n")
+
 	if m.confirmQuit {
 		b.WriteString(LogWarn.Render("  Subscriptions are still running. Quit anyway? (y/n)"))
 	} else {
 		b.WriteString(HelpStyle.Render("  arrow keys: switch tabs | 1-4: jump to tab | q: quit"))
 	}
+
 	b.WriteString("\n")
 	b.WriteString(m.statusBar.View())
 
@@ -178,6 +181,7 @@ func (m MainModel) View() string {
 
 func (m MainModel) renderTabBar() string {
 	var tabs []string
+
 	for i, name := range tabNames {
 		if tabID(i) == m.activeTab {
 			tabs = append(tabs, ActiveTabStyle.Render(name))
@@ -185,6 +189,7 @@ func (m MainModel) renderTabBar() string {
 			tabs = append(tabs, InactiveTabStyle.Render(name))
 		}
 	}
+
 	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 }
 

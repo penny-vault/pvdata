@@ -65,7 +65,8 @@ func BuildUserAgent(browser *playwright.Browser) string {
 	}
 
 	userAgent := headers["user-agent"]
-	userAgent = strings.Replace(userAgent, "Headless", "", -1)
+	userAgent = strings.ReplaceAll(userAgent, "Headless", "")
+
 	return userAgent
 }
 
@@ -90,6 +91,7 @@ func StartPlaywright(headless bool) (page playwright.Page, context playwright.Br
 	if userAgent == "" {
 		userAgent = BuildUserAgent(&browser)
 	}
+
 	log.Info().Str("UserAgent", userAgent).Msg("using user-agent")
 
 	// create context
@@ -142,6 +144,7 @@ func BlockTrackers(page playwright.Page) {
 			if err != nil {
 				log.Error().Err(err).Msg("failed blocking route")
 			}
+
 			return
 		}
 
@@ -158,7 +161,6 @@ func BlockTrackers(page playwright.Page) {
 			log.Error().Err(err).Msg("failed continueing route")
 		}
 	})
-
 	if err != nil {
 		log.Error().Err(err).Msg("page route errored")
 	}
@@ -166,11 +168,13 @@ func BlockTrackers(page playwright.Page) {
 
 func StopPlaywright(page playwright.Page, context playwright.BrowserContext, browser playwright.Browser, pw *playwright.Playwright) {
 	log.Info().Msg("closing browser")
+
 	if err := browser.Close(); err != nil {
 		log.Error().Err(err).Msg("error encountered when closing browser")
 	}
 
 	log.Info().Msg("stopping playwright")
+
 	if err := pw.Stop(); err != nil {
 		log.Error().Err(err).Msg("error encountered when stopping playwright")
 	}

@@ -71,9 +71,11 @@ func (m StatusBarModel) View() string {
 	if m.completedCount > 0 {
 		status += fmt.Sprintf(" | done %d", m.completedCount)
 	}
+
 	if m.failedCount > 0 {
 		status += fmt.Sprintf(" | failed %d", m.failedCount)
 	}
+
 	status += fmt.Sprintf(" | %d records | %s", m.totalRecords, elapsed)
 
 	return StatusBarStyle.Width(m.width).Render(status)

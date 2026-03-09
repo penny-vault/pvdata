@@ -5,27 +5,27 @@ import "github.com/charmbracelet/lipgloss"
 var (
 	// Tab bar styles
 	ActiveTabStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Padding(0, 2)
+			Bold(true).
+			Foreground(lipgloss.Color("229")).
+			Background(lipgloss.Color("57")).
+			Padding(0, 2)
 
 	InactiveTabStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("245")).
-		Padding(0, 2)
+				Foreground(lipgloss.Color("245")).
+				Padding(0, 2)
 
 	TabGapStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("238"))
+			Foreground(lipgloss.Color("238"))
 
 	// Status bar styles
 	StatusBarStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("236")).
-		Padding(0, 1)
+			Foreground(lipgloss.Color("229")).
+			Background(lipgloss.Color("236")).
+			Padding(0, 1)
 
 	// Content area
 	ContentStyle = lipgloss.NewStyle().
-		Padding(1, 2)
+			Padding(1, 2)
 
 	// Log level colors
 	LogDebug = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))

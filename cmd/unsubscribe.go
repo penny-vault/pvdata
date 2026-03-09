@@ -56,6 +56,7 @@ var unsubscribeCmd = &cobra.Command{
 
 			if confirmed {
 				fmt.Printf("%s '%s'...\n", action, sub.Name)
+
 				if deleteSubscription {
 					if err := sub.Delete(ctx); err != nil {
 						log.Fatal().Err(err).Msg("could not delete subscription")
@@ -68,7 +69,6 @@ var unsubscribeCmd = &cobra.Command{
 			} else {
 				fmt.Printf("Ok, we won't %s '%s'\n", action, sub.Name)
 			}
-
 		}
 	},
 }

@@ -74,16 +74,19 @@ func downloadAllSharadarTickers(ctx context.Context, subscription *library.Subsc
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
+
 		exitNotification <- runSummary
 	}()
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
 		rateLimit = 5000
 	}
 
@@ -106,9 +109,12 @@ func downloadAllSharadarTickers(ctx context.Context, subscription *library.Subsc
 	cursor := ""
 	for {
 		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar tickers")
+
 		var n int
+
 		cursor, n = downloadSharadarTickers(ctx, subscription, client, limiter, cursor, out)
 		numObs += n
+
 		if cursor == "" {
 			break
 		}
@@ -152,6 +158,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 	}
 
 	responseBody := string(resp.Body())
+
 	result := gjson.Get(responseBody, "datatable.data")
 	for _, val := range result.Array() {
 		ticker := &sharadarTicker{
@@ -185,6 +192,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 			ticker.LastUpdated, err = time.Parse("2006-01-02", lastUpdatedStr)
 			if err != nil {
 				log.Error().Err(err).Str("InputStr", lastUpdatedStr).Msg("could not parse last updated date")
+
 				ticker.LastUpdated = time.Now().In(nyc)
 			}
 		}
@@ -194,6 +202,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 			ticker.FirstAdded, err = time.Parse("2006-01-02", firstAddedStr)
 			if err != nil {
 				log.Error().Err(err).Str("InputStr", firstAddedStr).Msg("could not parse first added date")
+
 				ticker.FirstAdded = time.Time{}
 			}
 		}
@@ -203,6 +212,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 			ticker.FirstPriceDate, err = time.Parse("2006-01-02", firstPriceStr)
 			if err != nil {
 				log.Error().Err(err).Str("InputStr", firstPriceStr).Msg("could not parse first price date")
+
 				ticker.FirstPriceDate = time.Time{}
 			}
 		}
@@ -212,6 +222,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 			ticker.LastPriceDate, err = time.Parse("2006-01-02", lastPriceStr)
 			if err != nil {
 				log.Error().Err(err).Str("InputStr", lastPriceStr).Msg("could not parse last price date")
+
 				ticker.LastPriceDate = time.Time{}
 			}
 		}
@@ -243,6 +254,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 	figi.Enrich(enrichAssets...)
 
 	count := 0
+
 	for _, asset := range allAssets {
 		out <- &data.Observation{
 			AssetObject:      asset,
@@ -250,6 +262,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+
 		count++
 	}
 

@@ -40,6 +40,7 @@ func (yfinance *YFinanceStreamer) Description() string {
 
 func (yfinance *YFinanceStreamer) Datasets() map[string]Dataset {
 	now := time.Now().UTC()
+
 	return map[string]Dataset{
 		"Real-time Quotes": {
 			Name:        "Real-time Quotes",
@@ -65,6 +66,7 @@ func yfinanceStreamer(ctx context.Context, subscription *library.Subscription, o
 	defer func() {
 		runSummary.EndTime = time.Now()
 		runSummary.NumObservations = numObs
+
 		runSummary.Status = data.RunSuccess
 		exitNotification <- runSummary
 	}()

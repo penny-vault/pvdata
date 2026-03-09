@@ -36,7 +36,8 @@ func (m LogsModel) WaitForLog() tea.Cmd {
 		if !ok {
 			return nil
 		}
-		return LogLineMsg{Line: entry.Line}
+
+		return LogLineMsg(entry)
 	}
 }
 
@@ -58,15 +59,18 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 		if len(m.lines) > m.maxLines {
 			m.lines = m.lines[len(m.lines)-m.maxLines:]
 		}
+
 		if m.ready {
 			m.viewport.SetContent(strings.Join(m.lines, ""))
 			m.viewport.GotoBottom()
 		}
+
 		cmds = append(cmds, m.WaitForLog())
 	}
 
 	if m.ready {
 		var cmd tea.Cmd
+
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 	}
@@ -78,6 +82,7 @@ func (m LogsModel) View() string {
 	if !m.ready {
 		return "Initializing logs..."
 	}
+
 	return m.viewport.View()
 }
 

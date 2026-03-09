@@ -255,7 +255,7 @@ CREATE INDEX %[1]s_changelog_index_name_idx ON %[1]s_changelog(index_name, event
 		Migrations: []string{
 			`ALTER TABLE %[1]s_snapshot ADD COLUMN IF NOT EXISTS weight REAL NOT NULL DEFAULT 0.0;`,
 		},
-		Version: 1,
+		Version:       1,
 		IsPartitioned: false,
 	},
 	FundamentalsKey: {

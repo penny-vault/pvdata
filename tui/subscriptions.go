@@ -75,18 +75,23 @@ func (m SubscriptionsModel) Update(msg tea.Msg) (SubscriptionsModel, tea.Cmd) {
 			if msg.RecordsCount > 0 {
 				s.RecordsCount = msg.RecordsCount
 			}
+
 			if msg.Error != nil {
 				s.Error = msg.Error
 			}
+
 			if msg.Type == EventCompleted || msg.Type == EventFailed {
 				s.EndTime = msg.Timestamp
 			}
 		}
+
 		m.refreshRows()
 	}
 
 	var cmd tea.Cmd
+
 	m.table, cmd = m.table.Update(msg)
+
 	return m, cmd
 }
 
@@ -99,6 +104,7 @@ func (m *SubscriptionsModel) refreshRows() {
 	for _, s := range m.statuses {
 		statuses = append(statuses, s)
 	}
+
 	m.table.SetRows(buildRows(statuses))
 }
 
@@ -106,6 +112,7 @@ func buildRows(statuses []*SubscriptionStatus) []table.Row {
 	rows := make([]table.Row, 0, len(statuses))
 	for _, s := range statuses {
 		statusStr := "idle"
+
 		switch s.Status {
 		case EventStarted:
 			statusStr = "running"
@@ -130,5 +137,6 @@ func buildRows(statuses []*SubscriptionStatus) []table.Row {
 			lastRun,
 		})
 	}
+
 	return rows
 }
