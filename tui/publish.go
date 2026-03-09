@@ -1,3 +1,17 @@
+// Copyright 2024
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 package tui
 
 import (
@@ -69,7 +83,6 @@ type PublishModel struct {
 	// General
 	width   int
 	height  int
-	err     error
 	message string
 }
 
@@ -119,10 +132,7 @@ func (m *PublishModel) buildViewsTable() table.Model {
 
 	height := 15
 	if m.height > 0 {
-		height = m.height - 8
-		if height < 3 {
-			height = 3
-		}
+		height = max(m.height-8, 3)
 	}
 
 	t := table.New(
@@ -170,10 +180,7 @@ func (m *PublishModel) buildSourcesTable() table.Model {
 
 	height := 10
 	if m.height > 0 {
-		height = m.height - 10
-		if height < 3 {
-			height = 3
-		}
+		height = max(m.height-10, 3)
 	}
 
 	t := table.New(
@@ -205,10 +212,7 @@ func (m *PublishModel) buildAddTable() table.Model {
 
 	height := 10
 	if m.height > 0 {
-		height = m.height - 10
-		if height < 3 {
-			height = 3
-		}
+		height = max(m.height-10, 3)
 	}
 
 	t := table.New(
@@ -240,10 +244,7 @@ func (m *PublishModel) buildNewViewTable() table.Model {
 
 	height := 10
 	if m.height > 0 {
-		height = m.height - 10
-		if height < 3 {
-			height = 3
-		}
+		height = max(m.height-10, 3)
 	}
 
 	t := table.New(
@@ -508,6 +509,9 @@ func (m PublishModel) updateConfirmRemove(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			idx := m.removeSourceIdx
 			tableName := m.selectedView.Sources[idx].TableName
+			oldSources := make([]library.ViewSource, len(m.selectedView.Sources))
+			copy(oldSources, m.selectedView.Sources)
+
 			m.selectedView.Sources = append(
 				m.selectedView.Sources[:idx],
 				m.selectedView.Sources[idx+1:]...,
@@ -518,16 +522,19 @@ func (m PublishModel) updateConfirmRemove(msg tea.Msg) (tea.Model, tea.Cmd) {
 				viewName := m.selectedView.ViewName
 				if err := library.DeletePublishedView(m.ctx, m.library.Pool, viewName); err != nil {
 					m.message = fmt.Sprintf("Error deleting view: %v", err)
+					m.selectedView.Sources = oldSources
+					m.screen = screenDetail
 				} else {
 					m.message = fmt.Sprintf("Deleted view %s (last source %s removed).", viewName, tableName)
+					m.selectedView = nil
+					m.loadViews()
+					m.viewsTable = m.buildViewsTable()
+					m.screen = screenList
 				}
-				m.selectedView = nil
-				m.loadViews()
-				m.viewsTable = m.buildViewsTable()
-				m.screen = screenList
 			} else {
 				if err := library.SavePublishedView(m.ctx, m.library.Pool, m.selectedView); err != nil {
 					m.message = fmt.Sprintf("Error saving view: %v", err)
+					m.selectedView.Sources = oldSources
 				} else {
 					m.message = fmt.Sprintf("Removed source %s.", tableName)
 				}
@@ -752,7 +759,7 @@ func (m PublishModel) viewConfirmRemove() string {
 	b.WriteString("\n\n")
 
 	prompt := fmt.Sprintf("  Remove source %s from %s?", tableName, viewName)
-	if len(m.selectedView.Sources) == 1 {
+	if m.selectedView != nil && len(m.selectedView.Sources) == 1 {
 		prompt += "\n  (This is the last source -- the entire view will be deleted.)"
 	}
 

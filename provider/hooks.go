@@ -88,7 +88,7 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 		}
 
 		type eodWithDate struct {
-			EventDate interface{}
+			EventDate any
 			EodRow
 		}
 		var records []eodWithDate
