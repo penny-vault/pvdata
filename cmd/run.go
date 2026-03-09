@@ -202,6 +202,16 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 	close(outChan)
 	wg.Wait()
 
+	// Run post-fetch hooks
+	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
+		for _, hook := range subDataset.PostFetch {
+			if err := hook(ctx, subscription); err != nil {
+				logger.Error().Err(err).Msg("post-fetch hook failed")
+				break
+			}
+		}
+	}
+
 	if summary.Status == data.RunFailed {
 		logger.Error().Int("observations", summary.NumObservations).Msg("subscription run failed")
 	} else {

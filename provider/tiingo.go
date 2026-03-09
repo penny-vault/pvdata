@@ -71,7 +71,8 @@ func (tiingo *Tiingo) Datasets() map[string]Dataset {
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1960, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
-			Fetch: downloadTiingoEODQuotes,
+			PostFetch: []PostFetchHook{AdjustEodPrices},
+			Fetch:     downloadTiingoEODQuotes,
 		},
 
 		"Stock Tickers": {

@@ -144,6 +144,16 @@ func (rm *RunManager) RunAll(ctx context.Context) {
 		// read the exit message from exitChan
 		summaryMsg := <-exitChan
 
+		// Run post-fetch hooks
+		if summaryMsg.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
+			for _, hook := range subDataset.PostFetch {
+				if err := hook(ctx, subscription); err != nil {
+					log.Error().Err(err).Str("subscription", subscription.Name).Msg("post-fetch hook failed")
+					break
+				}
+			}
+		}
+
 		rm.mu.Lock()
 		status := rm.statuses[subscription.ID]
 		status.EndTime = summaryMsg.EndTime
