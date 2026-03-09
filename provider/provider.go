@@ -22,6 +22,21 @@ import (
 	"github.com/penny-vault/pvdata/library"
 )
 
+type contextKey string
+
+const LookbackKey contextKey = "lookback"
+
+// LookbackFromContext returns the lookback duration from the context,
+// falling back to the given default if not set.
+func LookbackFromContext(ctx context.Context, defaultLookback time.Duration) time.Duration {
+	if v := ctx.Value(LookbackKey); v != nil {
+		if d, ok := v.(time.Duration); ok {
+			return d
+		}
+	}
+	return defaultLookback
+}
+
 type Provider interface {
 	Name() string
 	ConfigDescription() map[string]string

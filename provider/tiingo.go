@@ -169,8 +169,8 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 
 	log.Debug().Int("NumAssets", len(assets)).Msg("downloading EOD quotes from Tiingo")
 
-	// lookback 14 days in the past
-	startDate := time.Now().Add(-14 * 24 * time.Hour)
+	lookback := LookbackFromContext(ctx, 14*24*time.Hour)
+	startDate := time.Now().Add(-lookback)
 	startDateStr := startDate.Format("2006-01-02")
 
 	for _, asset := range assets {
