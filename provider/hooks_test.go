@@ -50,7 +50,7 @@ var _ = Describe("ComputeAdjustedClose", func() {
 		Expect(result[2].AdjClose).To(BeNumerically("~", 99.07, 0.1))
 	})
 
-	It("handles zero close price gracefully", func() {
+	It("handles zero close price by resetting adjust factor", func() {
 		rows := []EodRow{
 			{Close: 10.0, Dividend: 0, SplitFactor: 1.0},
 			{Close: 0.0, Dividend: 0, SplitFactor: 1.0},
@@ -58,5 +58,12 @@ var _ = Describe("ComputeAdjustedClose", func() {
 		}
 		result := ComputeAdjustedClose(rows)
 		Expect(result).To(HaveLen(3))
+		// First row: adjustFactor=1.0, so AdjClose = 10.0/1.0 = 10.0
+		Expect(result[0].AdjClose).To(BeNumerically("~", 10.0, 0.01))
+		// Second row: adjustFactor=1.0 (unchanged), AdjClose = 0.0/1.0 = 0.0
+		// Then adjustFactor resets to 1.0 because Close is 0
+		Expect(result[1].AdjClose).To(BeNumerically("~", 0.0, 0.01))
+		// Third row: adjustFactor=1.0 (reset), AdjClose = 9.0/1.0 = 9.0
+		Expect(result[2].AdjClose).To(BeNumerically("~", 9.0, 0.01))
 	})
 })

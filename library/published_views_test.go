@@ -68,6 +68,23 @@ var _ = Describe("PublishedViews", func() {
 			Expect(sqls[0]).To(Equal("DROP VIEW IF EXISTS eod"))
 		})
 
+		It("generates WHERE with both from and until for a single source", func() {
+			from := time.Date(2022, 6, 1, 0, 0, 0, 0, time.UTC)
+			until := time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC)
+			pv := &library.PublishedView{
+				ViewName:    "eod",
+				DataTypeKey: "eod",
+				Sources: []library.ViewSource{
+					{TableName: "eod_tiingo_abc12", SubscriptionID: "sub-1", FromDate: &from, UntilDate: &until},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).To(Equal(
+				"CREATE OR REPLACE VIEW eod AS SELECT * FROM eod_tiingo_abc12 WHERE event_date >= '2022-06-01' AND event_date < '2023-06-01'",
+			))
+		})
+
 		It("generates two views for index data type", func() {
 			pv := &library.PublishedView{
 				ViewName:    "indices",

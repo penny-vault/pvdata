@@ -17,6 +17,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
@@ -45,6 +46,44 @@ func ComputeAdjustedClose(rows []EodRow) []EodRow {
 		}
 	}
 	return rows
+}
+
+// PurgeExpiredData is a PostFetch hook that deletes rows older than the
+// dataset's TTL from all of the subscription's data tables. The TTL is
+// retrieved from the dataset configuration via the subscription's provider.
+func PurgeExpiredData(ctx context.Context, subscription *library.Subscription) error {
+	subProvider, ok := Map[subscription.Provider]
+	if !ok {
+		return nil
+	}
+
+	subDataset, ok := subProvider.Datasets()[subscription.Dataset]
+	if !ok || subDataset.TTL == 0 {
+		return nil
+	}
+
+	cutoff := time.Now().Add(-subDataset.TTL)
+	conn, err := subscription.Library.Pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection for purge: %w", err)
+	}
+	defer conn.Release()
+
+	for _, tableName := range subscription.DataTables {
+		tag, err := conn.Exec(ctx,
+			fmt.Sprintf("DELETE FROM %s WHERE event_date < $1", tableName),
+			cutoff,
+		)
+		if err != nil {
+			log.Error().Err(err).Str("Table", tableName).Msg("purge expired data failed")
+			continue
+		}
+		if tag.RowsAffected() > 0 {
+			log.Info().Str("Table", tableName).Int64("Deleted", tag.RowsAffected()).Time("Cutoff", cutoff).Msg("purged expired data")
+		}
+	}
+
+	return nil
 }
 
 // AdjustEodPrices is a PostFetch hook that computes adjusted close prices
@@ -79,6 +118,10 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 	}
 	figiRows.Close()
 
+	if err := figiRows.Err(); err != nil {
+		return fmt.Errorf("iterate figis: %w", err)
+	}
+
 	for _, figi := range figis {
 		rows, err := conn.Query(ctx,
 			fmt.Sprintf("SELECT event_date, close, dividend, split_factor FROM %s WHERE composite_figi = $1 ORDER BY event_date DESC", tableName), figi)
@@ -101,6 +144,10 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 			records = append(records, r)
 		}
 		rows.Close()
+
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate eod rows for %s: %w", figi, err)
+		}
 
 		if len(records) == 0 {
 			continue

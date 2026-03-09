@@ -151,6 +151,44 @@ func (pv *PublishedView) ValidateSources() error {
 	return nil
 }
 
+// ValidateSourceTables checks that all source tables referenced by the published
+// view actually exist in the database.
+func ValidateSourceTables(ctx context.Context, pool *pgxpool.Pool, pv *PublishedView) error {
+	if len(pv.Sources) == 0 {
+		return nil
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	for _, src := range pv.Sources {
+		tables := []string{src.TableName}
+		if pv.DataTypeKey == data.IndexKey {
+			tables = []string{src.TableName + "_snapshot", src.TableName + "_changelog"}
+		}
+
+		for _, tbl := range tables {
+			var exists bool
+			err := conn.QueryRow(ctx,
+				`SELECT EXISTS (
+				   SELECT 1 FROM information_schema.tables
+				   WHERE table_name = $1 AND table_schema = 'public'
+				 )`, tbl).Scan(&exists)
+			if err != nil {
+				return fmt.Errorf("check table existence for %s: %w", tbl, err)
+			}
+			if !exists {
+				return fmt.Errorf("source table %s does not exist", tbl)
+			}
+		}
+	}
+
+	return nil
+}
+
 // ApplyPublishedView executes the generated SQL statements for the given
 // published view against the database.
 func ApplyPublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedView) error {
@@ -176,6 +214,10 @@ func ApplyPublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedVi
 func SavePublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedView) error {
 	if err := pv.ValidateSources(); err != nil {
 		return fmt.Errorf("validate sources: %w", err)
+	}
+
+	if err := ValidateSourceTables(ctx, pool, pv); err != nil {
+		return fmt.Errorf("validate source tables: %w", err)
 	}
 
 	if pv.ID == uuid.Nil {
@@ -234,6 +276,10 @@ func LoadPublishedViews(ctx context.Context, pool *pgxpool.Pool) ([]*PublishedVi
 			return nil, fmt.Errorf("unmarshal sources for %s: %w", pv.ViewName, err)
 		}
 		views = append(views, pv)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate published views: %w", err)
 	}
 
 	return views, nil
@@ -299,7 +345,8 @@ func DeletePublishedView(ctx context.Context, pool *pgxpool.Pool, viewName strin
 }
 
 // PublishedViewReferencesTable checks whether any published view references the
-// given table name in its sources.
+// given table name in its sources. It uses a proper JSONB query to match exact
+// table names rather than substring matching.
 func PublishedViewReferencesTable(ctx context.Context, pool *pgxpool.Pool, tableName string) (bool, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -309,7 +356,11 @@ func PublishedViewReferencesTable(ctx context.Context, pool *pgxpool.Pool, table
 
 	var count int
 	err = conn.QueryRow(ctx,
-		`SELECT COUNT(*) FROM published_views WHERE sources::text LIKE '%' || $1 || '%'`,
+		`SELECT COUNT(*) FROM published_views
+		 WHERE EXISTS (
+		   SELECT 1 FROM jsonb_array_elements(sources) s
+		   WHERE s->>'table_name' = $1
+		 )`,
 		tableName,
 	).Scan(&count)
 	if err != nil {
