@@ -124,12 +124,16 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 	defer func() {
 		runSummary.EndTime = time.Now()
 		runSummary.NumObservations = numObs
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
 		exitNotification <- runSummary
 	}()
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+		runSummary.Status = data.RunFailed
 		return
 	}
 
@@ -137,7 +141,15 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 		rateLimit = 5000
 	}
 
-	client := resty.New().SetQueryParam("token", subscription.Config["apiKey"])
+	client := resty.New().
+		SetQueryParam("token", subscription.Config["apiKey"]).
+		SetRetryCount(3).
+		SetRetryWaitTime(5 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+		}).
+		SetTimeout(60 * time.Second)
 	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
 
 	// get nyc timezone
@@ -222,6 +234,7 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 				SubscriptionID:   subscription.ID,
 				SubscriptionName: subscription.Name,
 			}
+			numObs++
 		}
 	}
 }
@@ -240,6 +253,9 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 	defer func() {
 		runSummary.EndTime = time.Now()
 		runSummary.NumObservations = numObs
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
 		exitNotification <- runSummary
 	}()
 
@@ -251,7 +267,14 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 	}
 
 	tickerUrl := "https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip"
-	client := resty.New()
+	client := resty.New().
+		SetRetryCount(3).
+		SetRetryWaitTime(5 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+		}).
+		SetTimeout(60 * time.Second)
 	assets := []*tiingoAsset{}
 
 	resp, err := client.R().Get(tickerUrl)
@@ -411,6 +434,7 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+		numObs++
 	}
 }
 

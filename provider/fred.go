@@ -24,6 +24,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog"
+	"golang.org/x/time/rate"
 )
 
 // Example query for a specific economic indicator on all trading dayings:
@@ -38,6 +39,7 @@ func (fred *Fred) ConfigDescription() map[string]string {
 	return map[string]string{
 		"seriesIds": "Enter all series to retrieve from FRED (e.g. UNRATE, DTB3):",
 		"apiKey":    "What is your FRED api key?",
+		"rateLimit": "What is the maximum number of requests per minute?",
 	}
 }
 
@@ -60,6 +62,8 @@ func (fred *Fred) Datasets() map[string]Dataset {
 }
 
 func downloadAllFredIndicators(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
+	logger := zerolog.Ctx(ctx)
+
 	runSummary := data.RunSummary{
 		StartTime:        time.Now(),
 		SubscriptionID:   subscription.ID,
@@ -71,29 +75,59 @@ func downloadAllFredIndicators(ctx context.Context, subscription *library.Subscr
 	defer func() {
 		runSummary.EndTime = time.Now()
 		runSummary.NumObservations = numObs
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
 		exitNotification <- runSummary
 	}()
+
+	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
+	if err != nil {
+		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+		rateLimit = 120
+	}
+
+	if rateLimit <= 0 {
+		rateLimit = 120
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
+
+	client := resty.New().
+		SetQueryParam("api_key", subscription.Config["apiKey"]).
+		SetRetryCount(3).
+		SetRetryWaitTime(5 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+		}).
+		SetTimeout(60 * time.Second)
 
 	seriesIds := strings.Split(subscription.Config["seriesIds"], ",")
 	for _, seriesId := range seriesIds {
 		seriesId = strings.TrimSpace(seriesId)
-		downloadIndicator(ctx, subscription, out, seriesId)
+		n := downloadIndicator(ctx, subscription, client, limiter, out, seriesId)
+		numObs += n
 	}
 }
 
-func downloadIndicator(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, seriesId string) {
+func downloadIndicator(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, out chan<- *data.Observation, seriesId string) int {
 	logger := zerolog.Ctx(ctx)
+
+	if err := limiter.Wait(ctx); err != nil {
+		logger.Error().Err(err).Msg("rate limit wait failed")
+		return 0
+	}
 
 	// get nyc timezone
 	nyc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		logger.Panic().Err(err).Msg("could not load timezone")
-		return
+		return 0
 	}
 
 	var resp fredResponse
 
-	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
 	req, err := client.R().
 		SetQueryParam("file_type", "json").
 		SetQueryParam("series_id", seriesId).
@@ -102,14 +136,15 @@ func downloadIndicator(ctx context.Context, subscription *library.Subscription, 
 
 	if err != nil {
 		logger.Error().Err(err).Msg("downloading economic indicators failed")
-		return
+		return 0
 	}
 
 	if req.StatusCode() >= 300 {
 		logger.Error().Int("StatusCode", req.StatusCode()).Msg("downloading economic indicators returned error status code")
-		return
+		return 0
 	}
 
+	count := 0
 	for _, obs := range resp.Observations {
 		indicator := &data.EconomicIndicator{
 			Series: seriesId,
@@ -140,7 +175,10 @@ func downloadIndicator(ctx context.Context, subscription *library.Subscription, 
 			SubscriptionID:    subscription.ID,
 			SubscriptionName:  subscription.Name,
 		}
+		count++
 	}
+
+	return count
 }
 
 type fredResponse struct {

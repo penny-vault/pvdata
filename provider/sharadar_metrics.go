@@ -16,6 +16,7 @@ package provider
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
+	"golang.org/x/time/rate"
 )
 
 type sharadarMetric struct {
@@ -54,9 +56,23 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	defer func() {
 		runSummary.EndTime = time.Now()
 		runSummary.NumObservations = numObs
-		runSummary.Status = data.RunSuccess
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
 		exitNotification <- runSummary
 	}()
+
+	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
+	if err != nil {
+		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+		rateLimit = 5000
+	}
+
+	if rateLimit <= 0 {
+		rateLimit = 5000
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
 
 	// Get a list of active assets
 	conn, err := subscription.Library.Pool.Acquire(ctx)
@@ -78,7 +94,22 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	}
 
 	// fetch current SP500 constituents and emit index snapshots
-	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
+	client := resty.New().
+		SetQueryParam("api_key", subscription.Config["apiKey"]).
+		SetRetryCount(3).
+		SetRetryWaitTime(5 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+		}).
+		SetTimeout(60 * time.Second)
+
+	if err := limiter.Wait(ctx); err != nil {
+		logger.Error().Err(err).Msg("rate limit wait failed")
+		runSummary.Status = data.RunFailed
+		return
+	}
+
 	sp500Url := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/SP500"
 	resp, err := client.R().SetQueryParam("action", "current").Get(sp500Url)
 	if err != nil {
@@ -116,25 +147,30 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 
 	cursor := ""
 	for {
-		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar tickers")
-		cursor = downloadSharadarMetrics(ctx, subscription, cursor, out, forDate, figiMap)
+		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar metrics")
+		var n int
+		cursor, n = downloadSharadarMetrics(ctx, subscription, client, limiter, cursor, out, forDate, figiMap)
+		numObs += n
 		if cursor == "" {
 			break
 		}
 	}
 }
 
-func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscription, cursor string, out chan<- *data.Observation, forDate string, figiMap map[string]string) string {
+func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, cursor string, out chan<- *data.Observation, forDate string, figiMap map[string]string) (string, int) {
 	logger := zerolog.Ctx(ctx)
+
+	if err := limiter.Wait(ctx); err != nil {
+		logger.Error().Err(err).Msg("rate limit wait failed")
+		return "", 0
+	}
 
 	// get nyc timezone
 	nyc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		logger.Panic().Err(err).Msg("could not load timezone")
-		return ""
+		return "", 0
 	}
-
-	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
 
 	// download daily metrics
 	dailyUrl := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/DAILY"
@@ -149,15 +185,17 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 	resp, err := req.Get(dailyUrl)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to download daily metrics from sharadar")
+		return "", 0
 	}
 
 	if resp.StatusCode() >= 400 {
 		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", dailyUrl).Bytes("Body", resp.Body()).Msg("error when requesting url")
-		return ""
+		return "", 0
 	}
 
 	responseBody := string(resp.Body())
 	result := gjson.Get(responseBody, "datatable.data")
+	count := 0
 	for _, val := range result.Array() {
 		metric := &sharadarMetric{
 			Ticker:      val.Get("0").String(),
@@ -181,9 +219,10 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+		count++
 	}
 
-	return gjson.Get(responseBody, "meta.next_cursor_id").String()
+	return gjson.Get(responseBody, "meta.next_cursor_id").String(), count
 }
 
 func (metric *sharadarMetric) PvMetric(figiMap map[string]string, loc *time.Location) *data.Metric {

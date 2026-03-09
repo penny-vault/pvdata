@@ -28,6 +28,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
+	"golang.org/x/time/rate"
 )
 
 type sharadarTicker struct {
@@ -61,6 +62,8 @@ type sharadarTicker struct {
 }
 
 func downloadAllSharadarTickers(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
+	logger := zerolog.Ctx(ctx)
+
 	runSummary := data.RunSummary{
 		StartTime:        time.Now(),
 		SubscriptionID:   subscription.ID,
@@ -72,22 +75,53 @@ func downloadAllSharadarTickers(ctx context.Context, subscription *library.Subsc
 	defer func() {
 		runSummary.EndTime = time.Now()
 		runSummary.NumObservations = numObs
-		runSummary.Status = data.RunSuccess
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
 		exitNotification <- runSummary
 	}()
+
+	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
+	if err != nil {
+		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+		rateLimit = 5000
+	}
+
+	if rateLimit <= 0 {
+		rateLimit = 5000
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
+
+	client := resty.New().
+		SetQueryParam("api_key", subscription.Config["apiKey"]).
+		SetRetryCount(3).
+		SetRetryWaitTime(5 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+		}).
+		SetTimeout(60 * time.Second)
 
 	cursor := ""
 	for {
 		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar tickers")
-		cursor = downloadSharadarTickers(ctx, subscription, cursor, out)
+		var n int
+		cursor, n = downloadSharadarTickers(ctx, subscription, client, limiter, cursor, out)
+		numObs += n
 		if cursor == "" {
 			break
 		}
 	}
 }
 
-func downloadSharadarTickers(ctx context.Context, subscription *library.Subscription, cursor string, out chan<- *data.Observation) string {
+func downloadSharadarTickers(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, cursor string, out chan<- *data.Observation) (string, int) {
 	logger := zerolog.Ctx(ctx)
+
+	if err := limiter.Wait(ctx); err != nil {
+		logger.Error().Err(err).Msg("rate limit wait failed")
+		return "", 0
+	}
 
 	enrichAssets := make([]*data.Asset, 0, 10000)
 	allAssets := make([]*data.Asset, 0, 10000)
@@ -96,24 +130,25 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 	nyc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		logger.Panic().Err(err).Msg("could not load timezone")
-		return ""
+		return "", 0
 	}
 
 	tickerUrl := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/TICKERS"
-	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
 
+	req := client.R()
 	if cursor != "" {
-		client.SetQueryParam("qopts.cursor_id", cursor)
+		req.SetQueryParam("qopts.cursor_id", cursor)
 	}
 
-	resp, err := client.R().SetQueryParam("table", "SF1").Get(tickerUrl)
+	resp, err := req.SetQueryParam("table", "SF1").Get(tickerUrl)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to download tickers")
+		return "", 0
 	}
 
 	if resp.StatusCode() >= 400 {
 		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", tickerUrl).Bytes("Body", resp.Body()).Msg("error when requesting url")
-		return ""
+		return "", 0
 	}
 
 	responseBody := string(resp.Body())
@@ -207,6 +242,7 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 	// enrich assets
 	figi.Enrich(enrichAssets...)
 
+	count := 0
 	for _, asset := range allAssets {
 		out <- &data.Observation{
 			AssetObject:      asset,
@@ -214,9 +250,10 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+		count++
 	}
 
-	return gjson.Get(responseBody, "meta.next_cursor_id").String()
+	return gjson.Get(responseBody, "meta.next_cursor_id").String(), count
 }
 
 func (ticker *sharadarTicker) ToAsset() *data.Asset {

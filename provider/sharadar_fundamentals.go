@@ -16,6 +16,7 @@ package provider
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
+	"golang.org/x/time/rate"
 )
 
 type sharadarFundamental struct {
@@ -142,6 +144,8 @@ type sharadarFundamental struct {
 }
 
 func downloadAllSharadarFundamentals(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
+	logger := zerolog.Ctx(ctx)
+
 	runSummary := data.RunSummary{
 		StartTime:        time.Now(),
 		SubscriptionID:   subscription.ID,
@@ -153,22 +157,53 @@ func downloadAllSharadarFundamentals(ctx context.Context, subscription *library.
 	defer func() {
 		runSummary.EndTime = time.Now()
 		runSummary.NumObservations = numObs
-		runSummary.Status = data.RunSuccess
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
 		exitNotification <- runSummary
 	}()
+
+	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
+	if err != nil {
+		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+		rateLimit = 5000
+	}
+
+	if rateLimit <= 0 {
+		rateLimit = 5000
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
+
+	client := resty.New().
+		SetQueryParam("api_key", subscription.Config["apiKey"]).
+		SetRetryCount(3).
+		SetRetryWaitTime(5 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+		}).
+		SetTimeout(60 * time.Second)
 
 	cursor := ""
 	for {
 		log.Info().Str("cursor", cursor).Msg("Fetching next page sharadar fundamentals")
-		cursor = downloadSharadarFundamentals(ctx, subscription, cursor, out)
+		var n int
+		cursor, n = downloadSharadarFundamentals(ctx, subscription, client, limiter, cursor, out)
+		numObs += n
 		if cursor == "" {
 			break
 		}
 	}
 }
 
-func downloadSharadarFundamentals(ctx context.Context, subscription *library.Subscription, cursor string, out chan<- *data.Observation) string {
+func downloadSharadarFundamentals(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, cursor string, out chan<- *data.Observation) (string, int) {
 	logger := zerolog.Ctx(ctx)
+
+	if err := limiter.Wait(ctx); err != nil {
+		logger.Error().Err(err).Msg("rate limit wait failed")
+		return "", 0
+	}
 
 	// Get a list of active assets
 	conn, err := subscription.Library.Pool.Acquire(ctx)
@@ -181,7 +216,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 	assets, err := data.ActiveAssets(ctx, conn)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
-		return ""
+		return "", 0
 	}
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
@@ -189,30 +224,31 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 	}
 
 	url := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/SF1"
-	client := resty.New().SetQueryParam("api_key", subscription.Config["apiKey"])
 
+	req := client.R()
 	if cursor != "" {
-		client.SetQueryParam("qopts.cursor_id", cursor)
+		req.SetQueryParam("qopts.cursor_id", cursor)
 	}
 
 	lastUpdated := time.Now().Add(-1 * time.Hour * 24 * 10)
-	client.SetQueryParam("lastupdated.gte", lastUpdated.Format("2006-01-02"))
+	req.SetQueryParam("lastupdated.gte", lastUpdated.Format("2006-01-02"))
 
-	resp, err := client.R().Get(url)
+	resp, err := req.Get(url)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to download fundamentals")
-		return ""
+		return "", 0
 	}
 
 	if resp.StatusCode() >= 400 {
 		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", url).Bytes("Body", resp.Body()).Msg("error when requesting url")
-		return ""
+		return "", 0
 	}
 
 	logger.Debug().Str("URL", resp.Request.URL).Send()
 
 	responseBody := string(resp.Body())
 	result := gjson.Get(responseBody, "datatable.data")
+	count := 0
 	for _, val := range result.Array() {
 		fundamental := &sharadarFundamental{
 			Ticker:                                  val.Get("0").String(),
@@ -337,9 +373,10 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+		count++
 	}
 
-	return gjson.Get(responseBody, "meta.next_cursor_id").String()
+	return gjson.Get(responseBody, "meta.next_cursor_id").String(), count
 }
 
 // PvFundamental converts the sharadar
