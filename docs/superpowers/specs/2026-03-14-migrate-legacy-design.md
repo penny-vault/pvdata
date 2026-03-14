@@ -353,13 +353,13 @@ A new cobra command in `cmd/migrate_legacy.go`.
    - Market holidays subscription: provider="legacy", dataset="market-holidays", data_types=["market-holidays"]
    - Zacks subscription: provider="legacy", dataset="Zacks Screener Data", data_types=["rating", "metric", "estimate", "consensus"]
 
-   Note: `Save()` manages its own transaction internally, so subscription creation is not wrapped in the outer data-copy transaction. If the data copy fails after subscriptions are created, the subscriptions will exist with empty tables. The `--force` flag handles cleanup of this state by deleting existing legacy subscriptions before retrying.
+   `Save()` accepts an optional `pgx.Tx`. The migrate-legacy command passes its outer transaction so that subscription creation, data copy, and published view creation are all atomic. If anything fails, the entire migration rolls back.
 
 4. **Manage partitions** for partitioned types (eod, metric)
    - Call `ManagePartitions()` which creates standard partitions (1900-2000, 2000-2005, 2005-2010, then 5-year ranges to current year+1)
 
 5. **Copy and transform data** using the SQL statements above
-   - Execute the data copy within a transaction (separate from subscription creation)
+   - Same transaction as subscription creation
    - Report row counts for each table after copy
    - Cross-check row counts between legacy and new tables to verify completeness
 
@@ -372,10 +372,21 @@ A new cobra command in `cmd/migrate_legacy.go`.
 
 Register a "legacy" provider in the provider registry (`provider/discover.go`). It needs only metadata (Name, Description, Datasets, ConfigDescription) -- no Fetch function. The Datasets method returns dataset definitions with the correct DataTypes so that subscription creation works, but the Fetch function is nil or a no-op.
 
+### Changes to `Subscription.Save()`
+
+`Save()` currently creates its own transaction, commits it, then auto-creates published views outside the transaction. To support the migration's atomicity requirement:
+
+- Add an optional `pgx.Tx` parameter (variadic or functional option). When provided, `Save()` uses the caller's transaction and does not commit or rollback -- the caller owns the transaction lifecycle.
+- When no transaction is provided, behavior is unchanged (creates its own transaction like today).
+- The published view auto-creation also needs to participate in the caller's transaction. `SavePublishedView()` currently takes a `*pgxpool.Pool`; it should also accept an optional `pgx.Tx`.
+- `ManagePartitions()` follows the same pattern -- accept an optional `pgx.Tx`.
+
+This is a backward-compatible change: all existing callers continue to work without modification.
+
 ### Error handling
 
-- Schema move and subscription creation happen first; data copy runs in its own transaction
-- If the data copy transaction fails, it rolls back cleanly -- subscriptions exist but have empty tables
+- Entire operation (schema move, subscription creation, data copy, published views) runs in a single transaction
+- On any error, the transaction rolls back -- no partial state
 - `--force` flag: deletes existing legacy subscriptions and legacy schema, allowing a clean retry
 - If legacy schema already exists without `--force`, abort with a clear message
 - If required legacy tables are missing, list which ones are absent and abort
