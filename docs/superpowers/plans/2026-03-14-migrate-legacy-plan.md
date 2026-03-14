@@ -403,7 +403,7 @@ func (subscription *Subscription) Save(ctx context.Context) error {
 }
 ```
 
-Note: This moves published view auto-creation inside the transaction -- a behavior improvement even outside the migration use case.
+Note: This moves published view auto-creation inside the transaction -- a behavior improvement even outside the migration use case. Be aware that for existing `Save()` callers, a failure in published view creation will now roll back the entire subscription creation, whereas before it would only log a warning. This is the correct behavior (avoids partial state).
 
 - [ ] **Step 3: Verify build and existing tests pass**
 
@@ -616,10 +616,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -844,7 +848,7 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 }
 ```
 
-Note: add `"github.com/penny-vault/pvdata/data"` to the imports for the `cleanupLegacyMigration` function.
+All required imports (`data`, `uuid`, `pgx`, `errors`, `time`) are included in the initial import block above.
 
 - [ ] **Step 2: Verify build**
 
@@ -929,7 +933,7 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 }
 ```
 
-Add these imports to the file: `"errors"`, `"github.com/jackc/pgx/v5"`.
+These imports are already in the initial import block from Task 5.
 
 - [ ] **Step 2: Implement `moveToLegacySchema`**
 
@@ -1037,8 +1041,8 @@ func createLegacySubscriptions(ctx context.Context, tx pgx.Tx, myLibrary *librar
 			Dataset:   d.dataset,
 			Config:    map[string]string{},
 			DataTypes: d.dataTypes,
-			Active:    false,
 			Library:   myLibrary,
+			// active defaults to true in DB; updateSubscriptionMetadata sets it to false
 		}
 		sub.ComputeTableNames()
 
@@ -1054,7 +1058,7 @@ func createLegacySubscriptions(ctx context.Context, tx pgx.Tx, myLibrary *librar
 }
 ```
 
-Add `"github.com/google/uuid"` and `"github.com/penny-vault/pvdata/data"` to imports.
+These imports are already in the initial import block from Task 5.
 
 - [ ] **Step 5: Implement `copyData`**
 
@@ -1103,39 +1107,49 @@ FROM legacy.assets`, assetsTable))
 		log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Assets data")
 	}
 
-	// Market Holidays
-	mhTable := subs.marketHolidays.DataTablesMap[data.MarketHolidaysKey]
-	if mhTable != "" {
-		result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (holiday, event_date, market, early_close, close_time)
+	// Market Holidays (optional -- table may not exist in legacy DB)
+	if exists, _ := legacyTableExists(ctx, tx, "market_holidays"); exists {
+		mhTable := subs.marketHolidays.DataTablesMap[data.MarketHolidaysKey]
+		if mhTable != "" {
+			result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (holiday, event_date, market, early_close, close_time)
 SELECT holiday, event_date, market, early_close, close_time
 FROM legacy.market_holidays`, mhTable))
-		if err != nil {
-			return fmt.Errorf("copy market_holidays: %w", err)
+			if err != nil {
+				return fmt.Errorf("copy market_holidays: %w", err)
+			}
+			log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Market Holidays data")
 		}
-		log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Market Holidays data")
+	} else {
+		log.Warn().Msg("legacy.market_holidays not found, skipping")
 	}
 
-	// Zacks -> Rating
-	if err := copyZacksRatings(ctx, tx, subs.zacks); err != nil {
-		return err
-	}
-
-	// Zacks -> Metric
-	if err := copyZacksMetrics(ctx, tx, subs.zacks); err != nil {
-		return err
-	}
-
-	// Zacks -> Estimate
-	if err := copyZacksEstimates(ctx, tx, subs.zacks); err != nil {
-		return err
-	}
-
-	// Zacks -> Consensus
-	if err := copyZacksConsensus(ctx, tx, subs.zacks); err != nil {
-		return err
+	// Zacks (optional -- table may not exist in legacy DB)
+	if exists, _ := legacyTableExists(ctx, tx, "zacks_financials"); exists {
+		if err := copyZacksRatings(ctx, tx, subs.zacks); err != nil {
+			return err
+		}
+		if err := copyZacksMetrics(ctx, tx, subs.zacks); err != nil {
+			return err
+		}
+		if err := copyZacksEstimates(ctx, tx, subs.zacks); err != nil {
+			return err
+		}
+		if err := copyZacksConsensus(ctx, tx, subs.zacks); err != nil {
+			return err
+		}
+	} else {
+		log.Warn().Msg("legacy.zacks_financials not found, skipping")
 	}
 
 	return nil
+}
+
+func legacyTableExists(ctx context.Context, tx pgx.Tx, tableName string) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'legacy' AND table_name = $1)`,
+		tableName).Scan(&exists)
+	return exists, err
 }
 
 func copyZacksRatings(ctx context.Context, tx pgx.Tx, sub *library.Subscription) error {
@@ -1243,7 +1257,7 @@ FROM legacy.zacks_financials
 WHERE (q2_consensus_est_next_fiscal_qtr IS NOT NULL OR number_of_analysts_in_q2_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
 		{"eps-f0", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
 SELECT ticker, TRIM(composite_figi), event_date, 'eps-f0',
-  COALESCE(f0_consensus_est, 0), COALESCE(number_of_analysts_in_f0_consensus, 0)::int, 0
+  COALESCE(f0_consensus_est, 0), COALESCE(number_of_analysts_in_f0_consensus, 0)::int -- legacy column is REAL, target is INT, 0
 FROM legacy.zacks_financials
 WHERE (f0_consensus_est IS NOT NULL OR number_of_analysts_in_f0_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
 		{"eps-f1", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
