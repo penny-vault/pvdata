@@ -99,11 +99,13 @@ func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
 
 	// Check that legacy schema does not already exist
 	var schemaExists bool
+
 	err = conn.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'legacy')`).Scan(&schemaExists)
 	if err != nil {
 		return fmt.Errorf("check legacy schema: %w", err)
 	}
+
 	if schemaExists {
 		return fmt.Errorf("legacy schema already exists. Use --force to clean up a failed prior run")
 	}
@@ -111,12 +113,14 @@ func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
 	// Check that required legacy tables exist in public
 	for _, tbl := range requiredLegacyTables {
 		var exists bool
+
 		err = conn.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
 			tbl).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("check table %s: %w", tbl, err)
 		}
+
 		if !exists {
 			return fmt.Errorf("required legacy table %q not found in public schema", tbl)
 		}
@@ -125,12 +129,14 @@ func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
 	// Check that pv-data library tables exist
 	for _, tbl := range []string{"subscriptions", "published_views"} {
 		var exists bool
+
 		err = conn.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
 			tbl).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("check table %s: %w", tbl, err)
 		}
+
 		if !exists {
 			return fmt.Errorf("pv-data table %q not found. Run database migrations first", tbl)
 		}
@@ -138,16 +144,19 @@ func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
 
 	// Check no legacy subscriptions exist
 	var legacySubCount int
+
 	err = conn.QueryRow(ctx,
 		`SELECT count(*) FROM subscriptions WHERE provider = 'legacy'`).Scan(&legacySubCount)
 	if err != nil {
 		return fmt.Errorf("check legacy subscriptions: %w", err)
 	}
+
 	if legacySubCount > 0 {
 		return fmt.Errorf("subscriptions with provider 'legacy' already exist. Use --force to clean up")
 	}
 
 	log.Info().Msg("preflight checks passed")
+
 	return nil
 }
 
@@ -181,12 +190,14 @@ func cleanupLegacyMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *
 			if err := sub.Delete(ctx); err != nil {
 				return fmt.Errorf("delete legacy subscription %s: %w", sub.Name, err)
 			}
+
 			log.Info().Str("Name", sub.Name).Msg("deleted legacy subscription")
 		}
 	}
 
 	// Move tables back from legacy schema to public if legacy schema exists
 	var schemaExists bool
+
 	err = conn.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'legacy')`).Scan(&schemaExists)
 	if err != nil {
@@ -203,11 +214,13 @@ func cleanupLegacyMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *
 		defer rows.Close()
 
 		var tables []string
+
 		for rows.Next() {
 			var tbl string
 			if err := rows.Scan(&tbl); err != nil {
 				return err
 			}
+
 			tables = append(tables, tbl)
 		}
 
@@ -225,6 +238,7 @@ func cleanupLegacyMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *
 	}
 
 	log.Info().Msg("cleanup complete")
+
 	return nil
 }
 
@@ -280,6 +294,7 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 	}
 
 	log.Info().Msg("legacy migration completed successfully")
+
 	return nil
 }
 
@@ -293,6 +308,7 @@ func moveToLegacySchema(ctx context.Context, tx pgx.Tx) error {
 	for _, tbl := range legacyTables {
 		// Check if table exists before trying to move it
 		var exists bool
+
 		err := tx.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
 			tbl).Scan(&exists)
@@ -304,6 +320,7 @@ func moveToLegacySchema(ctx context.Context, tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, fmt.Sprintf("ALTER TABLE public.%s SET SCHEMA legacy", tbl)); err != nil {
 				return fmt.Errorf("move table %s: %w", tbl, err)
 			}
+
 			log.Info().Str("Table", tbl).Msg("moved to legacy schema")
 		} else {
 			log.Warn().Str("Table", tbl).Msg("table not found, skipping")
@@ -318,17 +335,20 @@ func validateCompositeFigi(ctx context.Context, tx pgx.Tx) error {
 
 	for _, tbl := range tables {
 		var exists bool
+
 		err := tx.QueryRow(ctx,
 			fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'legacy' AND table_name = '%s')`,
 				tbl[len("legacy."):])).Scan(&exists)
 		if err != nil {
 			return err
 		}
+
 		if !exists {
 			continue
 		}
 
 		var badCount int
+
 		err = tx.QueryRow(ctx,
 			fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE LENGTH(TRIM(composite_figi)) != 12`, tbl)).Scan(&badCount)
 		if err != nil {
@@ -407,6 +427,7 @@ WHERE LENGTH(TRIM(composite_figi)) = 12`, eodTable))
 		if err != nil {
 			return fmt.Errorf("copy eod: %w", err)
 		}
+
 		log.Info().Int64("Rows", result.RowsAffected()).Msg("copied EOD data")
 	}
 
@@ -435,6 +456,7 @@ FROM legacy.assets`, assetsTable))
 		if err != nil {
 			return fmt.Errorf("copy assets: %w", err)
 		}
+
 		log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Assets data")
 	}
 
@@ -448,6 +470,7 @@ FROM legacy.market_holidays`, mhTable))
 			if err != nil {
 				return fmt.Errorf("copy market_holidays: %w", err)
 			}
+
 			log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Market Holidays data")
 		}
 	} else {
@@ -459,12 +482,15 @@ FROM legacy.market_holidays`, mhTable))
 		if err := copyZacksRatings(ctx, tx, subs.zacks); err != nil {
 			return err
 		}
+
 		if err := copyZacksMetrics(ctx, tx, subs.zacks); err != nil {
 			return err
 		}
+
 		if err := copyZacksEstimates(ctx, tx, subs.zacks); err != nil {
 			return err
 		}
+
 		if err := copyZacksConsensus(ctx, tx, subs.zacks); err != nil {
 			return err
 		}
@@ -477,9 +503,11 @@ FROM legacy.market_holidays`, mhTable))
 
 func legacyTableExists(ctx context.Context, tx pgx.Tx, tableName string) (bool, error) {
 	var exists bool
+
 	err := tx.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'legacy' AND table_name = $1)`,
 		tableName).Scan(&exists)
+
 	return exists, err
 }
 
@@ -520,15 +548,18 @@ WHERE TRIM(vgm_score) IN ('A','B','C','D','F') AND LENGTH(TRIM(composite_figi)) 
 	}
 
 	var totalRows int64
+
 	for _, q := range ratingQueries {
 		result, err := tx.Exec(ctx, q.sql)
 		if err != nil {
 			return fmt.Errorf("copy zacks rating %s: %w", q.analyst, err)
 		}
+
 		totalRows += result.RowsAffected()
 	}
 
 	log.Info().Int64("Rows", totalRows).Msg("copied Zacks Rating data")
+
 	return nil
 }
 
@@ -558,6 +589,7 @@ WHERE LENGTH(TRIM(composite_figi)) = 12`, tbl))
 	}
 
 	log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Zacks Metric data")
+
 	return nil
 }
 
@@ -640,15 +672,18 @@ WHERE avg_eps_surprise_last_4_qtrs IS NOT NULL AND LENGTH(TRIM(composite_figi)) 
 	}
 
 	var totalRows int64
+
 	for _, q := range estimateQueries {
 		result, err := tx.Exec(ctx, q.sql)
 		if err != nil {
 			return fmt.Errorf("copy zacks estimate %s: %w", q.series, err)
 		}
+
 		totalRows += result.RowsAffected()
 	}
 
 	log.Info().Int64("Rows", totalRows).Msg("copied Zacks Estimate data")
+
 	return nil
 }
 
@@ -670,6 +705,7 @@ WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) 
 	}
 
 	log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Zacks Consensus data")
+
 	return nil
 }
 
@@ -682,17 +718,20 @@ func updateSubscriptionMetadata(ctx context.Context, tx pgx.Tx, subs *legacySubs
 		for _, tbl := range sub.DataTables {
 			// Get record count and date range
 			var count int64
+
 			err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, tbl)).Scan(&count)
 			if err != nil {
 				log.Warn().Err(err).Str("Table", tbl).Msg("could not count records")
 				continue
 			}
+
 			sub.TotalRecords += count
 		}
 
 		// Get date range from the first table that has event_date
 		for _, tbl := range sub.DataTables {
 			var hasEventDate bool
+
 			err := tx.QueryRow(ctx,
 				`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = 'event_date')`,
 				tbl).Scan(&hasEventDate)
@@ -701,6 +740,7 @@ func updateSubscriptionMetadata(ctx context.Context, tx pgx.Tx, subs *legacySubs
 			}
 
 			var minDate, maxDate time.Time
+
 			err = tx.QueryRow(ctx,
 				fmt.Sprintf(`SELECT COALESCE(MIN(event_date), '0001-01-01'), COALESCE(MAX(event_date), '0001-01-01') FROM %s`, tbl)).
 				Scan(&minDate, &maxDate)
@@ -711,6 +751,7 @@ func updateSubscriptionMetadata(ctx context.Context, tx pgx.Tx, subs *legacySubs
 			if sub.FirstObsDate.IsZero() || minDate.Before(sub.FirstObsDate) {
 				sub.FirstObsDate = minDate
 			}
+
 			if maxDate.After(sub.LastObsDate) {
 				sub.LastObsDate = maxDate
 			}
