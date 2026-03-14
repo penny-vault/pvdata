@@ -217,27 +217,9 @@ func (subscription *Subscription) Deactivate(ctx context.Context) error {
 	return nil
 }
 
-// Save the subscription to the database
-func (subscription *Subscription) Save(ctx context.Context) error {
-	conn, err := subscription.Library.Pool.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Release()
-
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		if err := tx.Rollback(ctx); err != nil {
-			if !errors.Is(err, pgx.ErrTxClosed) {
-				log.Error().Err(err).Msg("error rollingback tx")
-			}
-		}
-	}()
-
+// SaveWithTx saves the subscription using the provided transaction.
+// The caller owns the transaction lifecycle (commit/rollback).
+func (subscription *Subscription) SaveWithTx(ctx context.Context, tx pgx.Tx) error {
 	// create table structure for each data type this dataset produces
 	if err := subscription.createTables(ctx, tx); err != nil {
 		return err
@@ -266,13 +248,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 		return err
 	}
 
-	// commit to database
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-
 	// auto-create published views for data types that don't have one yet
-	existingViews, err := LoadPublishedViews(ctx, subscription.Library.Pool)
+	existingViews, err := LoadPublishedViews(ctx, tx)
 	if err != nil {
 		log.Warn().Err(err).Msg("could not query existing published views")
 	} else {
@@ -303,13 +280,41 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 					{TableName: tableName, SubscriptionID: subscription.ID.String()},
 				},
 			}
-			if err := SavePublishedView(ctx, subscription.Library.Pool, pv); err != nil {
+			if err := SavePublishedView(ctx, tx, pv); err != nil {
 				log.Warn().Err(err).Str("DataType", dataTypeKey).Msg("could not auto-create published view")
 			}
 		}
 	}
 
 	return nil
+}
+
+// Save the subscription to the database
+func (subscription *Subscription) Save(ctx context.Context) error {
+	conn, err := subscription.Library.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			if !errors.Is(err, pgx.ErrTxClosed) {
+				log.Error().Err(err).Msg("error rollingback tx")
+			}
+		}
+	}()
+
+	if err := subscription.SaveWithTx(ctx, tx); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 // Compute table names based on subscription data types
