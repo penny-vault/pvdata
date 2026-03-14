@@ -23,10 +23,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
 )
+
+// Querier is an interface satisfied by both *pgxpool.Pool and pgx.Tx,
+// allowing functions to work with either a pool connection or an existing transaction.
+type Querier interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // ViewSource represents a single table contributing to a published view,
 // optionally bounded by a date range. FromDate is inclusive, UntilDate is exclusive.
@@ -161,16 +170,10 @@ func (pv *PublishedView) ValidateSources() error {
 
 // ValidateSourceTables checks that all source tables referenced by the published
 // view actually exist in the database.
-func ValidateSourceTables(ctx context.Context, pool *pgxpool.Pool, pv *PublishedView) error {
+func ValidateSourceTables(ctx context.Context, q Querier, pv *PublishedView) error {
 	if len(pv.Sources) == 0 {
 		return nil
 	}
-
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
 
 	for _, src := range pv.Sources {
 		tables := []string{src.TableName}
@@ -181,7 +184,7 @@ func ValidateSourceTables(ctx context.Context, pool *pgxpool.Pool, pv *Published
 		for _, tbl := range tables {
 			var exists bool
 
-			err := conn.QueryRow(ctx,
+			err := q.QueryRow(ctx,
 				`SELECT EXISTS (
 				   SELECT 1 FROM information_schema.tables
 				   WHERE table_name = $1 AND table_schema = 'public'
@@ -201,18 +204,12 @@ func ValidateSourceTables(ctx context.Context, pool *pgxpool.Pool, pv *Published
 
 // ApplyPublishedView executes the generated SQL statements for the given
 // published view against the database.
-func ApplyPublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedView) error {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
-
+func ApplyPublishedView(ctx context.Context, q Querier, pv *PublishedView) error {
 	sqls := pv.GenerateViewSQL()
 	for _, sql := range sqls {
 		log.Info().Str("sql", sql).Msg("applying published view SQL")
 
-		if _, err := conn.Exec(ctx, sql); err != nil {
+		if _, err := q.Exec(ctx, sql); err != nil {
 			return fmt.Errorf("exec published view SQL: %w", err)
 		}
 	}
@@ -222,12 +219,12 @@ func ApplyPublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedVi
 
 // SavePublishedView validates the sources, upserts the published view to the
 // database, and applies the view.
-func SavePublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedView) error {
+func SavePublishedView(ctx context.Context, q Querier, pv *PublishedView) error {
 	if err := pv.ValidateSources(); err != nil {
 		return fmt.Errorf("validate sources: %w", err)
 	}
 
-	if err := ValidateSourceTables(ctx, pool, pv); err != nil {
+	if err := ValidateSourceTables(ctx, q, pv); err != nil {
 		return fmt.Errorf("validate source tables: %w", err)
 	}
 
@@ -240,13 +237,7 @@ func SavePublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedVie
 		return fmt.Errorf("marshal sources: %w", err)
 	}
 
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
-
-	_, err = conn.Exec(ctx,
+	_, err = q.Exec(ctx,
 		`INSERT INTO published_views (id, view_name, data_type_key, sources)
 		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT (view_name)
@@ -257,18 +248,12 @@ func SavePublishedView(ctx context.Context, pool *pgxpool.Pool, pv *PublishedVie
 		return fmt.Errorf("upsert published view: %w", err)
 	}
 
-	return ApplyPublishedView(ctx, pool, pv)
+	return ApplyPublishedView(ctx, q, pv)
 }
 
 // LoadPublishedViews loads all published views from the database.
-func LoadPublishedViews(ctx context.Context, pool *pgxpool.Pool) ([]*PublishedView, error) {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
-
-	rows, err := conn.Query(ctx,
+func LoadPublishedViews(ctx context.Context, q Querier) ([]*PublishedView, error) {
+	rows, err := q.Query(ctx,
 		`SELECT id, view_name, data_type_key, sources FROM published_views ORDER BY view_name`,
 	)
 	if err != nil {
@@ -301,18 +286,12 @@ func LoadPublishedViews(ctx context.Context, pool *pgxpool.Pool) ([]*PublishedVi
 }
 
 // LoadPublishedView loads a single published view by view name.
-func LoadPublishedView(ctx context.Context, pool *pgxpool.Pool, viewName string) (*PublishedView, error) {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
-
+func LoadPublishedView(ctx context.Context, q Querier, viewName string) (*PublishedView, error) {
 	pv := &PublishedView{}
 
 	var sourcesJSON []byte
 
-	err = conn.QueryRow(ctx,
+	err := q.QueryRow(ctx,
 		`SELECT id, view_name, data_type_key, sources FROM published_views WHERE view_name = $1`,
 		viewName,
 	).Scan(&pv.ID, &pv.ViewName, &pv.DataTypeKey, &sourcesJSON)
@@ -329,9 +308,9 @@ func LoadPublishedView(ctx context.Context, pool *pgxpool.Pool, viewName string)
 
 // DeletePublishedView drops the database view(s) and deletes the row from
 // the published_views table.
-func DeletePublishedView(ctx context.Context, pool *pgxpool.Pool, viewName string) error {
+func DeletePublishedView(ctx context.Context, q Querier, viewName string) error {
 	// Load the view first so we can generate the correct DROP statements.
-	pv, err := LoadPublishedView(ctx, pool, viewName)
+	pv, err := LoadPublishedView(ctx, q, viewName)
 	if err != nil {
 		return fmt.Errorf("load for delete: %w", err)
 	}
@@ -342,17 +321,11 @@ func DeletePublishedView(ctx context.Context, pool *pgxpool.Pool, viewName strin
 		DataTypeKey: pv.DataTypeKey,
 		Sources:     []ViewSource{},
 	}
-	if err := ApplyPublishedView(ctx, pool, dropPV); err != nil {
+	if err := ApplyPublishedView(ctx, q, dropPV); err != nil {
 		return fmt.Errorf("drop views: %w", err)
 	}
 
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
-
-	_, err = conn.Exec(ctx, `DELETE FROM published_views WHERE view_name = $1`, viewName)
+	_, err = q.Exec(ctx, `DELETE FROM published_views WHERE view_name = $1`, viewName)
 	if err != nil {
 		return fmt.Errorf("delete published view row: %w", err)
 	}
@@ -365,16 +338,10 @@ func DeletePublishedView(ctx context.Context, pool *pgxpool.Pool, viewName strin
 // PublishedViewReferencesTable checks whether any published view references the
 // given table name in its sources. It uses a proper JSONB query to match exact
 // table names rather than substring matching.
-func PublishedViewReferencesTable(ctx context.Context, pool *pgxpool.Pool, tableName string) (bool, error) {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return false, fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
-
+func PublishedViewReferencesTable(ctx context.Context, q Querier, tableName string) (bool, error) {
 	var count int
 
-	err = conn.QueryRow(ctx,
+	err := q.QueryRow(ctx,
 		`SELECT COUNT(*) FROM published_views
 		 WHERE EXISTS (
 		   SELECT 1 FROM jsonb_array_elements(sources) s
