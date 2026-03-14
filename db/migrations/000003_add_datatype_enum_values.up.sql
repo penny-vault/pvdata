@@ -1,0 +1,4 @@
+ALTER TYPE datatype ADD VALUE IF NOT EXISTS 'consensus';
+ALTER TYPE datatype ADD VALUE IF NOT EXISTS 'estimate';
+ALTER TYPE datatype ADD VALUE IF NOT EXISTS 'index';
+ALTER TYPE datatype ADD VALUE IF NOT EXISTS 'quote';
