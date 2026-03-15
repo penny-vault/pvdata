@@ -117,6 +117,7 @@ func (m migrationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case progress.FrameMsg:
 		var cmd tea.Cmd
+
 		m.progress, cmd = m.progress.Update(msg)
 
 		return m, cmd
@@ -128,6 +129,7 @@ func (m migrationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m migrationModel) View() tea.View {
 	pad := strings.Repeat(" ", progressPadding)
+
 	var b strings.Builder
 
 	b.WriteString("\n" + pad + "Migrating legacy database...\n\n")
@@ -135,18 +137,18 @@ func (m migrationModel) View() tea.View {
 	// Completed steps
 	for _, s := range m.completed {
 		if s.rows > 0 {
-			b.WriteString(fmt.Sprintf("%s  [done] %-25s %s rows\n", pad, s.name, formatNumber(s.rows)))
+			fmt.Fprintf(&b, "%s  [done] %-25s %s rows\n", pad, s.name, formatNumber(s.rows))
 		} else {
-			b.WriteString(fmt.Sprintf("%s  [done] %s\n", pad, s.name))
+			fmt.Fprintf(&b, "%s  [done] %s\n", pad, s.name)
 		}
 	}
 
 	// Current step with progress bar
 	if m.currentStep != "" && m.totalRows > 0 {
-		b.WriteString(fmt.Sprintf("%s  %-25s\n", pad, m.currentStep))
+		fmt.Fprintf(&b, "%s  %-25s\n", pad, m.currentStep)
 		b.WriteString(pad + "  " + m.progress.View() + "\n")
 	} else if m.currentStep != "" {
-		b.WriteString(fmt.Sprintf("%s  %s...\n", pad, m.currentStep))
+		fmt.Fprintf(&b, "%s  %s...\n", pad, m.currentStep)
 	}
 
 	// Done message
