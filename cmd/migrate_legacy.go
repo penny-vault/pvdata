@@ -4,19 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/huh/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pelletier/go-toml/v2"
 	"github.com/penny-vault/pvdata/data"
-	"github.com/penny-vault/pvdata/db"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -25,102 +20,70 @@ import (
 
 var migrateLegacyCmd = &cobra.Command{
 	Use:   "migrate-legacy",
-	Short: "Migrate a legacy penny-vault database to the pv-data subscription system",
-	Long: `Moves legacy tables to a 'legacy' schema, creates subscriptions with
-properly-structured tables, and copies/transforms data. The entire operation
-runs in a single transaction.
+	Short: "Migrate data from a legacy penny-vault database",
+	Long: `Copies and transforms data from a legacy penny-vault database into the
+current pv-data library. Requires two separate databases: the legacy source
+and the pv-data destination (already initialized with 'pvdata init').
 
-Tables converted: eod, assets, market_holidays, zacks_financials
-Tables moved only: reported_financials, seeking_alpha, zacks_number_1, trading_days,
-  schema_migrations, activity, announcements, portfolios, portfolio_transactions,
-  portfolio_measurements, profile`,
+Tables migrated: eod, assets, market_holidays, zacks_financials
+The legacy database is not modified.`,
 	RunE: runMigrateLegacy,
 }
 
 func init() {
 	rootCmd.AddCommand(migrateLegacyCmd)
+	migrateLegacyCmd.Flags().String("source", "", "Connection URL for the legacy database (required)")
 	migrateLegacyCmd.Flags().Bool("dry-run", false, "Print what would be done without making changes")
 	migrateLegacyCmd.Flags().Bool("force", false, "Clean up failed prior run before migrating")
+
+	if err := migrateLegacyCmd.MarkFlagRequired("source"); err != nil {
+		log.Fatal().Err(err).Msg("could not mark source flag as required")
+	}
 }
 
-// legacyTables lists all tables expected in the old penny-vault database.
-var legacyTables = []string{
-	"activity", "announcements", "assets", "eod", "market_holidays",
-	"portfolio_measurements", "portfolio_transactions", "portfolios",
-	"profile", "reported_financials", "schema_migrations", "seeking_alpha",
-	"trading_days", "zacks_financials", "zacks_number_1",
-}
-
-// requiredLegacyTables are tables that must exist for migration to proceed.
+// requiredLegacyTables are tables that must exist in the source for migration to proceed.
 var requiredLegacyTables = []string{"eod", "assets"}
 
 func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	force, _ := cmd.Flags().GetBool("force")
+	sourceURL, _ := cmd.Flags().GetString("source")
 
-	// Gather all user input upfront before doing any work
-	dbURL := viper.GetString("db.url")
-	libraryName := viper.GetString("name")
-	libraryOwner := viper.GetString("owner")
-	needsInit := dbURL == "" || libraryName == ""
-
-	if needsInit {
-		setupForm := huh.NewForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("PostgreSQL connection URL (postgres://[user[:password]@][netloc][:port][/dbname])").
-					Value(&dbURL).
-					Validate(func(dsn string) error {
-						_, err := pgx.ParseConfig(dsn)
-						return err
-					}),
-				huh.NewInput().
-					Title("Give the library a name:").
-					Value(&libraryName),
-				huh.NewInput().
-					Title("Who owns the library?").
-					Value(&libraryOwner),
-			),
-		)
-
-		if err := setupForm.Run(); err != nil {
-			return fmt.Errorf("setup: %w", err)
-		}
+	// Connect to destination (pv-data library)
+	destURL := viper.GetString("db.url")
+	if destURL == "" {
+		return fmt.Errorf("db.url is not configured. Run 'pvdata init' first")
 	}
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	destPool, err := pgxpool.New(ctx, destURL)
 	if err != nil {
-		return fmt.Errorf("connect to database: %w", err)
+		return fmt.Errorf("connect to destination database: %w", err)
 	}
-	defer pool.Close()
+	defer destPool.Close()
+
+	// Connect to source (legacy database)
+	sourcePool, err := pgxpool.New(ctx, sourceURL)
+	if err != nil {
+		return fmt.Errorf("connect to source database: %w", err)
+	}
+	defer sourcePool.Close()
+
+	myLibrary, err := library.NewFromDB(ctx, destURL)
+	if err != nil {
+		return fmt.Errorf("load library (has 'pvdata init' been run?): %w", err)
+	}
+	defer myLibrary.Close()
 
 	// Force cleanup if requested
 	if force {
-		myLibrary, libErr := library.NewFromDB(ctx, dbURL)
-		if libErr == nil {
-			if err := cleanupLegacyMigration(ctx, pool, myLibrary); err != nil {
-				myLibrary.Close()
-
-				return fmt.Errorf("force cleanup: %w", err)
-			}
-
-			myLibrary.Close()
-		} else {
-			log.Info().Msg("library not initialized, cleaning up legacy schema only")
-
-			conn, err := pool.Acquire(ctx)
-			if err != nil {
-				return fmt.Errorf("acquire connection: %w", err)
-			}
-
-			_, _ = conn.Exec(ctx, "DROP SCHEMA IF EXISTS legacy CASCADE")
-			conn.Release()
+		if err := cleanupLegacyMigration(ctx, destPool, myLibrary); err != nil {
+			return fmt.Errorf("force cleanup: %w", err)
 		}
 	}
 
 	// Preflight checks
-	if err := preflightChecks(ctx, pool); err != nil {
+	if err := preflightChecks(ctx, sourcePool, destPool); err != nil {
 		return err
 	}
 
@@ -129,26 +92,7 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Step 1: Move legacy tables to legacy schema (must happen before
-	// db.Migrate because the legacy schema_migrations table conflicts)
-	if err := moveToLegacySchema(ctx, pool); err != nil {
-		return fmt.Errorf("move tables to legacy schema: %w", err)
-	}
-
-	// Step 2: Initialize pv-data library
-	myLibrary, err := initLibrary(ctx, dbURL, libraryName, libraryOwner)
-	if err != nil {
-		log.Error().Err(err).Msg("library init failed, attempting to restore legacy tables")
-
-		if restoreErr := restoreLegacySchema(ctx, pool); restoreErr != nil {
-			log.Error().Err(restoreErr).Msg("could not restore legacy tables")
-		}
-
-		return fmt.Errorf("library init: %w", err)
-	}
-	defer myLibrary.Close()
-
-	// Step 3: Run the data migration with progress UI
+	// Run the migration with progress UI
 	progressCh := make(chan progressMsg, 100)
 
 	var migrationErr error
@@ -156,7 +100,7 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	go func() {
 		defer close(progressCh)
 
-		migrationErr = executeMigration(ctx, pool, myLibrary, progressCh)
+		migrationErr = executeMigration(ctx, sourcePool, destPool, myLibrary, progressCh)
 	}()
 
 	model := newMigrationModel(progressCh)
@@ -169,40 +113,62 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	return migrationErr
 }
 
-func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
-	conn, err := pool.Acquire(ctx)
+func preflightChecks(ctx context.Context, sourcePool, destPool *pgxpool.Pool) error {
+	// Check source has required legacy tables
+	sourceConn, err := sourcePool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
+		return fmt.Errorf("acquire source connection: %w", err)
 	}
-	defer conn.Release()
+	defer sourceConn.Release()
 
-	// Check that legacy schema does not already exist
-	var schemaExists bool
-
-	err = conn.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'legacy')`).Scan(&schemaExists)
-	if err != nil {
-		return fmt.Errorf("check legacy schema: %w", err)
-	}
-
-	if schemaExists {
-		return fmt.Errorf("legacy schema already exists. Use --force to clean up a failed prior run")
-	}
-
-	// Check that required legacy tables exist in public
 	for _, tbl := range requiredLegacyTables {
 		var exists bool
 
-		err = conn.QueryRow(ctx,
+		err = sourceConn.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
 			tbl).Scan(&exists)
 		if err != nil {
-			return fmt.Errorf("check table %s: %w", tbl, err)
+			return fmt.Errorf("check source table %s: %w", tbl, err)
 		}
 
 		if !exists {
-			return fmt.Errorf("required legacy table %q not found in public schema", tbl)
+			return fmt.Errorf("required table %q not found in source database", tbl)
 		}
+	}
+
+	// Check destination has pv-data tables
+	destConn, err := destPool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire destination connection: %w", err)
+	}
+	defer destConn.Release()
+
+	for _, tbl := range []string{"subscriptions", "published_views"} {
+		var exists bool
+
+		err = destConn.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
+			tbl).Scan(&exists)
+		if err != nil {
+			return fmt.Errorf("check destination table %s: %w", tbl, err)
+		}
+
+		if !exists {
+			return fmt.Errorf("pv-data table %q not found in destination. Run 'pvdata init' first", tbl)
+		}
+	}
+
+	// Check no legacy subscriptions already exist in destination
+	var legacySubCount int
+
+	err = destConn.QueryRow(ctx,
+		`SELECT count(*) FROM subscriptions WHERE provider = 'legacy'`).Scan(&legacySubCount)
+	if err != nil {
+		return fmt.Errorf("check legacy subscriptions: %w", err)
+	}
+
+	if legacySubCount > 0 {
+		return fmt.Errorf("subscriptions with provider 'legacy' already exist. Use --force to clean up")
 	}
 
 	log.Info().Msg("preflight checks passed")
@@ -210,14 +176,8 @@ func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func cleanupLegacyMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *library.Library) error {
+func cleanupLegacyMigration(ctx context.Context, destPool *pgxpool.Pool, myLibrary *library.Library) error {
 	log.Info().Msg("cleaning up previous legacy migration...")
-
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
-	}
-	defer conn.Release()
 
 	// Delete legacy subscriptions and their tables
 	subs, err := myLibrary.Subscriptions(ctx)
@@ -231,7 +191,7 @@ func cleanupLegacyMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *
 			for _, dataTypeKey := range sub.DataTypes {
 				dt := data.DataTypes[dataTypeKey]
 				if dt != nil && dt.ViewName != "" {
-					if err := library.DeletePublishedView(ctx, pool, dt.ViewName); err != nil {
+					if err := library.DeletePublishedView(ctx, destPool, dt.ViewName); err != nil {
 						log.Warn().Err(err).Str("ViewName", dt.ViewName).Msg("could not delete published view")
 					}
 				}
@@ -245,61 +205,20 @@ func cleanupLegacyMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *
 		}
 	}
 
-	// Move tables back from legacy schema to public if legacy schema exists
-	var schemaExists bool
-
-	err = conn.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'legacy')`).Scan(&schemaExists)
-	if err != nil {
-		return err
-	}
-
-	if schemaExists {
-		// Get all tables in legacy schema
-		rows, err := conn.Query(ctx,
-			`SELECT table_name FROM information_schema.tables WHERE table_schema = 'legacy'`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		var tables []string
-
-		for rows.Next() {
-			var tbl string
-			if err := rows.Scan(&tbl); err != nil {
-				return err
-			}
-
-			tables = append(tables, tbl)
-		}
-
-		for _, tbl := range tables {
-			_, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE legacy.%s SET SCHEMA public", tbl))
-			if err != nil {
-				log.Warn().Err(err).Str("Table", tbl).Msg("could not move table back to public")
-			}
-		}
-
-		_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS legacy")
-		if err != nil {
-			return fmt.Errorf("drop legacy schema: %w", err)
-		}
-	}
-
 	log.Info().Msg("cleanup complete")
 
 	return nil
 }
 
-func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *library.Library, progressCh chan<- progressMsg) error {
-	conn, err := pool.Acquire(ctx)
+func executeMigration(ctx context.Context, sourcePool, destPool *pgxpool.Pool, myLibrary *library.Library, progressCh chan<- progressMsg) error {
+	// All writes go to destination in a transaction
+	destConn, err := destPool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
+		return fmt.Errorf("acquire destination connection: %w", err)
 	}
-	defer conn.Release()
+	defer destConn.Release()
 
-	tx, err := conn.Begin(ctx)
+	tx, err := destConn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -312,18 +231,12 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 		}
 	}()
 
-	// Schema move and library init already done by runMigrateLegacy.
-	// Send the progress message for those completed steps.
-	progressCh <- progressMsg{step: "Moved tables to legacy schema", done: true}
-
-	progressCh <- progressMsg{step: "Initialized library", done: true}
-
-	// Step 1: Validate composite_figi lengths
-	if err := validateCompositeFigi(ctx, tx); err != nil {
+	// Validate composite_figi lengths in source
+	if err := validateCompositeFigi(ctx, sourcePool); err != nil {
 		return fmt.Errorf("validate composite_figi: %w", err)
 	}
 
-	// Step 3: Create subscriptions
+	// Create subscriptions in destination
 	subs, err := createLegacySubscriptions(ctx, tx, myLibrary)
 	if err != nil {
 		return fmt.Errorf("create subscriptions: %w", err)
@@ -331,12 +244,12 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 
 	progressCh <- progressMsg{step: "Created subscriptions", done: true}
 
-	// Step 4: Copy and transform data
-	if err := copyData(ctx, tx, subs, progressCh); err != nil {
+	// Copy and transform data from source to destination
+	if err := copyData(ctx, sourcePool, tx, subs, progressCh); err != nil {
 		return fmt.Errorf("copy data: %w", err)
 	}
 
-	// Step 5: Update subscription metadata
+	// Update subscription metadata
 	if err := updateSubscriptionMetadata(ctx, tx, subs); err != nil {
 		return fmt.Errorf("update metadata: %w", err)
 	}
@@ -353,152 +266,19 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 	return nil
 }
 
-func moveToLegacySchema(ctx context.Context, pool *pgxpool.Pool) error {
-	log.Info().Msg("creating legacy schema and moving tables...")
-
-	conn, err := pool.Acquire(ctx)
+func validateCompositeFigi(ctx context.Context, sourcePool *pgxpool.Pool) error {
+	sourceConn, err := sourcePool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
+		return err
 	}
-	defer conn.Release()
+	defer sourceConn.Release()
 
-	if _, err := conn.Exec(ctx, "CREATE SCHEMA legacy"); err != nil {
-		return fmt.Errorf("create schema: %w", err)
-	}
-
-	for _, tbl := range legacyTables {
-		// Check if table exists before trying to move it
+	for _, tbl := range []string{"eod", "zacks_financials"} {
 		var exists bool
 
-		err := conn.QueryRow(ctx,
+		err := sourceConn.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
 			tbl).Scan(&exists)
-		if err != nil {
-			return fmt.Errorf("check table %s: %w", tbl, err)
-		}
-
-		if exists {
-			if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE public.%s SET SCHEMA legacy", tbl)); err != nil {
-				return fmt.Errorf("move table %s: %w", tbl, err)
-			}
-
-			log.Info().Str("Table", tbl).Msg("moved to legacy schema")
-		} else {
-			log.Warn().Str("Table", tbl).Msg("table not found, skipping")
-		}
-	}
-
-	return nil
-}
-
-func restoreLegacySchema(ctx context.Context, pool *pgxpool.Pool) error {
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Release()
-
-	rows, err := conn.Query(ctx,
-		`SELECT table_name FROM information_schema.tables WHERE table_schema = 'legacy'`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	var tables []string
-
-	for rows.Next() {
-		var tbl string
-		if err := rows.Scan(&tbl); err != nil {
-			return err
-		}
-
-		tables = append(tables, tbl)
-	}
-
-	for _, tbl := range tables {
-		if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE legacy.%s SET SCHEMA public", tbl)); err != nil {
-			log.Warn().Err(err).Str("Table", tbl).Msg("could not restore table")
-		}
-	}
-
-	_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS legacy")
-
-	return err
-}
-
-// initLibrary runs database migrations, saves the library record, and writes
-// the config file. User input (name, owner) is gathered upfront by the caller.
-func initLibrary(ctx context.Context, dbURL, name, owner string) (*library.Library, error) {
-	// Run database migrations
-	migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
-
-	if err := db.Migrate(migrateURL); err != nil {
-		return nil, fmt.Errorf("database migration: %w", err)
-	}
-
-	myLibrary := &library.Library{
-		DBUrl: dbURL,
-		Name:  name,
-		Owner: owner,
-	}
-
-	// Connect and save library record
-	if err := myLibrary.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
-	}
-
-	if err := myLibrary.SaveDB(ctx); err != nil {
-		myLibrary.Close()
-
-		return nil, fmt.Errorf("save library: %w", err)
-	}
-
-	// Save config file
-	home, err := os.UserHomeDir()
-	if err != nil {
-		myLibrary.Close()
-
-		return nil, fmt.Errorf("user home dir: %w", err)
-	}
-
-	configFN := filepath.Join(home, ".pvdata.toml")
-
-	configMap := map[string]any{
-		"name":  myLibrary.Name,
-		"owner": myLibrary.Owner,
-		"db": map[string]any{
-			"url": dbURL,
-		},
-	}
-
-	configData, err := toml.Marshal(configMap)
-	if err != nil {
-		myLibrary.Close()
-
-		return nil, fmt.Errorf("marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configFN, configData, 0644); err != nil {
-		myLibrary.Close()
-
-		return nil, fmt.Errorf("write config to %s: %w", configFN, err)
-	}
-
-	log.Info().Str("ConfigFile", configFN).Msg("saved config file")
-
-	return myLibrary, nil
-}
-
-func validateCompositeFigi(ctx context.Context, tx pgx.Tx) error {
-	tables := []string{"legacy.eod", "legacy.zacks_financials"}
-
-	for _, tbl := range tables {
-		var exists bool
-
-		err := tx.QueryRow(ctx,
-			fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'legacy' AND table_name = '%s')`,
-				tbl[len("legacy."):])).Scan(&exists)
 		if err != nil {
 			return err
 		}
@@ -509,7 +289,7 @@ func validateCompositeFigi(ctx context.Context, tx pgx.Tx) error {
 
 		var badCount int
 
-		err = tx.QueryRow(ctx,
+		err = sourceConn.QueryRow(ctx,
 			fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE LENGTH(TRIM(composite_figi)) != 12`, tbl)).Scan(&badCount)
 		if err != nil {
 			return fmt.Errorf("validate composite_figi in %s: %w", tbl, err)
@@ -559,7 +339,6 @@ func createLegacySubscriptions(ctx context.Context, tx pgx.Tx, myLibrary *librar
 			Config:    map[string]string{},
 			DataTypes: d.dataTypes,
 			Library:   myLibrary,
-			// active defaults to true in DB; updateSubscriptionMetadata sets it to false
 		}
 		sub.ComputeTableNames()
 
@@ -574,178 +353,338 @@ func createLegacySubscriptions(ctx context.Context, tx pgx.Tx, myLibrary *librar
 	return subs, nil
 }
 
-func copyData(ctx context.Context, tx pgx.Tx, subs *legacySubscriptions, progressCh chan<- progressMsg) error {
+// copyData reads from sourcePool and writes to tx (destination).
+// For tables with event_date, it batches by year for progress reporting.
+func copyData(ctx context.Context, sourcePool *pgxpool.Pool, tx pgx.Tx, subs *legacySubscriptions, progressCh chan<- progressMsg) error {
 	log.Info().Msg("copying and transforming data...")
 
-	// EOD -- batch by year for progress
+	sourceConn, err := sourcePool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire source connection: %w", err)
+	}
+	defer sourceConn.Release()
+
+	// EOD -- batch by year
 	eodTable := subs.eod.DataTablesMap[data.EODKey]
 	if eodTable != "" {
-		var totalCount int64
-
-		if err := tx.QueryRow(ctx,
-			`SELECT COUNT(*) FROM legacy.eod WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalCount); err != nil {
-			return fmt.Errorf("count eod: %w", err)
+		if err := copyEodByYear(ctx, sourceConn, tx, eodTable, progressCh); err != nil {
+			return err
 		}
-
-		var minYear, maxYear int
-
-		if err := tx.QueryRow(ctx,
-			`SELECT COALESCE(EXTRACT(YEAR FROM MIN(event_date))::int, 0), COALESCE(EXTRACT(YEAR FROM MAX(event_date))::int, 0) FROM legacy.eod`).Scan(&minYear, &maxYear); err != nil {
-			return fmt.Errorf("eod date range: %w", err)
-		}
-
-		var copiedRows int64
-
-		for year := minYear; year <= maxYear; year++ {
-			result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, open, high, low, close, adj_close, volume, dividend, split_factor)
-SELECT ticker, TRIM(composite_figi), event_date, open, high, low, close, COALESCE(adj_close, close), volume, dividend, split_factor
-FROM legacy.eod
-WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_date < '%d-01-01'`, eodTable, year, year+1))
-			if err != nil {
-				return fmt.Errorf("copy eod year %d: %w", year, err)
-			}
-
-			copiedRows += result.RowsAffected()
-
-			progressCh <- progressMsg{step: "EOD data", current: copiedRows, total: totalCount}
-		}
-
-		progressCh <- progressMsg{step: "EOD data", current: copiedRows, done: true}
 	}
 
-	// Assets
+	// Assets -- single copy
 	assetsTable := subs.assets.DataTablesMap[data.AssetKey]
 	if assetsTable != "" {
-		result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, share_class_figi, primary_exchange, asset_type, active, name, description, corporate_url, sector, industry, cik, cusips, isins, other_identifiers, similar_tickers, tags, listed, delisted, last_updated)
-SELECT ticker, composite_figi, share_class_figi, primary_exchange,
-  CASE asset_type
-    WHEN 'Common Stock' THEN 'CS'
-    WHEN 'Preferred Stock' THEN 'PS'
-    WHEN 'Exchange Traded Fund' THEN 'ETF'
-    WHEN 'Exchange Traded Note' THEN 'ETN'
-    WHEN 'Mutual Fund' THEN 'MF'
-    WHEN 'Closed-End Fund' THEN 'CEF'
-    WHEN 'American Depository Receipt Common' THEN 'ADRC'
-    WHEN 'FRED' THEN 'FRED'
-    WHEN 'Synthetic History' THEN 'SYNTH'
-  END::assettype,
-  active, name, description, corporate_url, sector, industry, cik,
-  CASE WHEN cusip IS NOT NULL THEN ARRAY[TRIM(cusip)] ELSE '{}' END,
-  CASE WHEN isin IS NOT NULL THEN ARRAY[TRIM(isin)] ELSE '{}' END,
-  '{}'::jsonb,
-  similar_tickers, tags, listed_utc, delisted_utc, last_updated_utc
-FROM legacy.assets`, assetsTable))
-		if err != nil {
-			return fmt.Errorf("copy assets: %w", err)
+		if err := copyAssets(ctx, sourceConn, tx, assetsTable, progressCh); err != nil {
+			return err
 		}
-
-		progressCh <- progressMsg{step: "Assets", current: result.RowsAffected(), done: true}
 	}
 
-	// Market Holidays (optional -- table may not exist in legacy DB)
-	if exists, _ := legacyTableExists(ctx, tx, "market_holidays"); exists {
+	// Market Holidays
+	if exists, _ := sourceTableExists(ctx, sourceConn, "market_holidays"); exists {
 		mhTable := subs.marketHolidays.DataTablesMap[data.MarketHolidaysKey]
 		if mhTable != "" {
-			result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (holiday, event_date, market, early_close, close_time)
-SELECT holiday, event_date, market, early_close, close_time
-FROM legacy.market_holidays`, mhTable))
-			if err != nil {
-				return fmt.Errorf("copy market_holidays: %w", err)
+			if err := copyMarketHolidays(ctx, sourceConn, tx, mhTable, progressCh); err != nil {
+				return err
 			}
-
-			progressCh <- progressMsg{step: "Market holidays", current: result.RowsAffected(), done: true}
 		}
 	} else {
-		log.Warn().Msg("legacy.market_holidays not found, skipping")
+		log.Warn().Msg("market_holidays not found in source, skipping")
 	}
 
-	// Zacks (optional -- table may not exist in legacy DB)
-	if exists, _ := legacyTableExists(ctx, tx, "zacks_financials"); exists {
-		if err := copyZacksRatings(ctx, tx, subs.zacks, progressCh); err != nil {
+	// Zacks
+	if exists, _ := sourceTableExists(ctx, sourceConn, "zacks_financials"); exists {
+		if err := copyZacksRatings(ctx, sourceConn, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 
-		if err := copyZacksMetrics(ctx, tx, subs.zacks, progressCh); err != nil {
+		if err := copyZacksMetrics(ctx, sourceConn, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 
-		if err := copyZacksEstimates(ctx, tx, subs.zacks, progressCh); err != nil {
+		if err := copyZacksEstimates(ctx, sourceConn, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 
-		if err := copyZacksConsensus(ctx, tx, subs.zacks, progressCh); err != nil {
+		if err := copyZacksConsensus(ctx, sourceConn, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 	} else {
-		log.Warn().Msg("legacy.zacks_financials not found, skipping")
+		log.Warn().Msg("zacks_financials not found in source, skipping")
 	}
 
 	return nil
 }
 
-func legacyTableExists(ctx context.Context, tx pgx.Tx, tableName string) (bool, error) {
+func sourceTableExists(ctx context.Context, conn *pgxpool.Conn, tableName string) (bool, error) {
 	var exists bool
 
-	err := tx.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'legacy' AND table_name = $1)`,
+	err := conn.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
 		tableName).Scan(&exists)
 
 	return exists, err
 }
 
-func copyZacksRatings(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
+// copyEodByYear reads EOD data from source year-by-year and inserts into destination.
+func copyEodByYear(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, destTable string, progressCh chan<- progressMsg) error {
+	var totalCount int64
+
+	if err := sourceConn.QueryRow(ctx,
+		`SELECT COUNT(*) FROM eod WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalCount); err != nil {
+		return fmt.Errorf("count eod: %w", err)
+	}
+
+	var minYear, maxYear int
+
+	if err := sourceConn.QueryRow(ctx,
+		`SELECT COALESCE(EXTRACT(YEAR FROM MIN(event_date))::int, 0), COALESCE(EXTRACT(YEAR FROM MAX(event_date))::int, 0) FROM eod`).Scan(&minYear, &maxYear); err != nil {
+		return fmt.Errorf("eod date range: %w", err)
+	}
+
+	if totalCount == 0 {
+		progressCh <- progressMsg{step: "EOD data", current: 0, done: true}
+
+		return nil
+	}
+
+	var copiedRows int64
+
+	for year := minYear; year <= maxYear; year++ {
+		rows, err := sourceConn.Query(ctx,
+			fmt.Sprintf(`SELECT ticker, TRIM(composite_figi), event_date, open, high, low, close, COALESCE(adj_close, close), volume, dividend, split_factor
+FROM eod WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_date < '%d-01-01'`, year, year+1))
+		if err != nil {
+			return fmt.Errorf("read eod year %d: %w", year, err)
+		}
+
+		for rows.Next() {
+			var (
+				ticker, figi                                            string
+				eventDate                                               time.Time
+				open, high, low, close, adjClose, dividend, splitFactor float64
+				volume                                                  int64
+			)
+
+			if err := rows.Scan(&ticker, &figi, &eventDate, &open, &high, &low, &close, &adjClose, &volume, &dividend, &splitFactor); err != nil {
+				rows.Close()
+
+				return fmt.Errorf("scan eod row: %w", err)
+			}
+
+			_, err := tx.Exec(ctx,
+				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, open, high, low, close, adj_close, volume, dividend, split_factor)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, destTable),
+				ticker, figi, eventDate, open, high, low, close, adjClose, volume, dividend, splitFactor)
+			if err != nil {
+				rows.Close()
+
+				return fmt.Errorf("insert eod row: %w", err)
+			}
+
+			copiedRows++
+		}
+
+		rows.Close()
+
+		progressCh <- progressMsg{step: "EOD data", current: copiedRows, total: totalCount}
+	}
+
+	progressCh <- progressMsg{step: "EOD data", current: copiedRows, done: true}
+
+	return nil
+}
+
+func copyAssets(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, destTable string, progressCh chan<- progressMsg) error {
+	rows, err := sourceConn.Query(ctx,
+		`SELECT ticker, composite_figi, share_class_figi, primary_exchange,
+  asset_type, active, name, description, corporate_url, sector, industry, cik,
+  cusip, isin, similar_tickers, tags, listed_utc, delisted_utc, last_updated_utc
+FROM assets`)
+	if err != nil {
+		return fmt.Errorf("read assets: %w", err)
+	}
+	defer rows.Close()
+
+	assetTypeMap := map[string]string{
+		"Common Stock":                       "CS",
+		"Preferred Stock":                    "PS",
+		"Exchange Traded Fund":               "ETF",
+		"Exchange Traded Note":               "ETN",
+		"Mutual Fund":                        "MF",
+		"Closed-End Fund":                    "CEF",
+		"American Depository Receipt Common": "ADRC",
+		"FRED":                               "FRED",
+		"Synthetic History":                  "SYNTH",
+	}
+
+	var count int64
+
+	for rows.Next() {
+		var (
+			ticker, figi                                                                                                    string
+			shareClassFigi, primaryExchange, assetType, name, description, corporateUrl, sector, industry, cik, cusip, isin *string
+			active                                                                                                          *bool
+			similarTickers, tags                                                                                            []string
+			listed, delisted, lastUpdated                                                                                   *time.Time
+		)
+
+		if err := rows.Scan(&ticker, &figi, &shareClassFigi, &primaryExchange,
+			&assetType, &active, &name, &description, &corporateUrl, &sector, &industry, &cik,
+			&cusip, &isin, &similarTickers, &tags, &listed, &delisted, &lastUpdated); err != nil {
+			return fmt.Errorf("scan asset row: %w", err)
+		}
+
+		// Map asset type
+		var mappedType *string
+
+		if assetType != nil {
+			if mapped, ok := assetTypeMap[*assetType]; ok {
+				mappedType = &mapped
+			}
+		}
+
+		// Convert cusip/isin to arrays
+		var cusips, isins []string
+		if cusip != nil {
+			cusips = []string{strings.TrimSpace(*cusip)}
+		}
+
+		if isin != nil {
+			isins = []string{strings.TrimSpace(*isin)}
+		}
+
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, share_class_figi, primary_exchange, asset_type, active, name, description, corporate_url, sector, industry, cik, cusips, isins, other_identifiers, similar_tickers, tags, listed, delisted, last_updated)
+VALUES ($1, $2, $3, $4, $5::assettype, $6, $7, $8, $9, $10, $11, $12, $13, $14, '{}'::jsonb, $15, $16, $17, $18, $19)`, destTable),
+			ticker, figi, shareClassFigi, primaryExchange, mappedType, active, name, description, corporateUrl, sector, industry, cik, cusips, isins, similarTickers, tags, listed, delisted, lastUpdated)
+		if err != nil {
+			return fmt.Errorf("insert asset row: %w", err)
+		}
+
+		count++
+	}
+
+	progressCh <- progressMsg{step: "Assets", current: count, done: true}
+
+	return nil
+}
+
+func copyMarketHolidays(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, destTable string, progressCh chan<- progressMsg) error {
+	rows, err := sourceConn.Query(ctx, `SELECT holiday, event_date, market, early_close, close_time FROM market_holidays`)
+	if err != nil {
+		return fmt.Errorf("read market_holidays: %w", err)
+	}
+	defer rows.Close()
+
+	var count int64
+
+	for rows.Next() {
+		var (
+			holiday, market string
+			eventDate       time.Time
+			earlyClose      bool
+			closeTime       time.Time
+		)
+
+		if err := rows.Scan(&holiday, &eventDate, &market, &earlyClose, &closeTime); err != nil {
+			return fmt.Errorf("scan market_holidays row: %w", err)
+		}
+
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(`INSERT INTO %s (holiday, event_date, market, early_close, close_time) VALUES ($1, $2, $3, $4, $5)`, destTable),
+			holiday, eventDate, market, earlyClose, closeTime)
+		if err != nil {
+			return fmt.Errorf("insert market_holidays row: %w", err)
+		}
+
+		count++
+	}
+
+	progressCh <- progressMsg{step: "Market holidays", current: count, done: true}
+
+	return nil
+}
+
+func copyZacksRatings(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.RatingKey]
 	if tbl == "" {
 		return nil
 	}
 
-	ratingQueries := []struct {
-		analyst string
-		sql     string
-	}{
-		{"zacks-rank", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, analyst, rating)
-SELECT ticker, TRIM(composite_figi), event_date, 'zacks-rank', zacks_rank
-FROM legacy.zacks_financials
-WHERE zacks_rank IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"zacks-value", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, analyst, rating)
-SELECT ticker, TRIM(composite_figi), event_date, 'zacks-value',
-  CASE TRIM(value_score) WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 WHEN 'F' THEN 5 END
-FROM legacy.zacks_financials
-WHERE TRIM(value_score) IN ('A','B','C','D','F') AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"zacks-growth", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, analyst, rating)
-SELECT ticker, TRIM(composite_figi), event_date, 'zacks-growth',
-  CASE TRIM(growth_score) WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 WHEN 'F' THEN 5 END
-FROM legacy.zacks_financials
-WHERE TRIM(growth_score) IN ('A','B','C','D','F') AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"zacks-momentum", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, analyst, rating)
-SELECT ticker, TRIM(composite_figi), event_date, 'zacks-momentum',
-  CASE TRIM(momentum_score) WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 WHEN 'F' THEN 5 END
-FROM legacy.zacks_financials
-WHERE TRIM(momentum_score) IN ('A','B','C','D','F') AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"zacks-vgm", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, analyst, rating)
-SELECT ticker, TRIM(composite_figi), event_date, 'zacks-vgm',
-  CASE TRIM(vgm_score) WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 WHEN 'F' THEN 5 END
-FROM legacy.zacks_financials
-WHERE TRIM(vgm_score) IN ('A','B','C','D','F') AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
+	letterGradeToInt := map[string]int{
+		"A": 1, "B": 2, "C": 3, "D": 4, "F": 5,
 	}
 
-	var totalRows int64
+	rows, err := sourceConn.Query(ctx,
+		`SELECT ticker, TRIM(composite_figi), event_date, zacks_rank,
+  TRIM(value_score), TRIM(growth_score), TRIM(momentum_score), TRIM(vgm_score)
+FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
+	if err != nil {
+		return fmt.Errorf("read zacks ratings: %w", err)
+	}
+	defer rows.Close()
 
-	for _, q := range ratingQueries {
-		result, err := tx.Exec(ctx, q.sql)
-		if err != nil {
-			return fmt.Errorf("copy zacks rating %s: %w", q.analyst, err)
+	var count int64
+
+	for rows.Next() {
+		var (
+			ticker, figi                                     string
+			eventDate                                        time.Time
+			zacksRank                                        *int
+			valueScore, growthScore, momentumScore, vgmScore *string
+		)
+
+		if err := rows.Scan(&ticker, &figi, &eventDate, &zacksRank,
+			&valueScore, &growthScore, &momentumScore, &vgmScore); err != nil {
+			return fmt.Errorf("scan zacks rating row: %w", err)
 		}
 
-		totalRows += result.RowsAffected()
+		type ratingEntry struct {
+			analyst string
+			rating  int
+		}
+
+		var entries []ratingEntry
+
+		if zacksRank != nil {
+			entries = append(entries, ratingEntry{"zacks-rank", *zacksRank})
+		}
+
+		for _, pair := range []struct {
+			analyst string
+			score   *string
+		}{
+			{"zacks-value", valueScore},
+			{"zacks-growth", growthScore},
+			{"zacks-momentum", momentumScore},
+			{"zacks-vgm", vgmScore},
+		} {
+			if pair.score != nil {
+				if val, ok := letterGradeToInt[*pair.score]; ok {
+					entries = append(entries, ratingEntry{pair.analyst, val})
+				}
+			}
+		}
+
+		for _, e := range entries {
+			_, err := tx.Exec(ctx,
+				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, analyst, rating) VALUES ($1, $2, $3, $4, $5)`, tbl),
+				ticker, figi, eventDate, e.analyst, e.rating)
+			if err != nil {
+				return fmt.Errorf("insert zacks rating: %w", err)
+			}
+
+			count++
+		}
 	}
 
-	progressCh <- progressMsg{step: "Zacks ratings", current: totalRows, done: true}
+	progressCh <- progressMsg{step: "Zacks ratings", current: count, done: true}
 
 	return nil
 }
 
-func copyZacksMetrics(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
+func copyZacksMetrics(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.MetricKey]
 	if tbl == "" {
 		return nil
@@ -753,33 +692,66 @@ func copyZacksMetrics(ctx context.Context, tx pgx.Tx, sub *library.Subscription,
 
 	var totalCount int64
 
-	if err := tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM legacy.zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalCount); err != nil {
+	if err := sourceConn.QueryRow(ctx,
+		`SELECT COUNT(*) FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalCount); err != nil {
 		return fmt.Errorf("count zacks metrics: %w", err)
 	}
 
 	var minYear, maxYear int
 
-	if err := tx.QueryRow(ctx,
-		`SELECT COALESCE(EXTRACT(YEAR FROM MIN(event_date))::int, 0), COALESCE(EXTRACT(YEAR FROM MAX(event_date))::int, 0) FROM legacy.zacks_financials`).Scan(&minYear, &maxYear); err != nil {
+	if err := sourceConn.QueryRow(ctx,
+		`SELECT COALESCE(EXTRACT(YEAR FROM MIN(event_date))::int, 0), COALESCE(EXTRACT(YEAR FROM MAX(event_date))::int, 0) FROM zacks_financials`).Scan(&minYear, &maxYear); err != nil {
 		return fmt.Errorf("zacks date range: %w", err)
+	}
+
+	if totalCount == 0 {
+		progressCh <- progressMsg{step: "Zacks metrics", current: 0, done: true}
+
+		return nil
 	}
 
 	var copiedRows int64
 
 	for year := minYear; year <= maxYear; year++ {
-		result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, market_cap, ev, pe, pb, ps, ev_ebit, ev_ebitda, pe_forward, peg, price_to_cash_flow, beta)
-SELECT ticker, TRIM(composite_figi), event_date,
-  COALESCE(market_cap_mil, 0) * 1000000, 0,
-  COALESCE(pe_trailing_12_months, 0), COALESCE(price_to_book, 0), COALESCE(price_to_sales, 0),
-  0, 0, COALESCE(pe_f1, 0), COALESCE(peg_ratio, 0), COALESCE(price_to_cash_flow, 0), COALESCE(beta, 0)
-FROM legacy.zacks_financials
-WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_date < '%d-01-01'`, tbl, year, year+1))
+		rows, err := sourceConn.Query(ctx,
+			fmt.Sprintf(`SELECT ticker, TRIM(composite_figi), event_date,
+  COALESCE(market_cap_mil, 0), COALESCE(pe_trailing_12_months, 0),
+  COALESCE(price_to_book, 0), COALESCE(price_to_sales, 0),
+  COALESCE(pe_f1, 0), COALESCE(peg_ratio, 0), COALESCE(price_to_cash_flow, 0), COALESCE(beta, 0)
+FROM zacks_financials
+WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_date < '%d-01-01'`, year, year+1))
 		if err != nil {
-			return fmt.Errorf("copy zacks metrics year %d: %w", year, err)
+			return fmt.Errorf("read zacks metrics year %d: %w", year, err)
 		}
 
-		copiedRows += result.RowsAffected()
+		for rows.Next() {
+			var (
+				ticker, figi                                                    string
+				eventDate                                                       time.Time
+				marketCapMil, pe, pb, ps, peForward, peg, priceToCashFlow, beta float64
+			)
+
+			if err := rows.Scan(&ticker, &figi, &eventDate,
+				&marketCapMil, &pe, &pb, &ps, &peForward, &peg, &priceToCashFlow, &beta); err != nil {
+				rows.Close()
+
+				return fmt.Errorf("scan zacks metric row: %w", err)
+			}
+
+			_, err := tx.Exec(ctx,
+				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, market_cap, ev, pe, pb, ps, ev_ebit, ev_ebitda, pe_forward, peg, price_to_cash_flow, beta)
+VALUES ($1, $2, $3, $4, 0, $5, $6, $7, 0, 0, $8, $9, $10, $11)`, tbl),
+				ticker, figi, eventDate, int64(marketCapMil*1e6), pe, pb, ps, peForward, peg, priceToCashFlow, beta)
+			if err != nil {
+				rows.Close()
+
+				return fmt.Errorf("insert zacks metric: %w", err)
+			}
+
+			copiedRows++
+		}
+
+		rows.Close()
 
 		progressCh <- progressMsg{step: "Zacks metrics", current: copiedRows, total: totalCount}
 	}
@@ -789,118 +761,181 @@ WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_d
 	return nil
 }
 
-func copyZacksEstimates(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
+func copyZacksEstimates(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.EstimateKey]
 	if tbl == "" {
 		return nil
 	}
 
-	estimateQueries := []struct {
-		series string
-		sql    string
-	}{
-		{"eps-q0", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-q0',
-  COALESCE(q0_consensus_est_last_completed_fiscal_qtr, 0), COALESCE(number_of_analysts_in_q0_consensus, 0), 0
-FROM legacy.zacks_financials
-WHERE (q0_consensus_est_last_completed_fiscal_qtr IS NOT NULL OR number_of_analysts_in_q0_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"eps-q1", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-q1',
-  COALESCE(q1_consensus_est, 0), COALESCE(number_of_analysts_in_q1_consensus, 0), COALESCE(stdev_q1_q1_consensus_ratio, 0)
-FROM legacy.zacks_financials
-WHERE (q1_consensus_est IS NOT NULL OR number_of_analysts_in_q1_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"eps-q2", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-q2',
-  COALESCE(q2_consensus_est_next_fiscal_qtr, 0), COALESCE(number_of_analysts_in_q2_consensus, 0), COALESCE(stdev_q2_q2_consensus_ratio, 0)
-FROM legacy.zacks_financials
-WHERE (q2_consensus_est_next_fiscal_qtr IS NOT NULL OR number_of_analysts_in_q2_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		// eps-f0: number_of_analysts_in_f0_consensus is REAL in legacy, cast to int; std_dev defaults to 0
-		{"eps-f0", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-f0',
-  COALESCE(f0_consensus_est, 0), COALESCE(number_of_analysts_in_f0_consensus, 0)::int, 0
-FROM legacy.zacks_financials
-WHERE (f0_consensus_est IS NOT NULL OR number_of_analysts_in_f0_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"eps-f1", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-f1',
-  COALESCE(f1_consensus_est, 0), COALESCE(number_of_analysts_in_f1_consensus, 0), COALESCE(stdev_f1_f1_consensus_ratio, 0)
-FROM legacy.zacks_financials
-WHERE (f1_consensus_est IS NOT NULL OR number_of_analysts_in_f1_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"eps-f2", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-f2',
-  COALESCE(f2_consensus_est, 0), COALESCE(number_of_analysts_in_f2_consensus, 0), 0
-FROM legacy.zacks_financials
-WHERE (f2_consensus_est IS NOT NULL OR number_of_analysts_in_f2_consensus IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"sales-q1", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'sales-q1',
-  COALESCE(q1_consensus_sales_est_mil, 0), 0, 0
-FROM legacy.zacks_financials
-WHERE q1_consensus_sales_est_mil IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"sales-f1", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'sales-f1',
-  COALESCE(f1_consensus_sales_est_mil, 0), 0, 0
-FROM legacy.zacks_financials
-WHERE f1_consensus_sales_est_mil IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"lt-growth", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'lt-growth',
-  COALESCE(long_term_growth_consensus_est, 0), 0, 0
-FROM legacy.zacks_financials
-WHERE long_term_growth_consensus_est IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"earnings-esp", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'earnings-esp',
-  COALESCE(earnings_esp, 0), 0, 0
-FROM legacy.zacks_financials
-WHERE earnings_esp IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"eps-surprise-last", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-surprise-last',
-  COALESCE(last_eps_surprise_percent, 0), 0, 0
-FROM legacy.zacks_financials
-WHERE last_eps_surprise_percent IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"eps-surprise-prev", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-surprise-prev',
-  COALESCE(previous_eps_surprise_percent, 0), 0, 0
-FROM legacy.zacks_financials
-WHERE previous_eps_surprise_percent IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
-		{"eps-surprise-avg-4q", fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev)
-SELECT ticker, TRIM(composite_figi), event_date, 'eps-surprise-avg-4q',
-  COALESCE(avg_eps_surprise_last_4_qtrs, 0), 0, 0
-FROM legacy.zacks_financials
-WHERE avg_eps_surprise_last_4_qtrs IS NOT NULL AND LENGTH(TRIM(composite_figi)) = 12`, tbl)},
+	rows, err := sourceConn.Query(ctx,
+		`SELECT ticker, TRIM(composite_figi), event_date,
+  q0_consensus_est_last_completed_fiscal_qtr, number_of_analysts_in_q0_consensus,
+  q1_consensus_est, number_of_analysts_in_q1_consensus, stdev_q1_q1_consensus_ratio,
+  q2_consensus_est_next_fiscal_qtr, number_of_analysts_in_q2_consensus, stdev_q2_q2_consensus_ratio,
+  f0_consensus_est, number_of_analysts_in_f0_consensus,
+  f1_consensus_est, number_of_analysts_in_f1_consensus, stdev_f1_f1_consensus_ratio,
+  f2_consensus_est, number_of_analysts_in_f2_consensus,
+  q1_consensus_sales_est_mil, f1_consensus_sales_est_mil,
+  long_term_growth_consensus_est, earnings_esp,
+  last_eps_surprise_percent, previous_eps_surprise_percent, avg_eps_surprise_last_4_qtrs
+FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
+	if err != nil {
+		return fmt.Errorf("read zacks estimates: %w", err)
 	}
+	defer rows.Close()
 
-	var totalRows int64
+	var count int64
 
-	for _, q := range estimateQueries {
-		result, err := tx.Exec(ctx, q.sql)
-		if err != nil {
-			return fmt.Errorf("copy zacks estimate %s: %w", q.series, err)
+	for rows.Next() {
+		var (
+			ticker, figi                                               string
+			eventDate                                                  time.Time
+			q0Est, q1Est, q2Est, f0Est, f1Est, f2Est                   *float32
+			q0Analysts, q1Analysts, q2Analysts, f1Analysts, f2Analysts *int
+			f0Analysts                                                 *float32
+			q1Stdev, q2Stdev, f1Stdev                                  *float32
+			salesQ1, salesF1, ltGrowth, earningsEsp                    *float32
+			surpriseLast, surprisePrev, surpriseAvg4q                  *float32
+		)
+
+		if err := rows.Scan(&ticker, &figi, &eventDate,
+			&q0Est, &q0Analysts,
+			&q1Est, &q1Analysts, &q1Stdev,
+			&q2Est, &q2Analysts, &q2Stdev,
+			&f0Est, &f0Analysts,
+			&f1Est, &f1Analysts, &f1Stdev,
+			&f2Est, &f2Analysts,
+			&salesQ1, &salesF1,
+			&ltGrowth, &earningsEsp,
+			&surpriseLast, &surprisePrev, &surpriseAvg4q); err != nil {
+			return fmt.Errorf("scan zacks estimate row: %w", err)
 		}
 
-		totalRows += result.RowsAffected()
+		type estimate struct {
+			series      string
+			value       float64
+			numAnalysts int
+			stdDev      float64
+		}
+
+		var estimates []estimate
+
+		if q0Est != nil || q0Analysts != nil {
+			estimates = append(estimates, estimate{"eps-q0", float64Val(q0Est), intVal(q0Analysts), 0})
+		}
+
+		if q1Est != nil || q1Analysts != nil {
+			estimates = append(estimates, estimate{"eps-q1", float64Val(q1Est), intVal(q1Analysts), float64Val(q1Stdev)})
+		}
+
+		if q2Est != nil || q2Analysts != nil {
+			estimates = append(estimates, estimate{"eps-q2", float64Val(q2Est), intVal(q2Analysts), float64Val(q2Stdev)})
+		}
+
+		if f0Est != nil || f0Analysts != nil {
+			estimates = append(estimates, estimate{"eps-f0", float64Val(f0Est), int(float64Val(f0Analysts)), 0})
+		}
+
+		if f1Est != nil || f1Analysts != nil {
+			estimates = append(estimates, estimate{"eps-f1", float64Val(f1Est), intVal(f1Analysts), float64Val(f1Stdev)})
+		}
+
+		if f2Est != nil || f2Analysts != nil {
+			estimates = append(estimates, estimate{"eps-f2", float64Val(f2Est), intVal(f2Analysts), 0})
+		}
+
+		if salesQ1 != nil {
+			estimates = append(estimates, estimate{"sales-q1", float64Val(salesQ1), 0, 0})
+		}
+
+		if salesF1 != nil {
+			estimates = append(estimates, estimate{"sales-f1", float64Val(salesF1), 0, 0})
+		}
+
+		if ltGrowth != nil {
+			estimates = append(estimates, estimate{"lt-growth", float64Val(ltGrowth), 0, 0})
+		}
+
+		if earningsEsp != nil {
+			estimates = append(estimates, estimate{"earnings-esp", float64Val(earningsEsp), 0, 0})
+		}
+
+		if surpriseLast != nil {
+			estimates = append(estimates, estimate{"eps-surprise-last", float64Val(surpriseLast), 0, 0})
+		}
+
+		if surprisePrev != nil {
+			estimates = append(estimates, estimate{"eps-surprise-prev", float64Val(surprisePrev), 0, 0})
+		}
+
+		if surpriseAvg4q != nil {
+			estimates = append(estimates, estimate{"eps-surprise-avg-4q", float64Val(surpriseAvg4q), 0, 0})
+		}
+
+		for _, e := range estimates {
+			_, err := tx.Exec(ctx,
+				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev) VALUES ($1, $2, $3, $4, $5, $6, $7)`, tbl),
+				ticker, figi, eventDate, e.series, e.value, e.numAnalysts, e.stdDev)
+			if err != nil {
+				return fmt.Errorf("insert estimate %s: %w", e.series, err)
+			}
+
+			count++
+		}
 	}
 
-	progressCh <- progressMsg{step: "Zacks estimates", current: totalRows, done: true}
+	progressCh <- progressMsg{step: "Zacks estimates", current: count, done: true}
 
 	return nil
 }
 
-func copyZacksConsensus(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
+func copyZacksConsensus(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.ConsensusKey]
 	if tbl == "" {
 		return nil
 	}
 
-	result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, avg_recommendation, num_analysts, num_strong_buy_or_buy, num_hold, num_sell_or_strong_sell, num_upgrades, num_downgrades, avg_target_price)
-SELECT ticker, TRIM(composite_figi), event_date,
+	rows, err := sourceConn.Query(ctx,
+		`SELECT ticker, TRIM(composite_figi), event_date,
   current_avg_broker_rec, num_brokers_in_rating,
   num_rating_strong_buy_or_buy, num_rating_hold, num_rating_strong_sell_or_sell,
   number_rating_upgrades, number_rating_downgrades, average_target_price
-FROM legacy.zacks_financials
-WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`, tbl))
+FROM zacks_financials
+WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`)
 	if err != nil {
-		return fmt.Errorf("copy zacks consensus: %w", err)
+		return fmt.Errorf("read zacks consensus: %w", err)
+	}
+	defer rows.Close()
+
+	var count int64
+
+	for rows.Next() {
+		var (
+			ticker, figi                                                      string
+			eventDate                                                         time.Time
+			avgRec                                                            *float32
+			numAnalysts, numBuy, numHold, numSell, numUpgrades, numDowngrades *int
+			avgTargetPrice                                                    *float64
+		)
+
+		if err := rows.Scan(&ticker, &figi, &eventDate,
+			&avgRec, &numAnalysts, &numBuy, &numHold, &numSell,
+			&numUpgrades, &numDowngrades, &avgTargetPrice); err != nil {
+			return fmt.Errorf("scan zacks consensus row: %w", err)
+		}
+
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, avg_recommendation, num_analysts, num_strong_buy_or_buy, num_hold, num_sell_or_strong_sell, num_upgrades, num_downgrades, avg_target_price)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, tbl),
+			ticker, figi, eventDate, avgRec, numAnalysts, numBuy, numHold, numSell, numUpgrades, numDowngrades, avgTargetPrice)
+		if err != nil {
+			return fmt.Errorf("insert consensus: %w", err)
+		}
+
+		count++
 	}
 
-	progressCh <- progressMsg{step: "Zacks consensus", current: result.RowsAffected(), done: true}
+	progressCh <- progressMsg{step: "Zacks consensus", current: count, done: true}
 
 	return nil
 }
@@ -912,7 +947,6 @@ func updateSubscriptionMetadata(ctx context.Context, tx pgx.Tx, subs *legacySubs
 
 	for _, sub := range allSubs {
 		for _, tbl := range sub.DataTables {
-			// Get record count and date range
 			var count int64
 
 			err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, tbl)).Scan(&count)
@@ -924,7 +958,6 @@ func updateSubscriptionMetadata(ctx context.Context, tx pgx.Tx, subs *legacySubs
 			sub.TotalRecords += count
 		}
 
-		// Get date range from the first table that has event_date
 		for _, tbl := range sub.DataTables {
 			var hasEventDate bool
 
@@ -964,4 +997,21 @@ func updateSubscriptionMetadata(ctx context.Context, tx pgx.Tx, subs *legacySubs
 	}
 
 	return nil
+}
+
+// Helper functions for nullable value conversion
+func float64Val(v *float32) float64 {
+	if v == nil {
+		return 0
+	}
+
+	return float64(*v)
+}
+
+func intVal(v *int) int {
+	if v == nil {
+		return 0
+	}
+
+	return *v
 }
