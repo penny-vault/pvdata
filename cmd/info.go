@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/charmbracelet/glamour"
+	"charm.land/glamour/v2"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -43,8 +43,8 @@ var infoCmd = &cobra.Command{
 		}
 
 		r, _ := glamour.NewTermRenderer(
-			// detect background color and pick either the default dark or light theme
-			glamour.WithAutoStyle(),
+			// use GLAMOUR_STYLE env var, defaulting to dark theme
+			glamour.WithEnvironmentConfig(),
 			// wrap output at specific width (default is 80)
 			glamour.WithWordWrap(80),
 		)

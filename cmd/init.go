@@ -20,7 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/penny-vault/pvdata/db"
