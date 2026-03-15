@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
@@ -30,6 +31,7 @@ type migrationModel struct {
 	currentStep string
 	currentRows int64
 	totalRows   int64
+	stepStart   time.Time
 	completed   []completedStep
 	done        bool
 	width       int
@@ -47,8 +49,16 @@ func newMigrationModel(ch <-chan progressMsg) migrationModel {
 	}
 }
 
+type tickMsg time.Time
+
 func (m migrationModel) Init() tea.Cmd {
-	return m.waitForProgress()
+	return tea.Batch(m.waitForProgress(), tickCmd())
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }
 
 func (m migrationModel) waitForProgress() tea.Cmd {
@@ -97,6 +107,10 @@ func (m migrationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.waitForProgress(), cmd)
 		}
 
+		if m.currentStep != msg.step {
+			m.stepStart = time.Now()
+		}
+
 		m.currentStep = msg.step
 		m.currentRows = msg.current
 		m.totalRows = msg.total
@@ -114,6 +128,10 @@ func (m migrationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 
 		return m, tea.Quit
+
+	case tickMsg:
+		// Re-render to update ETA display
+		return m, tickCmd()
 
 	case progress.FrameMsg:
 		var cmd tea.Cmd
@@ -143,9 +161,15 @@ func (m migrationModel) View() tea.View {
 		}
 	}
 
-	// Current step with progress bar
+	// Current step with progress bar and ETA
 	if m.currentStep != "" && m.totalRows > 0 {
-		fmt.Fprintf(&b, "%s  %-25s\n", pad, m.currentStep)
+		eta := m.estimateRemaining()
+		if eta != "" {
+			fmt.Fprintf(&b, "%s  %-25s %s/%s rows  ETA: %s\n", pad, m.currentStep, formatNumber(m.currentRows), formatNumber(m.totalRows), eta)
+		} else {
+			fmt.Fprintf(&b, "%s  %-25s %s/%s rows\n", pad, m.currentStep, formatNumber(m.currentRows), formatNumber(m.totalRows))
+		}
+
 		b.WriteString(pad + "  " + m.progress.View() + "\n")
 	} else if m.currentStep != "" {
 		fmt.Fprintf(&b, "%s  %s...\n", pad, m.currentStep)
@@ -159,6 +183,31 @@ func (m migrationModel) View() tea.View {
 	}
 
 	return tea.NewView(b.String())
+}
+
+func (m migrationModel) estimateRemaining() string {
+	if m.currentRows <= 0 || m.totalRows <= 0 || m.stepStart.IsZero() {
+		return ""
+	}
+
+	elapsed := time.Since(m.stepStart)
+	if elapsed < time.Second {
+		return ""
+	}
+
+	rate := float64(m.currentRows) / elapsed.Seconds()
+	if rate <= 0 {
+		return ""
+	}
+
+	remaining := float64(m.totalRows-m.currentRows) / rate
+	eta := time.Duration(remaining) * time.Second
+
+	if eta < time.Minute {
+		return fmt.Sprintf("%ds", int(eta.Seconds()))
+	}
+
+	return fmt.Sprintf("%dm%ds", int(eta.Minutes()), int(eta.Seconds())%60)
 }
 
 func formatNumber(n int64) string {
