@@ -27,6 +27,7 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // initCmd represents the init command
@@ -35,55 +36,69 @@ var initCmd = &cobra.Command{
 	Short: "Gather database configuration and setup schema",
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
+		useConfig, _ := cmd.Flags().GetBool("from-config")
 
 		myLibrary := &library.Library{}
 
 		var openFigiAPIKey string
 
-		form := huh.NewForm(
-			// Gather details about the library and who owns it
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Give the library a name:").
-					Value(&myLibrary.Name),
+		if useConfig {
+			// Use values from existing config file
+			myLibrary.Name = viper.GetString("name")
+			myLibrary.Owner = viper.GetString("owner")
+			myLibrary.DBUrl = viper.GetString("db.url")
+			openFigiAPIKey = viper.GetString("openfigi.apikey")
 
-				huh.NewInput().
-					Title("Who owns the library?").
-					Value(&myLibrary.Owner),
-			),
+			if myLibrary.DBUrl == "" {
+				log.Fatal().Msg("db.url not found in config file")
+			}
 
-			// Get details about the database
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Provide the DSN for connecting to your PostgreSQL database (postgres://[user[:password]@][netloc][:port][/dbname][?param1=value1&...])").
-					Value(&myLibrary.DBUrl).
-					Validate(func(dsn string) error {
-						_, err := pgx.ParseConfig(dsn)
-						return err
-					}),
-			),
+			log.Info().Str("Name", myLibrary.Name).Str("Owner", myLibrary.Owner).Msg("using values from config file")
+		} else {
+			form := huh.NewForm(
+				// Gather details about the library and who owns it
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Give the library a name:").
+						Value(&myLibrary.Name),
 
-			// API keys for enrichment services
-			huh.NewGroup(
-				huh.NewInput().
-					Title("OpenFIGI API key (optional, leave blank to skip):").
-					Description("Used to enrich assets with FIGI identifiers. Get one at https://www.openfigi.com/api").
-					Value(&openFigiAPIKey),
-			),
-		)
+					huh.NewInput().
+						Title("Who owns the library?").
+						Value(&myLibrary.Owner),
+				),
 
-		err := form.Run()
-		if err != nil {
-			log.Fatal().Err(err).Msg("error gathering database settings")
+				// Get details about the database
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Provide the DSN for connecting to your PostgreSQL database (postgres://[user[:password]@][netloc][:port][/dbname][?param1=value1&...])").
+						Value(&myLibrary.DBUrl).
+						Validate(func(dsn string) error {
+							_, err := pgx.ParseConfig(dsn)
+							return err
+						}),
+				),
+
+				// API keys for enrichment services
+				huh.NewGroup(
+					huh.NewInput().
+						Title("OpenFIGI API key (optional, leave blank to skip):").
+						Description("Used to enrich assets with FIGI identifiers. Get one at https://www.openfigi.com/api").
+						Value(&openFigiAPIKey),
+				),
+			)
+
+			err := form.Run()
+			if err != nil {
+				log.Fatal().Err(err).Msg("error gathering database settings")
+			}
 		}
 
 		log.Info().Msg("creating database tables")
 
 		// run migration
-		dbURL := strings.ReplaceAll(myLibrary.DBUrl, "postgres://", "pgx5://")
+		migrateURL := strings.ReplaceAll(myLibrary.DBUrl, "postgres://", "pgx5://")
 
-		err = db.Migrate(dbURL)
-		if err != nil {
+		if err := db.Migrate(migrateURL); err != nil {
 			log.Fatal().Err(err).Msg("error running database migration")
 		}
 
@@ -96,42 +111,42 @@ var initCmd = &cobra.Command{
 		}
 		defer myLibrary.Close()
 
-		err = myLibrary.SaveDB(ctx)
-		if err != nil {
+		if err := myLibrary.SaveDB(ctx); err != nil {
 			log.Fatal().Err(err).Msg("error saving library settings to database")
 		}
 
-		// save database settings to config file
-		home, err := os.UserHomeDir()
-		if err != nil {
-			log.Fatal().Err(err).Msg("could not determine user home directory")
-		}
-
-		configFN := filepath.Join(home, ".pvdata.toml")
-		log.Info().Str("ConfigFile", configFN).Msg("Saving database connection info to config file")
-
-		configMap := map[string]any{
-			"name":  myLibrary.Name,
-			"owner": myLibrary.Owner,
-			"db": map[string]any{
-				"url": myLibrary.DBUrl,
-			},
-		}
-
-		if openFigiAPIKey != "" {
-			configMap["openfigi"] = map[string]any{
-				"apikey": openFigiAPIKey,
+		// save database settings to config file (skip if using existing config)
+		if !useConfig {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				log.Fatal().Err(err).Msg("could not determine user home directory")
 			}
-		}
 
-		configData, err := toml.Marshal(configMap)
-		if err != nil {
-			log.Fatal().Err(err).Msg("could not marshal configuration data")
-		}
+			configFN := filepath.Join(home, ".pvdata.toml")
+			log.Info().Str("ConfigFile", configFN).Msg("Saving database connection info to config file")
 
-		err = os.WriteFile(configFN, configData, 0644)
-		if err != nil {
-			log.Fatal().Err(err).Str("FileName", configFN).Msg("could not save configuration to file")
+			configMap := map[string]any{
+				"name":  myLibrary.Name,
+				"owner": myLibrary.Owner,
+				"db": map[string]any{
+					"url": myLibrary.DBUrl,
+				},
+			}
+
+			if openFigiAPIKey != "" {
+				configMap["openfigi"] = map[string]any{
+					"apikey": openFigiAPIKey,
+				}
+			}
+
+			configData, err := toml.Marshal(configMap)
+			if err != nil {
+				log.Fatal().Err(err).Msg("could not marshal configuration data")
+			}
+
+			if err := os.WriteFile(configFN, configData, 0644); err != nil {
+				log.Fatal().Err(err).Str("FileName", configFN).Msg("could not save configuration to file")
+			}
 		}
 
 		log.Info().Msg("Your data library has been initialized")
@@ -140,14 +155,5 @@ var initCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(initCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// initCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// initCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	initCmd.Flags().Bool("from-config", false, "Use values from existing .pvdata.toml instead of prompting")
 }
