@@ -188,5 +188,5 @@ The `--subscription` flag accepts a name or UUID. Resolution order: try UUID par
 
 ### New Dependencies
 
-- `github.com/parquet-go/parquet-go` -- parquet file reading
-- `github.com/klauspost/compress/zstd` -- zstandard decompression for .csv.zst files
+- `github.com/xitongsys/parquet-go` -- parquet file reading (already in go.mod)
+- `github.com/klauspost/compress/zstd` -- zstandard decompression for .csv.zst files (already a transitive dependency)
