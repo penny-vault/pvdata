@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -92,7 +94,18 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Run the migration with progress UI
+	// Redirect zerolog to a file while bubbletea is running to avoid corrupting the TUI.
+	logFile, err := os.CreateTemp("", "pvdata-migrate-*.log")
+	if err != nil {
+		return fmt.Errorf("create log file: %w", err)
+	}
+	defer logFile.Close()
+
+	prevLogger := log.Logger
+	log.Logger = zerolog.New(logFile).With().Timestamp().Logger()
+
+	log.Info().Str("LogFile", logFile.Name()).Msg("migration logs redirected to file")
+
 	progressCh := make(chan progressMsg, 100)
 
 	var migrationErr error
@@ -107,8 +120,16 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	p := tea.NewProgram(model)
 
 	if _, err := p.Run(); err != nil {
+		log.Logger = prevLogger
+
+		log.Info().Str("LogFile", logFile.Name()).Msg("migration log file")
+
 		return fmt.Errorf("TUI error: %w", err)
 	}
+
+	log.Logger = prevLogger
+
+	log.Info().Str("LogFile", logFile.Name()).Msg("migration log file")
 
 	return migrationErr
 }
