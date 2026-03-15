@@ -35,9 +35,6 @@ type migrationModel struct {
 	currentRows int64
 	totalRows   int64
 	stepStart   time.Time
-	lastRows    int64     // rows at last rate sample
-	lastSample  time.Time // time of last rate sample
-	smoothRate  float64   // exponential moving average of rows/sec
 	startTime   time.Time
 	completed   []completedStep
 	err         error
@@ -126,27 +123,6 @@ func (m migrationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.currentStep != msg.step {
 			m.stepStart = time.Now()
-			m.lastSample = time.Now()
-			m.lastRows = 0
-			m.smoothRate = 0
-		}
-
-		// Update smoothed rate using exponential moving average
-		now := time.Now()
-		dt := now.Sub(m.lastSample).Seconds()
-
-		if dt >= 0.5 && msg.current > m.lastRows {
-			instantRate := float64(msg.current-m.lastRows) / dt
-			if m.smoothRate <= 0 {
-				m.smoothRate = instantRate
-			} else {
-				const alpha = 0.3 // smoothing factor: lower = smoother
-
-				m.smoothRate = alpha*instantRate + (1-alpha)*m.smoothRate
-			}
-
-			m.lastRows = msg.current
-			m.lastSample = now
 		}
 
 		m.currentStep = msg.step
@@ -233,11 +209,17 @@ func (m migrationModel) View() tea.View {
 }
 
 func (m migrationModel) estimateRemaining() string {
-	if m.currentRows <= 0 || m.totalRows <= 0 || m.smoothRate <= 0 {
+	if m.currentRows <= 0 || m.totalRows <= 0 || m.stepStart.IsZero() {
 		return ""
 	}
 
-	remaining := float64(m.totalRows-m.currentRows) / m.smoothRate
+	elapsed := time.Since(m.stepStart).Seconds()
+	if elapsed < 2 {
+		return ""
+	}
+
+	rate := float64(m.currentRows) / elapsed
+	remaining := float64(m.totalRows-m.currentRows) / rate
 	eta := time.Duration(remaining) * time.Second
 
 	if eta < time.Minute {
