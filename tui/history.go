@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"github.com/google/uuid"
 )
 
@@ -41,7 +41,7 @@ func (m HistoryModel) Init() tea.Cmd {
 func (m HistoryModel) Update(msg tea.Msg) (HistoryModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport = viewport.New(msg.Width, msg.Height-6)
+		m.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(msg.Height-6))
 		m.ready = true
 		m.refreshContent()
 

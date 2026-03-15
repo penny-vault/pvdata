@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/charmbracelet/huh"
+	"charm.land/huh/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"

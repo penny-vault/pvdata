@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/viper"
 )
 
@@ -25,7 +25,7 @@ func (m ConfigModel) Init() tea.Cmd {
 func (m ConfigModel) Update(msg tea.Msg) (ConfigModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport = viewport.New(msg.Width, msg.Height-6)
+		m.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(msg.Height-6))
 		m.ready = true
 		m.viewport.SetContent(m.renderConfig())
 	}

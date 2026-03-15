@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/penny-vault/pvdata/library"
 )
 
@@ -74,7 +74,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Handle quit confirmation
 		if m.confirmQuit {
 			switch msg.String() {
@@ -144,9 +144,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m MainModel) View() string {
+func (m MainModel) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
 
 	var b strings.Builder
@@ -176,7 +176,10 @@ func (m MainModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.statusBar.View())
 
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+
+	return v
 }
 
 func (m MainModel) renderTabBar() string {
@@ -199,7 +202,7 @@ func Run(ctx context.Context, myLibrary *library.Library, runManager *RunManager
 
 	go runManager.RunAll(ctx)
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}

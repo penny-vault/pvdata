@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // TickMsg is sent every second to update the status bar timer.

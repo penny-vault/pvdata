@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/tui"
 	"github.com/rs/zerolog/log"
@@ -46,7 +46,7 @@ Opens a TUI for adding, removing, and editing view sources.`,
 
 		model := tui.NewPublishModel(ctx, myLibrary)
 
-		p := tea.NewProgram(model, tea.WithAltScreen())
+		p := tea.NewProgram(model)
 		if _, err := p.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

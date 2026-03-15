@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 // LogLineMsg is sent when a new log line arrives.
@@ -50,7 +50,7 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport = viewport.New(msg.Width, msg.Height-6)
+		m.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(msg.Height-6))
 		m.viewport.SetContent(strings.Join(m.lines, ""))
 		m.ready = true
 

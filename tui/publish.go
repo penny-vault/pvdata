@@ -21,10 +21,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 )
@@ -288,7 +288,7 @@ func (m PublishModel) Init() tea.Cmd {
 // Update implements tea.Model.
 func (m PublishModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Clear message on any key press
-	if _, ok := msg.(tea.KeyMsg); ok && m.message != "" {
+	if _, ok := msg.(tea.KeyPressMsg); ok && m.message != "" {
 		m.message = ""
 	}
 
@@ -325,7 +325,7 @@ func (m PublishModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m PublishModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -367,7 +367,7 @@ func (m PublishModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m PublishModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -421,7 +421,7 @@ func (m PublishModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m PublishModel) updateAddSource(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -462,7 +462,7 @@ func (m PublishModel) updateAddSource(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m PublishModel) updateEditBoundary(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -539,7 +539,7 @@ func (m PublishModel) updateEditBoundary(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m PublishModel) updateConfirmRemove(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -592,7 +592,7 @@ func (m PublishModel) updateConfirmRemove(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m PublishModel) updateNewView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -647,7 +647,7 @@ func (m PublishModel) updateNewView(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View implements tea.Model.
-func (m PublishModel) View() string {
+func (m PublishModel) View() tea.View {
 	var b strings.Builder
 
 	switch m.screen {
@@ -665,7 +665,10 @@ func (m PublishModel) View() string {
 		b.WriteString(m.viewNewView())
 	}
 
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+
+	return v
 }
 
 func (m PublishModel) viewList() string {
@@ -850,8 +853,8 @@ func (m *PublishModel) prepareEditInputs(idx int) {
 	m.fromInput = textinput.New()
 	m.fromInput.Placeholder = "YYYY-MM-DD"
 	m.fromInput.CharLimit = 10
+	m.fromInput.SetWidth(12)
 
-	m.fromInput.Width = 12
 	if source.FromDate != nil {
 		m.fromInput.SetValue(source.FromDate.Format("2006-01-02"))
 	}
@@ -859,8 +862,8 @@ func (m *PublishModel) prepareEditInputs(idx int) {
 	m.untilInput = textinput.New()
 	m.untilInput.Placeholder = "YYYY-MM-DD"
 	m.untilInput.CharLimit = 10
+	m.untilInput.SetWidth(12)
 
-	m.untilInput.Width = 12
 	if source.UntilDate != nil {
 		m.untilInput.SetValue(source.UntilDate.Format("2006-01-02"))
 	}
