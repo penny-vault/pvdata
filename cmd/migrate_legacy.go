@@ -252,6 +252,8 @@ func executeMigration(ctx context.Context, sourcePool, destPool *pgxpool.Pool, m
 		}
 	}()
 
+	progressCh <- progressMsg{step: "Creating subscriptions"}
+
 	// Validate composite_figi lengths in source
 	if err := validateCompositeFigi(ctx, sourcePool); err != nil {
 		return fmt.Errorf("validate composite_figi: %w", err)
