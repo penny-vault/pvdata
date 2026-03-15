@@ -59,23 +59,33 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	force, _ := cmd.Flags().GetBool("force")
 
-	// Get DB URL -- if not configured, ask the user
+	// Gather all user input upfront before doing any work
 	dbURL := viper.GetString("db.url")
-	if dbURL == "" {
-		dbForm := huh.NewForm(
+	libraryName := viper.GetString("name")
+	libraryOwner := viper.GetString("owner")
+	needsInit := dbURL == "" || libraryName == ""
+
+	if needsInit {
+		setupForm := huh.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
-					Title("Provide the DSN for connecting to your PostgreSQL database (postgres://[user[:password]@][netloc][:port][/dbname][?param1=value1&...])").
+					Title("PostgreSQL connection URL (postgres://[user[:password]@][netloc][:port][/dbname])").
 					Value(&dbURL).
 					Validate(func(dsn string) error {
 						_, err := pgx.ParseConfig(dsn)
 						return err
 					}),
+				huh.NewInput().
+					Title("Give the library a name:").
+					Value(&libraryName),
+				huh.NewInput().
+					Title("Who owns the library?").
+					Value(&libraryOwner),
 			),
 		)
 
-		if err := dbForm.Run(); err != nil {
-			return fmt.Errorf("db setup: %w", err)
+		if err := setupForm.Run(); err != nil {
+			return fmt.Errorf("setup: %w", err)
 		}
 	}
 
@@ -125,9 +135,8 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("move tables to legacy schema: %w", err)
 	}
 
-	// Step 2: Run pvdata init -- creates pv-data tables, asks for library
-	// name/owner, saves config file
-	myLibrary, err := initLibrary(ctx, dbURL)
+	// Step 2: Initialize pv-data library
+	myLibrary, err := initLibrary(ctx, dbURL, libraryName, libraryOwner)
 	if err != nil {
 		log.Error().Err(err).Msg("library init failed, attempting to restore legacy tables")
 
@@ -418,10 +427,9 @@ func restoreLegacySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
-// initLibrary runs database migrations, asks the user for library name/owner,
-// saves the library record, and writes the config file. This is the same as
-// 'pvdata init' but without asking for the DB URL (already known).
-func initLibrary(ctx context.Context, dbURL string) (*library.Library, error) {
+// initLibrary runs database migrations, saves the library record, and writes
+// the config file. User input (name, owner) is gathered upfront by the caller.
+func initLibrary(ctx context.Context, dbURL, name, owner string) (*library.Library, error) {
 	// Run database migrations
 	migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
 
@@ -429,22 +437,10 @@ func initLibrary(ctx context.Context, dbURL string) (*library.Library, error) {
 		return nil, fmt.Errorf("database migration: %w", err)
 	}
 
-	// Ask for library name and owner
-	myLibrary := &library.Library{DBUrl: dbURL}
-
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Give the library a name:").
-				Value(&myLibrary.Name),
-			huh.NewInput().
-				Title("Who owns the library?").
-				Value(&myLibrary.Owner),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return nil, fmt.Errorf("library setup form: %w", err)
+	myLibrary := &library.Library{
+		DBUrl: dbURL,
+		Name:  name,
+		Owner: owner,
 	}
 
 	// Connect and save library record
