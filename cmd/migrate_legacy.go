@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"strings"
-
+	"charm.land/huh/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/db"
 	"github.com/penny-vault/pvdata/library"
@@ -56,9 +59,24 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	force, _ := cmd.Flags().GetBool("force")
 
+	// Get DB URL -- if not configured, ask the user
 	dbURL := viper.GetString("db.url")
 	if dbURL == "" {
-		return fmt.Errorf("db.url is not configured")
+		dbForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Provide the DSN for connecting to your PostgreSQL database (postgres://[user[:password]@][netloc][:port][/dbname][?param1=value1&...])").
+					Value(&dbURL).
+					Validate(func(dsn string) error {
+						_, err := pgx.ParseConfig(dsn)
+						return err
+					}),
+			),
+		)
+
+		if err := dbForm.Run(); err != nil {
+			return fmt.Errorf("db setup: %w", err)
+		}
 	}
 
 	pool, err := pgxpool.New(ctx, dbURL)
@@ -67,8 +85,7 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	}
 	defer pool.Close()
 
-	// Force cleanup if requested (needs library, but library may not exist
-	// if the previous run failed partway -- handle gracefully)
+	// Force cleanup if requested
 	if force {
 		myLibrary, libErr := library.NewFromDB(ctx, dbURL)
 		if libErr == nil {
@@ -80,7 +97,6 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 
 			myLibrary.Close()
 		} else {
-			// Library tables don't exist yet, just clean up the schema
 			log.Info().Msg("library not initialized, cleaning up legacy schema only")
 
 			conn, err := pool.Acquire(ctx)
@@ -93,7 +109,7 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Preflight checks (only checks legacy tables exist, not library tables)
+	// Preflight checks
 	if err := preflightChecks(ctx, pool); err != nil {
 		return err
 	}
@@ -103,32 +119,23 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Step 1: Move legacy tables to legacy schema (outside transaction,
-	// because db.Migrate cannot run inside a transaction and the legacy
-	// schema_migrations table would conflict with pv-data's migrations)
+	// Step 1: Move legacy tables to legacy schema (must happen before
+	// db.Migrate because the legacy schema_migrations table conflicts)
 	if err := moveToLegacySchema(ctx, pool); err != nil {
 		return fmt.Errorf("move tables to legacy schema: %w", err)
 	}
 
-	// Step 2: Initialize pv-data library (run migrations to create
-	// subscriptions, published_views, etc. in the now-clean public schema)
-	migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
+	// Step 2: Run pvdata init -- creates pv-data tables, asks for library
+	// name/owner, saves config file
+	myLibrary, err := initLibrary(ctx, dbURL)
+	if err != nil {
+		log.Error().Err(err).Msg("library init failed, attempting to restore legacy tables")
 
-	if err := db.Migrate(migrateURL); err != nil {
-		// If migration fails, try to move tables back
-		log.Error().Err(err).Msg("database migration failed, attempting to restore legacy tables")
-
-		restoreErr := restoreLegacySchema(ctx, pool)
-		if restoreErr != nil {
+		if restoreErr := restoreLegacySchema(ctx, pool); restoreErr != nil {
 			log.Error().Err(restoreErr).Msg("could not restore legacy tables")
 		}
 
-		return fmt.Errorf("database migration: %w", err)
-	}
-
-	myLibrary, err := library.NewFromDB(ctx, dbURL)
-	if err != nil {
-		return fmt.Errorf("create library: %w", err)
+		return fmt.Errorf("library init: %w", err)
 	}
 	defer myLibrary.Close()
 
@@ -409,6 +416,82 @@ func restoreLegacySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS legacy")
 
 	return err
+}
+
+// initLibrary runs database migrations, asks the user for library name/owner,
+// saves the library record, and writes the config file. This is the same as
+// 'pvdata init' but without asking for the DB URL (already known).
+func initLibrary(ctx context.Context, dbURL string) (*library.Library, error) {
+	// Run database migrations
+	migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
+
+	if err := db.Migrate(migrateURL); err != nil {
+		return nil, fmt.Errorf("database migration: %w", err)
+	}
+
+	// Ask for library name and owner
+	myLibrary := &library.Library{DBUrl: dbURL}
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Give the library a name:").
+				Value(&myLibrary.Name),
+			huh.NewInput().
+				Title("Who owns the library?").
+				Value(&myLibrary.Owner),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return nil, fmt.Errorf("library setup form: %w", err)
+	}
+
+	// Connect and save library record
+	if err := myLibrary.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+
+	if err := myLibrary.SaveDB(ctx); err != nil {
+		myLibrary.Close()
+
+		return nil, fmt.Errorf("save library: %w", err)
+	}
+
+	// Save config file
+	home, err := os.UserHomeDir()
+	if err != nil {
+		myLibrary.Close()
+
+		return nil, fmt.Errorf("user home dir: %w", err)
+	}
+
+	configFN := filepath.Join(home, ".pvdata.toml")
+
+	configMap := map[string]any{
+		"name":  myLibrary.Name,
+		"owner": myLibrary.Owner,
+		"db": map[string]any{
+			"url": dbURL,
+		},
+	}
+
+	configData, err := toml.Marshal(configMap)
+	if err != nil {
+		myLibrary.Close()
+
+		return nil, fmt.Errorf("marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(configFN, configData, 0644); err != nil {
+		myLibrary.Close()
+
+		return nil, fmt.Errorf("write config to %s: %w", configFN, err)
+	}
+
+	log.Info().Str("ConfigFile", configFN).Msg("saved config file")
+
+	return myLibrary, nil
 }
 
 func validateCompositeFigi(ctx context.Context, tx pgx.Tx) error {
