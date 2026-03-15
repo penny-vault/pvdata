@@ -107,31 +107,32 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	log.Info().Str("LogFile", logFile.Name()).Msg("migration logs redirected to file")
 
 	progressCh := make(chan progressMsg, 100)
-
-	var migrationErr error
+	doneCh := make(chan error, 1)
 
 	go func() {
 		defer close(progressCh)
 
-		migrationErr = executeMigration(ctx, sourcePool, destPool, myLibrary, progressCh)
+		err := executeMigration(ctx, sourcePool, destPool, myLibrary, progressCh)
+		doneCh <- err
 	}()
 
-	model := newMigrationModel(progressCh)
+	model := newMigrationModel(progressCh, doneCh)
 	p := tea.NewProgram(model)
 
-	if _, err := p.Run(); err != nil {
-		log.Logger = prevLogger
-
-		log.Info().Str("LogFile", logFile.Name()).Msg("migration log file")
-
-		return fmt.Errorf("TUI error: %w", err)
-	}
-
+	finalModel, err := p.Run()
 	log.Logger = prevLogger
 
 	log.Info().Str("LogFile", logFile.Name()).Msg("migration log file")
 
-	return migrationErr
+	if err != nil {
+		return fmt.Errorf("TUI error: %w", err)
+	}
+
+	if m, ok := finalModel.(migrationModel); ok && m.err != nil {
+		return m.err
+	}
+
+	return nil
 }
 
 func preflightChecks(ctx context.Context, sourcePool, destPool *pgxpool.Pool) error {

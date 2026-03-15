@@ -18,7 +18,9 @@ type progressMsg struct {
 }
 
 // migrationDoneMsg is sent when the entire migration finishes.
-type migrationDoneMsg struct{}
+type migrationDoneMsg struct {
+	err error
+}
 
 type completedStep struct {
 	name string
@@ -28,6 +30,7 @@ type completedStep struct {
 type migrationModel struct {
 	progress    progress.Model
 	progressCh  <-chan progressMsg
+	doneCh      <-chan error
 	currentStep string
 	currentRows int64
 	totalRows   int64
@@ -37,6 +40,7 @@ type migrationModel struct {
 	smoothRate  float64   // exponential moving average of rows/sec
 	startTime   time.Time
 	completed   []completedStep
+	err         error
 	done        bool
 	width       int
 }
@@ -46,10 +50,11 @@ const (
 	progressMaxWidth = 72
 )
 
-func newMigrationModel(ch <-chan progressMsg) migrationModel {
+func newMigrationModel(ch <-chan progressMsg, done <-chan error) migrationModel {
 	return migrationModel{
 		progress:   progress.New(progress.WithDefaultBlend()),
 		progressCh: ch,
+		doneCh:     done,
 		startTime:  time.Now(),
 	}
 }
@@ -68,12 +73,19 @@ func tickCmd() tea.Cmd {
 
 func (m migrationModel) waitForProgress() tea.Cmd {
 	return func() tea.Msg {
-		msg, ok := <-m.progressCh
-		if !ok {
-			return migrationDoneMsg{}
-		}
+		select {
+		case msg, ok := <-m.progressCh:
+			if !ok {
+				// Channel closed -- read the error from doneCh
+				err := <-m.doneCh
 
-		return msg
+				return migrationDoneMsg{err: err}
+			}
+
+			return msg
+		case err := <-m.doneCh:
+			return migrationDoneMsg{err: err}
+		}
 	}
 }
 
@@ -152,6 +164,7 @@ func (m migrationModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case migrationDoneMsg:
 		m.done = true
+		m.err = msg.err
 
 		return m, tea.Quit
 
@@ -206,7 +219,13 @@ func (m migrationModel) View() tea.View {
 	// Done message
 	if m.done {
 		b.WriteString("\n")
-		b.WriteString(pad + "  Migration completed successfully.\n")
+
+		if m.err != nil {
+			fmt.Fprintf(&b, "%s  Migration failed: %v\n", pad, m.err)
+		} else {
+			b.WriteString(pad + "  Migration completed successfully.\n")
+		}
+
 		b.WriteString("\n")
 	}
 
