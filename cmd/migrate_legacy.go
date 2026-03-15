@@ -489,10 +489,10 @@ FROM eod WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AN
 
 		for rows.Next() {
 			var (
-				ticker, figi                                            string
-				eventDate                                               time.Time
+				ticker, figi                                               string
+				eventDate                                                  time.Time
 				open, high, low, closeVal, adjClose, dividend, splitFactor float64
-				volume                                                  int64
+				volume                                                     int64
 			)
 
 			if err := rows.Scan(&ticker, &figi, &eventDate, &open, &high, &low, &closeVal, &adjClose, &volume, &dividend, &splitFactor); err != nil {
@@ -588,6 +588,7 @@ FROM assets`)
 	}
 
 	batch := make([][]any, 0, copyBatchSize)
+
 	var copiedRows int64
 
 	for rows.Next() {
@@ -695,6 +696,7 @@ func copyMarketHolidays(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx
 
 	mhColumns := []string{"holiday", "event_date", "market", "early_close", "close_time"}
 	batch := make([][]any, 0, copyBatchSize)
+
 	var copiedRows int64
 
 	for rows.Next() {
@@ -773,6 +775,7 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 
 	ratingColumns := []string{"ticker", "composite_figi", "event_date", "analyst", "rating"}
 	batch := make([][]any, 0, copyBatchSize)
+
 	var copiedRows int64
 
 	flushBatch := func() error {
@@ -879,6 +882,7 @@ func copyZacksMetrics(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, 
 	}
 
 	batch := make([][]any, 0, copyBatchSize)
+
 	var copiedRows int64
 
 	for year := minYear; year <= maxYear; year++ {
@@ -987,6 +991,7 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 
 	estimateColumns := []string{"ticker", "composite_figi", "event_date", "series", "value", "num_analysts", "std_dev"}
 	batch := make([][]any, 0, copyBatchSize)
+
 	var srcProcessed int64
 
 	flushBatch := func() error {
@@ -1151,6 +1156,7 @@ WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) 
 	}
 
 	batch := make([][]any, 0, copyBatchSize)
+
 	var copiedRows int64
 
 	for rows.Next() {
