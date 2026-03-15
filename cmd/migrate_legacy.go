@@ -64,6 +64,15 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	}
 	defer pool.Close()
 
+	// Preflight checks run before library init since the library
+	// queries tables that may not exist yet (the preflight will
+	// tell the user to run 'pvdata init' first).
+	if !force {
+		if err := preflightChecks(ctx, pool); err != nil {
+			return err
+		}
+	}
+
 	myLibrary, err := library.NewFromDB(ctx, dbURL)
 	if err != nil {
 		return fmt.Errorf("create library: %w", err)
@@ -75,11 +84,11 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 		if err := cleanupLegacyMigration(ctx, pool, myLibrary); err != nil {
 			return fmt.Errorf("force cleanup: %w", err)
 		}
-	}
 
-	// Preflight checks
-	if err := preflightChecks(ctx, pool); err != nil {
-		return err
+		// Re-run preflight after cleanup
+		if err := preflightChecks(ctx, pool); err != nil {
+			return err
+		}
 	}
 
 	if dryRun {
