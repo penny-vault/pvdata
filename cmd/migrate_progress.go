@@ -35,6 +35,7 @@ type migrationModel struct {
 	lastRows    int64     // rows at last rate sample
 	lastSample  time.Time // time of last rate sample
 	smoothRate  float64   // exponential moving average of rows/sec
+	startTime   time.Time
 	completed   []completedStep
 	done        bool
 	width       int
@@ -49,6 +50,7 @@ func newMigrationModel(ch <-chan progressMsg) migrationModel {
 	return migrationModel{
 		progress:   progress.New(progress.WithDefaultBlend()),
 		progressCh: ch,
+		startTime:  time.Now(),
 	}
 }
 
@@ -174,7 +176,9 @@ func (m migrationModel) View() tea.View {
 
 	var b strings.Builder
 
-	b.WriteString("\n" + pad + "Migrating legacy database...\n\n")
+	elapsed := time.Since(m.startTime).Truncate(time.Second)
+
+	fmt.Fprintf(&b, "\n%sMigrating legacy database... (%s elapsed)\n\n", pad, elapsed)
 
 	// Completed steps
 	for _, s := range m.completed {
