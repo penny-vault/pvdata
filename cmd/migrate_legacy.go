@@ -156,7 +156,7 @@ func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 
 		if !exists {
-			return fmt.Errorf("pv-data table %q not found. Run database migrations first", tbl)
+			return fmt.Errorf("pv-data table %q not found. Run 'pvdata init' first to initialize the library", tbl)
 		}
 	}
 
