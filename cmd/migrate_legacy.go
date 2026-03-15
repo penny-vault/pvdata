@@ -449,7 +449,9 @@ func sourceTableExists(ctx context.Context, conn *pgxpool.Conn, tableName string
 	return exists, err
 }
 
-// copyEodByYear reads EOD data from source year-by-year and inserts into destination.
+const copyBatchSize = 10000
+
+// copyEodByYear reads EOD data from source year-by-year and bulk-inserts using COPY protocol.
 func copyEodByYear(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, destTable string, progressCh chan<- progressMsg) error {
 	var totalCount int64
 
@@ -471,6 +473,8 @@ func copyEodByYear(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, des
 		return nil
 	}
 
+	eodColumns := []string{"ticker", "composite_figi", "event_date", "open", "high", "low", "close", "adj_close", "volume", "dividend", "split_factor"}
+
 	var copiedRows int64
 
 	for year := minYear; year <= maxYear; year++ {
@@ -481,34 +485,50 @@ FROM eod WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AN
 			return fmt.Errorf("read eod year %d: %w", year, err)
 		}
 
+		batch := make([][]any, 0, copyBatchSize)
+
 		for rows.Next() {
 			var (
 				ticker, figi                                            string
 				eventDate                                               time.Time
-				open, high, low, close, adjClose, dividend, splitFactor float64
+				open, high, low, closeVal, adjClose, dividend, splitFactor float64
 				volume                                                  int64
 			)
 
-			if err := rows.Scan(&ticker, &figi, &eventDate, &open, &high, &low, &close, &adjClose, &volume, &dividend, &splitFactor); err != nil {
+			if err := rows.Scan(&ticker, &figi, &eventDate, &open, &high, &low, &closeVal, &adjClose, &volume, &dividend, &splitFactor); err != nil {
 				rows.Close()
 
 				return fmt.Errorf("scan eod row: %w", err)
 			}
 
-			_, err := tx.Exec(ctx,
-				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, open, high, low, close, adj_close, volume, dividend, split_factor)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, destTable),
-				ticker, figi, eventDate, open, high, low, close, adjClose, volume, dividend, splitFactor)
-			if err != nil {
-				rows.Close()
+			batch = append(batch, []any{ticker, figi, eventDate, open, high, low, closeVal, adjClose, volume, dividend, splitFactor})
 
-				return fmt.Errorf("insert eod row: %w", err)
+			if len(batch) >= copyBatchSize {
+				n, err := tx.CopyFrom(ctx, pgx.Identifier{destTable}, eodColumns, pgx.CopyFromRows(batch))
+				if err != nil {
+					rows.Close()
+
+					return fmt.Errorf("copy eod batch: %w", err)
+				}
+
+				copiedRows += n
+				batch = batch[:0]
+
+				progressCh <- progressMsg{step: "EOD data", current: copiedRows, total: totalCount}
 			}
-
-			copiedRows++
 		}
 
 		rows.Close()
+
+		// Flush remaining rows
+		if len(batch) > 0 {
+			n, err := tx.CopyFrom(ctx, pgx.Identifier{destTable}, eodColumns, pgx.CopyFromRows(batch))
+			if err != nil {
+				return fmt.Errorf("copy eod batch: %w", err)
+			}
+
+			copiedRows += n
+		}
 
 		progressCh <- progressMsg{step: "EOD data", current: copiedRows, total: totalCount}
 	}
@@ -519,6 +539,18 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, destTable),
 }
 
 func copyAssets(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, destTable string, progressCh chan<- progressMsg) error {
+	var totalCount int64
+
+	if err := sourceConn.QueryRow(ctx, `SELECT COUNT(*) FROM assets`).Scan(&totalCount); err != nil {
+		return fmt.Errorf("count assets: %w", err)
+	}
+
+	if totalCount == 0 {
+		progressCh <- progressMsg{step: "Assets", current: 0, done: true}
+
+		return nil
+	}
+
 	rows, err := sourceConn.Query(ctx,
 		`SELECT ticker, composite_figi, share_class_figi, primary_exchange,
   asset_type, active, name, description, corporate_url, sector, industry, cik,
@@ -541,7 +573,22 @@ FROM assets`)
 		"Synthetic History":                  "SYNTH",
 	}
 
-	var count int64
+	// Assets use a custom type cast (asset_type::assettype) and jsonb literal that CopyFrom
+	// cannot express directly, so we stage into a temporary table and then INSERT SELECT.
+	_, err = tx.Exec(ctx, fmt.Sprintf(`CREATE TEMP TABLE tmp_assets (LIKE %s INCLUDING ALL) ON COMMIT DROP`, destTable))
+	if err != nil {
+		return fmt.Errorf("create temp assets table: %w", err)
+	}
+
+	assetColumns := []string{
+		"ticker", "composite_figi", "share_class_figi", "primary_exchange",
+		"asset_type", "active", "name", "description", "corporate_url",
+		"sector", "industry", "cik", "cusips", "isins", "other_identifiers",
+		"similar_tickers", "tags", "listed", "delisted", "last_updated",
+	}
+
+	batch := make([][]any, 0, copyBatchSize)
+	var copiedRows int64
 
 	for rows.Next() {
 		var (
@@ -577,54 +624,117 @@ FROM assets`)
 			isins = []string{strings.TrimSpace(*isin)}
 		}
 
-		_, err := tx.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, share_class_figi, primary_exchange, asset_type, active, name, description, corporate_url, sector, industry, cik, cusips, isins, other_identifiers, similar_tickers, tags, listed, delisted, last_updated)
-VALUES ($1, $2, $3, $4, $5::assettype, $6, $7, $8, $9, $10, $11, $12, $13, $14, '{}'::jsonb, $15, $16, $17, $18, $19)`, destTable),
-			ticker, figi, shareClassFigi, primaryExchange, mappedType, active, name, description, corporateUrl, sector, industry, cik, cusips, isins, similarTickers, tags, listed, delisted, lastUpdated)
-		if err != nil {
-			return fmt.Errorf("insert asset row: %w", err)
-		}
+		batch = append(batch, []any{
+			ticker, figi, shareClassFigi, primaryExchange,
+			mappedType, active, name, description, corporateUrl,
+			sector, industry, cik, cusips, isins, map[string]any{},
+			similarTickers, tags, listed, delisted, lastUpdated,
+		})
 
-		count++
+		if len(batch) >= copyBatchSize {
+			n, err := tx.CopyFrom(ctx, pgx.Identifier{"tmp_assets"}, assetColumns, pgx.CopyFromRows(batch))
+			if err != nil {
+				return fmt.Errorf("copy assets batch: %w", err)
+			}
+
+			copiedRows += n
+			batch = batch[:0]
+
+			progressCh <- progressMsg{step: "Assets", current: copiedRows, total: totalCount}
+		}
 	}
 
-	progressCh <- progressMsg{step: "Assets", current: count, done: true}
+	// Flush remaining rows
+	if len(batch) > 0 {
+		n, err := tx.CopyFrom(ctx, pgx.Identifier{"tmp_assets"}, assetColumns, pgx.CopyFromRows(batch))
+		if err != nil {
+			return fmt.Errorf("copy assets batch: %w", err)
+		}
+
+		copiedRows += n
+	}
+
+	// Move from temp table to destination, casting asset_type and other_identifiers
+	_, err = tx.Exec(ctx, fmt.Sprintf(`
+INSERT INTO %s (ticker, composite_figi, share_class_figi, primary_exchange,
+  asset_type, active, name, description, corporate_url,
+  sector, industry, cik, cusips, isins, other_identifiers,
+  similar_tickers, tags, listed, delisted, last_updated)
+SELECT ticker, composite_figi, share_class_figi, primary_exchange,
+  asset_type::assettype, active, name, description, corporate_url,
+  sector, industry, cik, cusips, isins, other_identifiers::jsonb,
+  similar_tickers, tags, listed, delisted, last_updated
+FROM tmp_assets`, destTable))
+	if err != nil {
+		return fmt.Errorf("insert assets from temp: %w", err)
+	}
+
+	progressCh <- progressMsg{step: "Assets", current: copiedRows, done: true}
 
 	return nil
 }
 
 func copyMarketHolidays(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, destTable string, progressCh chan<- progressMsg) error {
+	var totalCount int64
+
+	if err := sourceConn.QueryRow(ctx, `SELECT COUNT(*) FROM market_holidays`).Scan(&totalCount); err != nil {
+		return fmt.Errorf("count market_holidays: %w", err)
+	}
+
+	if totalCount == 0 {
+		progressCh <- progressMsg{step: "Market holidays", current: 0, done: true}
+
+		return nil
+	}
+
 	rows, err := sourceConn.Query(ctx, `SELECT holiday, event_date, market, early_close, close_time FROM market_holidays`)
 	if err != nil {
 		return fmt.Errorf("read market_holidays: %w", err)
 	}
 	defer rows.Close()
 
-	var count int64
+	mhColumns := []string{"holiday", "event_date", "market", "early_close", "close_time"}
+	batch := make([][]any, 0, copyBatchSize)
+	var copiedRows int64
 
 	for rows.Next() {
 		var (
 			holiday, market string
 			eventDate       time.Time
 			earlyClose      bool
-			closeTime       time.Time
+			closeVal        time.Time
 		)
 
-		if err := rows.Scan(&holiday, &eventDate, &market, &earlyClose, &closeTime); err != nil {
+		if err := rows.Scan(&holiday, &eventDate, &market, &earlyClose, &closeVal); err != nil {
 			return fmt.Errorf("scan market_holidays row: %w", err)
 		}
 
-		_, err := tx.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (holiday, event_date, market, early_close, close_time) VALUES ($1, $2, $3, $4, $5)`, destTable),
-			holiday, eventDate, market, earlyClose, closeTime)
-		if err != nil {
-			return fmt.Errorf("insert market_holidays row: %w", err)
-		}
+		batch = append(batch, []any{holiday, eventDate, market, earlyClose, closeVal})
 
-		count++
+		if len(batch) >= copyBatchSize {
+			n, err := tx.CopyFrom(ctx, pgx.Identifier{destTable}, mhColumns, pgx.CopyFromRows(batch))
+			if err != nil {
+				return fmt.Errorf("copy market_holidays batch: %w", err)
+			}
+
+			copiedRows += n
+			batch = batch[:0]
+
+			progressCh <- progressMsg{step: "Market holidays", current: copiedRows, total: totalCount}
+		}
 	}
 
-	progressCh <- progressMsg{step: "Market holidays", current: count, done: true}
+	// Flush remaining rows
+	if len(batch) > 0 {
+		n, err := tx.CopyFrom(ctx, pgx.Identifier{destTable}, mhColumns, pgx.CopyFromRows(batch))
+		if err != nil {
+			return fmt.Errorf("copy market_holidays batch: %w", err)
+		}
+
+		copiedRows += n
+	}
+
+	progressCh <- progressMsg{step: "Market holidays", current: copiedRows, done: true}
 
 	return nil
 }
@@ -632,6 +742,19 @@ func copyMarketHolidays(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx
 func copyZacksRatings(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.RatingKey]
 	if tbl == "" {
+		return nil
+	}
+
+	var totalSourceRows int64
+
+	if err := sourceConn.QueryRow(ctx,
+		`SELECT COUNT(*) FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalSourceRows); err != nil {
+		return fmt.Errorf("count zacks ratings: %w", err)
+	}
+
+	if totalSourceRows == 0 {
+		progressCh <- progressMsg{step: "Zacks ratings", current: 0, done: true}
+
 		return nil
 	}
 
@@ -648,7 +771,27 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 	}
 	defer rows.Close()
 
-	var count int64
+	ratingColumns := []string{"ticker", "composite_figi", "event_date", "analyst", "rating"}
+	batch := make([][]any, 0, copyBatchSize)
+	var copiedRows int64
+
+	flushBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+
+		n, err := tx.CopyFrom(ctx, pgx.Identifier{tbl}, ratingColumns, pgx.CopyFromRows(batch))
+		if err != nil {
+			return fmt.Errorf("copy zacks ratings batch: %w", err)
+		}
+
+		copiedRows += n
+		batch = batch[:0]
+
+		return nil
+	}
+
+	var srcProcessed int64
 
 	for rows.Next() {
 		var (
@@ -663,15 +806,8 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 			return fmt.Errorf("scan zacks rating row: %w", err)
 		}
 
-		type ratingEntry struct {
-			analyst string
-			rating  int
-		}
-
-		var entries []ratingEntry
-
 		if zacksRank != nil {
-			entries = append(entries, ratingEntry{"zacks-rank", *zacksRank})
+			batch = append(batch, []any{ticker, figi, eventDate, "zacks-rank", *zacksRank})
 		}
 
 		for _, pair := range []struct {
@@ -685,24 +821,27 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 		} {
 			if pair.score != nil {
 				if val, ok := letterGradeToInt[*pair.score]; ok {
-					entries = append(entries, ratingEntry{pair.analyst, val})
+					batch = append(batch, []any{ticker, figi, eventDate, pair.analyst, val})
 				}
 			}
 		}
 
-		for _, e := range entries {
-			_, err := tx.Exec(ctx,
-				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, analyst, rating) VALUES ($1, $2, $3, $4, $5)`, tbl),
-				ticker, figi, eventDate, e.analyst, e.rating)
-			if err != nil {
-				return fmt.Errorf("insert zacks rating: %w", err)
+		srcProcessed++
+
+		if len(batch) >= copyBatchSize {
+			if err := flushBatch(); err != nil {
+				return err
 			}
 
-			count++
+			progressCh <- progressMsg{step: "Zacks ratings", current: srcProcessed, total: totalSourceRows}
 		}
 	}
 
-	progressCh <- progressMsg{step: "Zacks ratings", current: count, done: true}
+	if err := flushBatch(); err != nil {
+		return err
+	}
+
+	progressCh <- progressMsg{step: "Zacks ratings", current: srcProcessed, done: true}
 
 	return nil
 }
@@ -733,6 +872,13 @@ func copyZacksMetrics(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, 
 		return nil
 	}
 
+	metricsColumns := []string{
+		"ticker", "composite_figi", "event_date",
+		"market_cap", "ev", "pe", "pb", "ps", "ev_ebit", "ev_ebitda",
+		"pe_forward", "peg", "price_to_cash_flow", "beta",
+	}
+
+	batch := make([][]any, 0, copyBatchSize)
 	var copiedRows int64
 
 	for year := minYear; year <= maxYear; year++ {
@@ -761,20 +907,39 @@ WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_d
 				return fmt.Errorf("scan zacks metric row: %w", err)
 			}
 
-			_, err := tx.Exec(ctx,
-				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, market_cap, ev, pe, pb, ps, ev_ebit, ev_ebitda, pe_forward, peg, price_to_cash_flow, beta)
-VALUES ($1, $2, $3, $4, 0, $5, $6, $7, 0, 0, $8, $9, $10, $11)`, tbl),
-				ticker, figi, eventDate, int64(marketCapMil*1e6), pe, pb, ps, peForward, peg, priceToCashFlow, beta)
-			if err != nil {
-				rows.Close()
+			batch = append(batch, []any{
+				ticker, figi, eventDate,
+				int64(marketCapMil * 1e6), int64(0), pe, pb, ps, float64(0), float64(0),
+				peForward, peg, priceToCashFlow, beta,
+			})
 
-				return fmt.Errorf("insert zacks metric: %w", err)
+			if len(batch) >= copyBatchSize {
+				n, err := tx.CopyFrom(ctx, pgx.Identifier{tbl}, metricsColumns, pgx.CopyFromRows(batch))
+				if err != nil {
+					rows.Close()
+
+					return fmt.Errorf("copy zacks metrics batch: %w", err)
+				}
+
+				copiedRows += n
+				batch = batch[:0]
+
+				progressCh <- progressMsg{step: "Zacks metrics", current: copiedRows, total: totalCount}
 			}
-
-			copiedRows++
 		}
 
 		rows.Close()
+
+		// Flush remaining rows for this year
+		if len(batch) > 0 {
+			n, err := tx.CopyFrom(ctx, pgx.Identifier{tbl}, metricsColumns, pgx.CopyFromRows(batch))
+			if err != nil {
+				return fmt.Errorf("copy zacks metrics batch: %w", err)
+			}
+
+			copiedRows += n
+			batch = batch[:0]
+		}
 
 		progressCh <- progressMsg{step: "Zacks metrics", current: copiedRows, total: totalCount}
 	}
@@ -787,6 +952,19 @@ VALUES ($1, $2, $3, $4, 0, $5, $6, $7, 0, 0, $8, $9, $10, $11)`, tbl),
 func copyZacksEstimates(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.EstimateKey]
 	if tbl == "" {
+		return nil
+	}
+
+	var totalSourceRows int64
+
+	if err := sourceConn.QueryRow(ctx,
+		`SELECT COUNT(*) FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalSourceRows); err != nil {
+		return fmt.Errorf("count zacks estimates: %w", err)
+	}
+
+	if totalSourceRows == 0 {
+		progressCh <- progressMsg{step: "Zacks estimates", current: 0, done: true}
+
 		return nil
 	}
 
@@ -807,7 +985,23 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 	}
 	defer rows.Close()
 
-	var count int64
+	estimateColumns := []string{"ticker", "composite_figi", "event_date", "series", "value", "num_analysts", "std_dev"}
+	batch := make([][]any, 0, copyBatchSize)
+	var srcProcessed int64
+
+	flushBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{tbl}, estimateColumns, pgx.CopyFromRows(batch)); err != nil {
+			return fmt.Errorf("copy zacks estimates batch: %w", err)
+		}
+
+		batch = batch[:0]
+
+		return nil
+	}
 
 	for rows.Next() {
 		var (
@@ -896,18 +1090,25 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 		}
 
 		for _, e := range estimates {
-			_, err := tx.Exec(ctx,
-				fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, series, value, num_analysts, std_dev) VALUES ($1, $2, $3, $4, $5, $6, $7)`, tbl),
-				ticker, figi, eventDate, e.series, e.value, e.numAnalysts, e.stdDev)
-			if err != nil {
-				return fmt.Errorf("insert estimate %s: %w", e.series, err)
+			batch = append(batch, []any{ticker, figi, eventDate, e.series, e.value, e.numAnalysts, e.stdDev})
+		}
+
+		srcProcessed++
+
+		if len(batch) >= copyBatchSize {
+			if err := flushBatch(); err != nil {
+				return err
 			}
 
-			count++
+			progressCh <- progressMsg{step: "Zacks estimates", current: srcProcessed, total: totalSourceRows}
 		}
 	}
 
-	progressCh <- progressMsg{step: "Zacks estimates", current: count, done: true}
+	if err := flushBatch(); err != nil {
+		return err
+	}
+
+	progressCh <- progressMsg{step: "Zacks estimates", current: srcProcessed, done: true}
 
 	return nil
 }
@@ -915,6 +1116,19 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 func copyZacksConsensus(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.ConsensusKey]
 	if tbl == "" {
+		return nil
+	}
+
+	var totalCount int64
+
+	if err := sourceConn.QueryRow(ctx,
+		`SELECT COUNT(*) FROM zacks_financials WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) AND LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalCount); err != nil {
+		return fmt.Errorf("count zacks consensus: %w", err)
+	}
+
+	if totalCount == 0 {
+		progressCh <- progressMsg{step: "Zacks consensus", current: 0, done: true}
+
 		return nil
 	}
 
@@ -930,7 +1144,14 @@ WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) 
 	}
 	defer rows.Close()
 
-	var count int64
+	consensusColumns := []string{
+		"ticker", "composite_figi", "event_date",
+		"avg_recommendation", "num_analysts", "num_strong_buy_or_buy",
+		"num_hold", "num_sell_or_strong_sell", "num_upgrades", "num_downgrades", "avg_target_price",
+	}
+
+	batch := make([][]any, 0, copyBatchSize)
+	var copiedRows int64
 
 	for rows.Next() {
 		var (
@@ -947,18 +1168,35 @@ WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) 
 			return fmt.Errorf("scan zacks consensus row: %w", err)
 		}
 
-		_, err := tx.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, avg_recommendation, num_analysts, num_strong_buy_or_buy, num_hold, num_sell_or_strong_sell, num_upgrades, num_downgrades, avg_target_price)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, tbl),
-			ticker, figi, eventDate, avgRec, numAnalysts, numBuy, numHold, numSell, numUpgrades, numDowngrades, avgTargetPrice)
-		if err != nil {
-			return fmt.Errorf("insert consensus: %w", err)
-		}
+		batch = append(batch, []any{
+			ticker, figi, eventDate,
+			avgRec, numAnalysts, numBuy, numHold, numSell, numUpgrades, numDowngrades, avgTargetPrice,
+		})
 
-		count++
+		if len(batch) >= copyBatchSize {
+			n, err := tx.CopyFrom(ctx, pgx.Identifier{tbl}, consensusColumns, pgx.CopyFromRows(batch))
+			if err != nil {
+				return fmt.Errorf("copy zacks consensus batch: %w", err)
+			}
+
+			copiedRows += n
+			batch = batch[:0]
+
+			progressCh <- progressMsg{step: "Zacks consensus", current: copiedRows, total: totalCount}
+		}
 	}
 
-	progressCh <- progressMsg{step: "Zacks consensus", current: count, done: true}
+	// Flush remaining rows
+	if len(batch) > 0 {
+		n, err := tx.CopyFrom(ctx, pgx.Identifier{tbl}, consensusColumns, pgx.CopyFromRows(batch))
+		if err != nil {
+			return fmt.Errorf("copy zacks consensus batch: %w", err)
+		}
+
+		copiedRows += n
+	}
+
+	progressCh <- progressMsg{step: "Zacks consensus", current: copiedRows, done: true}
 
 	return nil
 }
