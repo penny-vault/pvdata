@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,8 +87,25 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Run the migration
-	return executeMigration(ctx, pool, myLibrary)
+	// Run the migration with progress UI
+	progressCh := make(chan progressMsg, 100)
+
+	var migrationErr error
+
+	go func() {
+		defer close(progressCh)
+
+		migrationErr = executeMigration(ctx, pool, myLibrary, progressCh)
+	}()
+
+	model := newMigrationModel(progressCh)
+	p := tea.NewProgram(model)
+
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("TUI error: %w", err)
+	}
+
+	return migrationErr
 }
 
 func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
@@ -242,7 +260,7 @@ func cleanupLegacyMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *
 	return nil
 }
 
-func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *library.Library) error {
+func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *library.Library, progressCh chan<- progressMsg) error {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire connection: %w", err)
@@ -267,6 +285,8 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 		return fmt.Errorf("move tables to legacy schema: %w", err)
 	}
 
+	progressCh <- progressMsg{step: "Moved tables to legacy schema", done: true}
+
 	// Step 2: Validate composite_figi lengths
 	if err := validateCompositeFigi(ctx, tx); err != nil {
 		return fmt.Errorf("validate composite_figi: %w", err)
@@ -278,8 +298,10 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 		return fmt.Errorf("create subscriptions: %w", err)
 	}
 
+	progressCh <- progressMsg{step: "Created subscriptions", done: true}
+
 	// Step 4: Copy and transform data
-	if err := copyData(ctx, tx, subs); err != nil {
+	if err := copyData(ctx, tx, subs, progressCh); err != nil {
 		return fmt.Errorf("copy data: %w", err)
 	}
 
@@ -287,6 +309,8 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 	if err := updateSubscriptionMetadata(ctx, tx, subs); err != nil {
 		return fmt.Errorf("update metadata: %w", err)
 	}
+
+	progressCh <- progressMsg{step: "Updated metadata", done: true}
 
 	// Commit
 	if err := tx.Commit(ctx); err != nil {
@@ -414,21 +438,43 @@ func createLegacySubscriptions(ctx context.Context, tx pgx.Tx, myLibrary *librar
 	return subs, nil
 }
 
-func copyData(ctx context.Context, tx pgx.Tx, subs *legacySubscriptions) error {
+func copyData(ctx context.Context, tx pgx.Tx, subs *legacySubscriptions, progressCh chan<- progressMsg) error {
 	log.Info().Msg("copying and transforming data...")
 
-	// EOD
+	// EOD -- batch by year for progress
 	eodTable := subs.eod.DataTablesMap[data.EODKey]
 	if eodTable != "" {
-		result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, open, high, low, close, adj_close, volume, dividend, split_factor)
-SELECT ticker, TRIM(composite_figi), event_date, open, high, low, close, COALESCE(adj_close, close), volume, dividend, split_factor
-FROM legacy.eod
-WHERE LENGTH(TRIM(composite_figi)) = 12`, eodTable))
-		if err != nil {
-			return fmt.Errorf("copy eod: %w", err)
+		var totalCount int64
+
+		if err := tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM legacy.eod WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalCount); err != nil {
+			return fmt.Errorf("count eod: %w", err)
 		}
 
-		log.Info().Int64("Rows", result.RowsAffected()).Msg("copied EOD data")
+		var minYear, maxYear int
+
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE(EXTRACT(YEAR FROM MIN(event_date))::int, 0), COALESCE(EXTRACT(YEAR FROM MAX(event_date))::int, 0) FROM legacy.eod`).Scan(&minYear, &maxYear); err != nil {
+			return fmt.Errorf("eod date range: %w", err)
+		}
+
+		var copiedRows int64
+
+		for year := minYear; year <= maxYear; year++ {
+			result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, open, high, low, close, adj_close, volume, dividend, split_factor)
+SELECT ticker, TRIM(composite_figi), event_date, open, high, low, close, COALESCE(adj_close, close), volume, dividend, split_factor
+FROM legacy.eod
+WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_date < '%d-01-01'`, eodTable, year, year+1))
+			if err != nil {
+				return fmt.Errorf("copy eod year %d: %w", year, err)
+			}
+
+			copiedRows += result.RowsAffected()
+
+			progressCh <- progressMsg{step: "EOD data", current: copiedRows, total: totalCount}
+		}
+
+		progressCh <- progressMsg{step: "EOD data", current: copiedRows, done: true}
 	}
 
 	// Assets
@@ -457,7 +503,7 @@ FROM legacy.assets`, assetsTable))
 			return fmt.Errorf("copy assets: %w", err)
 		}
 
-		log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Assets data")
+		progressCh <- progressMsg{step: "Assets", current: result.RowsAffected(), done: true}
 	}
 
 	// Market Holidays (optional -- table may not exist in legacy DB)
@@ -471,7 +517,7 @@ FROM legacy.market_holidays`, mhTable))
 				return fmt.Errorf("copy market_holidays: %w", err)
 			}
 
-			log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Market Holidays data")
+			progressCh <- progressMsg{step: "Market holidays", current: result.RowsAffected(), done: true}
 		}
 	} else {
 		log.Warn().Msg("legacy.market_holidays not found, skipping")
@@ -479,19 +525,19 @@ FROM legacy.market_holidays`, mhTable))
 
 	// Zacks (optional -- table may not exist in legacy DB)
 	if exists, _ := legacyTableExists(ctx, tx, "zacks_financials"); exists {
-		if err := copyZacksRatings(ctx, tx, subs.zacks); err != nil {
+		if err := copyZacksRatings(ctx, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 
-		if err := copyZacksMetrics(ctx, tx, subs.zacks); err != nil {
+		if err := copyZacksMetrics(ctx, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 
-		if err := copyZacksEstimates(ctx, tx, subs.zacks); err != nil {
+		if err := copyZacksEstimates(ctx, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 
-		if err := copyZacksConsensus(ctx, tx, subs.zacks); err != nil {
+		if err := copyZacksConsensus(ctx, tx, subs.zacks, progressCh); err != nil {
 			return err
 		}
 	} else {
@@ -511,7 +557,7 @@ func legacyTableExists(ctx context.Context, tx pgx.Tx, tableName string) (bool, 
 	return exists, err
 }
 
-func copyZacksRatings(ctx context.Context, tx pgx.Tx, sub *library.Subscription) error {
+func copyZacksRatings(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.RatingKey]
 	if tbl == "" {
 		return nil
@@ -558,42 +604,56 @@ WHERE TRIM(vgm_score) IN ('A','B','C','D','F') AND LENGTH(TRIM(composite_figi)) 
 		totalRows += result.RowsAffected()
 	}
 
-	log.Info().Int64("Rows", totalRows).Msg("copied Zacks Rating data")
+	progressCh <- progressMsg{step: "Zacks ratings", current: totalRows, done: true}
 
 	return nil
 }
 
-func copyZacksMetrics(ctx context.Context, tx pgx.Tx, sub *library.Subscription) error {
+func copyZacksMetrics(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.MetricKey]
 	if tbl == "" {
 		return nil
 	}
 
-	result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, market_cap, ev, pe, pb, ps, ev_ebit, ev_ebitda, pe_forward, peg, price_to_cash_flow, beta)
-SELECT ticker, TRIM(composite_figi), event_date,
-  COALESCE(market_cap_mil, 0) * 1000000,
-  0,
-  COALESCE(pe_trailing_12_months, 0),
-  COALESCE(price_to_book, 0),
-  COALESCE(price_to_sales, 0),
-  0,
-  0,
-  COALESCE(pe_f1, 0),
-  COALESCE(peg_ratio, 0),
-  COALESCE(price_to_cash_flow, 0),
-  COALESCE(beta, 0)
-FROM legacy.zacks_financials
-WHERE LENGTH(TRIM(composite_figi)) = 12`, tbl))
-	if err != nil {
-		return fmt.Errorf("copy zacks metrics: %w", err)
+	var totalCount int64
+
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM legacy.zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`).Scan(&totalCount); err != nil {
+		return fmt.Errorf("count zacks metrics: %w", err)
 	}
 
-	log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Zacks Metric data")
+	var minYear, maxYear int
+
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(EXTRACT(YEAR FROM MIN(event_date))::int, 0), COALESCE(EXTRACT(YEAR FROM MAX(event_date))::int, 0) FROM legacy.zacks_financials`).Scan(&minYear, &maxYear); err != nil {
+		return fmt.Errorf("zacks date range: %w", err)
+	}
+
+	var copiedRows int64
+
+	for year := minYear; year <= maxYear; year++ {
+		result, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (ticker, composite_figi, event_date, market_cap, ev, pe, pb, ps, ev_ebit, ev_ebitda, pe_forward, peg, price_to_cash_flow, beta)
+SELECT ticker, TRIM(composite_figi), event_date,
+  COALESCE(market_cap_mil, 0) * 1000000, 0,
+  COALESCE(pe_trailing_12_months, 0), COALESCE(price_to_book, 0), COALESCE(price_to_sales, 0),
+  0, 0, COALESCE(pe_f1, 0), COALESCE(peg_ratio, 0), COALESCE(price_to_cash_flow, 0), COALESCE(beta, 0)
+FROM legacy.zacks_financials
+WHERE LENGTH(TRIM(composite_figi)) = 12 AND event_date >= '%d-01-01' AND event_date < '%d-01-01'`, tbl, year, year+1))
+		if err != nil {
+			return fmt.Errorf("copy zacks metrics year %d: %w", year, err)
+		}
+
+		copiedRows += result.RowsAffected()
+
+		progressCh <- progressMsg{step: "Zacks metrics", current: copiedRows, total: totalCount}
+	}
+
+	progressCh <- progressMsg{step: "Zacks metrics", current: copiedRows, done: true}
 
 	return nil
 }
 
-func copyZacksEstimates(ctx context.Context, tx pgx.Tx, sub *library.Subscription) error {
+func copyZacksEstimates(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.EstimateKey]
 	if tbl == "" {
 		return nil
@@ -682,12 +742,12 @@ WHERE avg_eps_surprise_last_4_qtrs IS NOT NULL AND LENGTH(TRIM(composite_figi)) 
 		totalRows += result.RowsAffected()
 	}
 
-	log.Info().Int64("Rows", totalRows).Msg("copied Zacks Estimate data")
+	progressCh <- progressMsg{step: "Zacks estimates", current: totalRows, done: true}
 
 	return nil
 }
 
-func copyZacksConsensus(ctx context.Context, tx pgx.Tx, sub *library.Subscription) error {
+func copyZacksConsensus(ctx context.Context, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.ConsensusKey]
 	if tbl == "" {
 		return nil
@@ -704,7 +764,7 @@ WHERE (current_avg_broker_rec IS NOT NULL OR num_brokers_in_rating IS NOT NULL) 
 		return fmt.Errorf("copy zacks consensus: %w", err)
 	}
 
-	log.Info().Int64("Rows", result.RowsAffected()).Msg("copied Zacks Consensus data")
+	progressCh <- progressMsg{step: "Zacks consensus", current: result.RowsAffected(), done: true}
 
 	return nil
 }
