@@ -7,10 +7,13 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/db"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -64,13 +67,63 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	}
 	defer pool.Close()
 
-	// Preflight checks run before library init since the library
-	// queries tables that may not exist yet (the preflight will
-	// tell the user to run 'pvdata init' first).
-	if !force {
-		if err := preflightChecks(ctx, pool); err != nil {
-			return err
+	// Force cleanup if requested (needs library, but library may not exist
+	// if the previous run failed partway -- handle gracefully)
+	if force {
+		myLibrary, libErr := library.NewFromDB(ctx, dbURL)
+		if libErr == nil {
+			if err := cleanupLegacyMigration(ctx, pool, myLibrary); err != nil {
+				myLibrary.Close()
+
+				return fmt.Errorf("force cleanup: %w", err)
+			}
+
+			myLibrary.Close()
+		} else {
+			// Library tables don't exist yet, just clean up the schema
+			log.Info().Msg("library not initialized, cleaning up legacy schema only")
+
+			conn, err := pool.Acquire(ctx)
+			if err != nil {
+				return fmt.Errorf("acquire connection: %w", err)
+			}
+
+			_, _ = conn.Exec(ctx, "DROP SCHEMA IF EXISTS legacy CASCADE")
+			conn.Release()
 		}
+	}
+
+	// Preflight checks (only checks legacy tables exist, not library tables)
+	if err := preflightChecks(ctx, pool); err != nil {
+		return err
+	}
+
+	if dryRun {
+		log.Info().Msg("[dry-run] Preflight checks passed. Would proceed with migration.")
+		return nil
+	}
+
+	// Step 1: Move legacy tables to legacy schema (outside transaction,
+	// because db.Migrate cannot run inside a transaction and the legacy
+	// schema_migrations table would conflict with pv-data's migrations)
+	if err := moveToLegacySchema(ctx, pool); err != nil {
+		return fmt.Errorf("move tables to legacy schema: %w", err)
+	}
+
+	// Step 2: Initialize pv-data library (run migrations to create
+	// subscriptions, published_views, etc. in the now-clean public schema)
+	migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
+
+	if err := db.Migrate(migrateURL); err != nil {
+		// If migration fails, try to move tables back
+		log.Error().Err(err).Msg("database migration failed, attempting to restore legacy tables")
+
+		restoreErr := restoreLegacySchema(ctx, pool)
+		if restoreErr != nil {
+			log.Error().Err(restoreErr).Msg("could not restore legacy tables")
+		}
+
+		return fmt.Errorf("database migration: %w", err)
 	}
 
 	myLibrary, err := library.NewFromDB(ctx, dbURL)
@@ -79,24 +132,7 @@ func runMigrateLegacy(cmd *cobra.Command, args []string) error {
 	}
 	defer myLibrary.Close()
 
-	// Force cleanup if requested
-	if force {
-		if err := cleanupLegacyMigration(ctx, pool, myLibrary); err != nil {
-			return fmt.Errorf("force cleanup: %w", err)
-		}
-
-		// Re-run preflight after cleanup
-		if err := preflightChecks(ctx, pool); err != nil {
-			return err
-		}
-	}
-
-	if dryRun {
-		log.Info().Msg("[dry-run] Preflight checks passed. Would proceed with migration.")
-		return nil
-	}
-
-	// Run the migration with progress UI
+	// Step 3: Run the data migration with progress UI
 	progressCh := make(chan progressMsg, 100)
 
 	var migrationErr error
@@ -151,35 +187,6 @@ func preflightChecks(ctx context.Context, pool *pgxpool.Pool) error {
 		if !exists {
 			return fmt.Errorf("required legacy table %q not found in public schema", tbl)
 		}
-	}
-
-	// Check that pv-data library tables exist
-	for _, tbl := range []string{"subscriptions", "published_views"} {
-		var exists bool
-
-		err = conn.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
-			tbl).Scan(&exists)
-		if err != nil {
-			return fmt.Errorf("check table %s: %w", tbl, err)
-		}
-
-		if !exists {
-			return fmt.Errorf("pv-data table %q not found. Run 'pvdata init' first to initialize the library", tbl)
-		}
-	}
-
-	// Check no legacy subscriptions exist
-	var legacySubCount int
-
-	err = conn.QueryRow(ctx,
-		`SELECT count(*) FROM subscriptions WHERE provider = 'legacy'`).Scan(&legacySubCount)
-	if err != nil {
-		return fmt.Errorf("check legacy subscriptions: %w", err)
-	}
-
-	if legacySubCount > 0 {
-		return fmt.Errorf("subscriptions with provider 'legacy' already exist. Use --force to clean up")
 	}
 
 	log.Info().Msg("preflight checks passed")
@@ -289,14 +296,13 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 		}
 	}()
 
-	// Step 1: Create legacy schema and move tables
-	if err := moveToLegacySchema(ctx, tx); err != nil {
-		return fmt.Errorf("move tables to legacy schema: %w", err)
-	}
-
+	// Schema move and library init already done by runMigrateLegacy.
+	// Send the progress message for those completed steps.
 	progressCh <- progressMsg{step: "Moved tables to legacy schema", done: true}
 
-	// Step 2: Validate composite_figi lengths
+	progressCh <- progressMsg{step: "Initialized library", done: true}
+
+	// Step 1: Validate composite_figi lengths
 	if err := validateCompositeFigi(ctx, tx); err != nil {
 		return fmt.Errorf("validate composite_figi: %w", err)
 	}
@@ -331,10 +337,16 @@ func executeMigration(ctx context.Context, pool *pgxpool.Pool, myLibrary *librar
 	return nil
 }
 
-func moveToLegacySchema(ctx context.Context, tx pgx.Tx) error {
+func moveToLegacySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	log.Info().Msg("creating legacy schema and moving tables...")
 
-	if _, err := tx.Exec(ctx, "CREATE SCHEMA legacy"); err != nil {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA legacy"); err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
 
@@ -342,7 +354,7 @@ func moveToLegacySchema(ctx context.Context, tx pgx.Tx) error {
 		// Check if table exists before trying to move it
 		var exists bool
 
-		err := tx.QueryRow(ctx,
+		err := conn.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)`,
 			tbl).Scan(&exists)
 		if err != nil {
@@ -350,7 +362,7 @@ func moveToLegacySchema(ctx context.Context, tx pgx.Tx) error {
 		}
 
 		if exists {
-			if _, err := tx.Exec(ctx, fmt.Sprintf("ALTER TABLE public.%s SET SCHEMA legacy", tbl)); err != nil {
+			if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE public.%s SET SCHEMA legacy", tbl)); err != nil {
 				return fmt.Errorf("move table %s: %w", tbl, err)
 			}
 
@@ -361,6 +373,42 @@ func moveToLegacySchema(ctx context.Context, tx pgx.Tx) error {
 	}
 
 	return nil
+}
+
+func restoreLegacySchema(ctx context.Context, pool *pgxpool.Pool) error {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	rows, err := conn.Query(ctx,
+		`SELECT table_name FROM information_schema.tables WHERE table_schema = 'legacy'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var tables []string
+
+	for rows.Next() {
+		var tbl string
+		if err := rows.Scan(&tbl); err != nil {
+			return err
+		}
+
+		tables = append(tables, tbl)
+	}
+
+	for _, tbl := range tables {
+		if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER TABLE legacy.%s SET SCHEMA public", tbl)); err != nil {
+			log.Warn().Err(err).Str("Table", tbl).Msg("could not restore table")
+		}
+	}
+
+	_, err = conn.Exec(ctx, "DROP SCHEMA IF EXISTS legacy")
+
+	return err
 }
 
 func validateCompositeFigi(ctx context.Context, tx pgx.Tx) error {
