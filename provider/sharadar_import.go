@@ -29,7 +29,10 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/reader"
 )
@@ -445,8 +448,213 @@ func mapRowToSharadarTicker(row map[string]string) *sharadarTicker {
 }
 
 // ImportFiles implements the FileImporter interface for Sharadar.
-// This is a placeholder that returns a failed run summary.
 func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscription,
 	files []string, out chan<- *data.Observation, exit chan<- data.RunSummary) {
-	exit <- data.RunSummary{Status: data.RunFailed}
+	logger := zerolog.Ctx(ctx)
+
+	runSummary := data.RunSummary{
+		StartTime:        time.Now(),
+		SubscriptionID:   sub.ID,
+		SubscriptionName: sub.Name,
+	}
+
+	numObs := 0
+
+	defer func() {
+		runSummary.EndTime = time.Now()
+		runSummary.NumObservations = numObs
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
+		exit <- runSummary
+	}()
+
+	for _, filePath := range files {
+		logger.Info().Str("file", filePath).Msg("reading file")
+
+		rows, err := readFileRows(filePath)
+		if err != nil {
+			logger.Error().Err(err).Str("file", filePath).Msg("failed to read file")
+			runSummary.Status = data.RunFailed
+			return
+		}
+
+		logger.Info().Int("rows", len(rows)).Str("file", filePath).Msg("file loaded")
+
+		var n int
+		switch sub.Dataset {
+		case "Fundamentals":
+			n, err = importFundamentalsRows(ctx, sub, rows, out)
+		case "Metrics":
+			n, err = importMetricsRows(ctx, sub, rows, out)
+		case "Stock Tickers":
+			n, err = importTickersRows(ctx, sub, rows, out)
+		default:
+			err = fmt.Errorf("unsupported dataset %q for file import", sub.Dataset)
+		}
+
+		if err != nil {
+			logger.Error().Err(err).Str("file", filePath).Msg("failed to import file")
+			runSummary.Status = data.RunFailed
+			return
+		}
+
+		numObs += n
+		logger.Info().Int("observations", n).Str("file", filePath).Msg("file imported")
+	}
+}
+
+// importFundamentalsRows processes rows for the Fundamentals dataset.
+func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+	logger := zerolog.Ctx(ctx)
+
+	conn, err := sub.Library.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("could not acquire database connection: %w", err)
+	}
+	defer conn.Release()
+
+	assets, err := data.ActiveAssets(ctx, conn)
+	if err != nil {
+		return 0, fmt.Errorf("could not load active assets: %w", err)
+	}
+
+	figiMap := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		figiMap[asset.Ticker] = asset.CompositeFigi
+	}
+
+	count := 0
+	for i, row := range rows {
+		fundamental := mapRowToSharadarFundamental(row)
+		pvFundamental := fundamental.PvFundamental(figiMap)
+
+		out <- &data.Observation{
+			Fundamental:      pvFundamental,
+			ObservationDate:  time.Now(),
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		count++
+
+		if (i+1)%10000 == 0 {
+			logger.Info().Int("rows_processed", i+1).Int("total_rows", len(rows)).Msg("fundamentals import progress")
+		}
+	}
+
+	return count, nil
+}
+
+// importMetricsRows processes rows for the Metrics dataset.
+func importMetricsRows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+	logger := zerolog.Ctx(ctx)
+
+	conn, err := sub.Library.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("could not acquire database connection: %w", err)
+	}
+	defer conn.Release()
+
+	assets, err := data.ActiveAssets(ctx, conn)
+	if err != nil {
+		return 0, fmt.Errorf("could not load active assets: %w", err)
+	}
+
+	figiMap := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		figiMap[asset.Ticker] = asset.CompositeFigi
+	}
+
+	nyc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return 0, fmt.Errorf("could not load NYC timezone: %w", err)
+	}
+
+	count := 0
+	for i, row := range rows {
+		metric := mapRowToSharadarMetric(row)
+		pvMetric := metric.PvMetric(figiMap, nyc)
+
+		out <- &data.Observation{
+			Metric:           pvMetric,
+			ObservationDate:  time.Now(),
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		count++
+
+		if (i+1)%10000 == 0 {
+			logger.Info().Int("rows_processed", i+1).Int("total_rows", len(rows)).Msg("metrics import progress")
+		}
+	}
+
+	return count, nil
+}
+
+// importTickersRows processes rows for the Stock Tickers dataset.
+func importTickersRows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+	logger := zerolog.Ctx(ctx)
+
+	enrichAssets := make([]*data.Asset, 0, 5000)
+	allAssets := make([]*data.Asset, 0, len(rows))
+
+	for _, row := range rows {
+		// Only process SF1 table rows
+		if row["table"] != "SF1" {
+			continue
+		}
+
+		ticker := mapRowToSharadarTicker(row)
+
+		if ticker.Exchange == "" {
+			continue
+		}
+
+		pvAsset := ticker.ToAsset()
+
+		// Ignore unknown assets or exchanges
+		if pvAsset.PrimaryExchange == data.OTCExchange ||
+			pvAsset.PrimaryExchange == data.IndexExchange ||
+			pvAsset.PrimaryExchange == data.UnknownExchange ||
+			pvAsset.AssetType == data.INDEX ||
+			pvAsset.AssetType == data.UnknownAsset {
+			continue
+		}
+
+		if pvAsset.Active {
+			enrichAssets = append(enrichAssets, pvAsset)
+		}
+
+		allAssets = append(allAssets, pvAsset)
+
+		// Batch FIGI enrichment every 5000 active assets
+		if len(enrichAssets) >= 5000 {
+			log.Info().Int("batch_size", len(enrichAssets)).Msg("enriching asset batch with FIGI")
+			figi.Enrich(enrichAssets...)
+			enrichAssets = enrichAssets[:0]
+		}
+	}
+
+	// Enrich any remaining active assets
+	if len(enrichAssets) > 0 {
+		log.Info().Int("batch_size", len(enrichAssets)).Msg("enriching final asset batch with FIGI")
+		figi.Enrich(enrichAssets...)
+	}
+
+	count := 0
+	for _, asset := range allAssets {
+		out <- &data.Observation{
+			AssetObject:      asset,
+			ObservationDate:  time.Now(),
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+		count++
+	}
+
+	logger.Info().Int("assets", count).Msg("tickers import complete")
+
+	return count, nil
 }
