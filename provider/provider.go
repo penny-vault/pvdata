@@ -48,6 +48,13 @@ type Provider interface {
 	Datasets() map[string]Dataset
 }
 
+// FileImporter is an optional interface that providers can implement to support
+// importing data from local files (parquet, CSV, etc.) instead of fetching from APIs.
+type FileImporter interface {
+	ImportFiles(ctx context.Context, sub *library.Subscription,
+		files []string, out chan<- *data.Observation, exit chan<- data.RunSummary)
+}
+
 type Dataset struct {
 	Name        string
 	Description string
