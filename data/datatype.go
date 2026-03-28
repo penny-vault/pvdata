@@ -458,7 +458,8 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 	PRIMARY KEY (analyst, composite_figi, event_date)
 );
 
-CREATE INDEX %[1]s_ticker_event_date_idx ON %[1]s(ticker, event_date DESC)`,
+CREATE INDEX %[1]s_ticker_event_date_idx ON %[1]s(ticker, event_date DESC);
+CREATE INDEX %[1]s_analyst_date_idx ON %[1]s(analyst, event_date) INCLUDE (composite_figi, ticker, rating)`,
 		Migrations:    []string{},
 		Version:       0,
 		IsPartitioned: false,
