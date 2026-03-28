@@ -82,6 +82,17 @@ key in the `.pvdata.toml` configuration file.
 apikey = '<my api key>'
 ```
 
+## Updating stealth evasions
+
+Some data providers require browser-based scraping. To avoid bot detection, pages are
+injected with stealth evasions from [extract-stealth-evasions](https://github.com/nicedayfor/extract-stealth-evasions).
+To update the bundled script:
+
+```bash
+npx extract-stealth-evasions@latest
+cp stealth.min.js playwright_helpers/
+```
+
 ## Adding new data providers
 
 pv-data can dynamically load additional provider libraries.

@@ -15,13 +15,20 @@
 package playwright_helpers
 
 import (
+	_ "embed"
 	"strings"
 
-	"github.com/go-rod/stealth"
 	"github.com/playwright-community/playwright-go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
+
+// stealth.min.js is injected into pages to evade bot detection.
+// To update: npx extract-stealth-evasions@latest
+// then copy stealth.min.js into this directory.
+//
+//go:embed stealth.min.js
+var stealthJS string
 
 // StealthPage creates a new playwright page with stealth js loaded to prevent bot detection
 func StealthPage(context *playwright.BrowserContext) playwright.Page {
@@ -31,7 +38,7 @@ func StealthPage(context *playwright.BrowserContext) playwright.Page {
 	}
 
 	if err = page.AddInitScript(playwright.Script{
-		Content: playwright.String(stealth.JS),
+		Content: playwright.String(stealthJS),
 	}); err != nil {
 		log.Error().Err(err).Msg("could not load stealth mode")
 	}
