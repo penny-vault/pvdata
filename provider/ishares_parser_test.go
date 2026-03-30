@@ -72,4 +72,105 @@ Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,P
 			Expect(h.Ticker).ToNot(Equal("CASH"))
 		}
 	})
+
+	It("handles weight values with commas", func() {
+		csv := []byte(`iShares Test ETF
+Fund Holdings as of,"Jan 15, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"BIG","BIG CORP","Financials","Equity","1,234,567,890.00","1,234.56","1,234,567,890.00","100,000.00","12,345.68","United States","NYSE","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Weight).To(BeNumerically("~", 12.3456, 0.0001))
+	})
+
+	It("returns empty holdings when all rows are non-equity", func() {
+		csv := []byte(`iShares Bond ETF
+Fund Holdings as of,"Feb 10, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"BOND1","SOME BOND","-","Fixed Income","100,000.00","50.00","100,000.00","100.00","1,000.00","United States","NYSE","USD","1.00","USD","-"
+"CASH","CASH","-","Cash and/or Derivatives","50,000.00","25.00","50,000.00","50,000.00","1.00","United States","-","USD","1.00","USD","-"
+"FUT","FUTURES","-","Futures","25,000.00","25.00","25,000.00","10.00","2,500.00","United States","-","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(BeEmpty())
+		Expect(result.SnapshotDate.Day()).To(Equal(10))
+	})
+
+	It("returns zero date when Fund Holdings as of row is missing", func() {
+		csv := []byte(`iShares Mystery ETF
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"FOO","FOO INC","Tech","Equity","100.00","100.00","100.00","1.00","100.00","United States","NYSE","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.SnapshotDate.IsZero()).To(BeTrue())
+		Expect(result.Holdings).To(HaveLen(1))
+	})
+
+	It("returns empty holdings when header row is missing", func() {
+		csv := []byte(`iShares Broken ETF
+Fund Holdings as of,"Mar 01, 2026"
+some random data here
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(BeEmpty())
+		Expect(result.SnapshotDate.Month()).To(Equal(time.March))
+	})
+
+	It("parses CSV without BOM", func() {
+		csv := []byte(`iShares No BOM ETF
+Fund Holdings as of,"Apr 20, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"ZZZ","ZZZ CORP","Industrials","Equity","1,000.00","99.50","1,000.00","10.00","100.00","United States","NYSE","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Ticker).To(Equal("ZZZ"))
+		Expect(result.SnapshotDate.Month()).To(Equal(time.April))
+	})
+
+	It("skips rows with empty ticker", func() {
+		csv := []byte(`iShares Test ETF
+Fund Holdings as of,"May 05, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"REAL","REAL CORP","Tech","Equity","100.00","60.00","100.00","1.00","100.00","United States","NYSE","USD","1.00","USD","-"
+"","","","Equity","50.00","30.00","50.00","1.00","50.00","United States","","USD","1.00","USD","-"
+" ","WHITESPACE","","Equity","25.00","10.00","25.00","1.00","25.00","United States","","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Ticker).To(Equal("REAL"))
+	})
+
+	It("skips rows with unparseable weight", func() {
+		csv := []byte(`iShares Test ETF
+Fund Holdings as of,"Jun 01, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"OK","OK CORP","Tech","Equity","100.00","5.50","100.00","1.00","100.00","United States","NYSE","USD","1.00","USD","-"
+"BAD","BAD CORP","Tech","Equity","50.00","N/A","50.00","1.00","50.00","United States","NYSE","USD","1.00","USD","-"
+"ALSO","ALSO BAD","Tech","Equity","25.00","-","25.00","1.00","25.00","United States","NYSE","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Ticker).To(Equal("OK"))
+	})
 })
