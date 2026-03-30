@@ -4,92 +4,43 @@ package provider
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/playwright_helpers"
 	"github.com/playwright-community/playwright-go"
 )
 
-// TestISharesDownloadAndParse tests the full flow: Playwright navigates to
-// an iShares product page, downloads the XLS file, and parses it.
+// TestISharesDownloadAndParse tests the full flow: use resty to download
+// the CSV holdings file from iShares and parse it.
 // Run with: go test ./provider/ -tags integration -run TestISharesDownloadAndParse -v
 func TestISharesDownloadAndParse(t *testing.T) {
 	etf := iSharesETFMap["IWD"] // Russell 1000 Value -- a known ETF
+	ticker := "IWD"
 
-	page, ctx, browser, pw := playwright_helpers.StartPlaywright(true) // non-headless for debugging
-	defer playwright_helpers.StopPlaywright(page, ctx, browser, pw)
+	client := resty.New().
+		SetTimeout(60 * time.Second).
+		SetHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36").
+		SetHeader("Accept", "text/csv,text/plain,*/*")
 
-	productURL := fmt.Sprintf("https://www.ishares.com/us/products/%s/%s", etf.ProductID, etf.Slug)
-	t.Logf("Navigating to %s", productURL)
+	csvURL := fmt.Sprintf(iSharesHoldingsURLTemplate, etf.ProductID, etf.Slug, ticker)
+	t.Logf("Fetching %s", csvURL)
 
-	if _, err := page.Goto(productURL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(60000),
-	}); err != nil {
-		t.Fatalf("could not navigate to product page: %v", err)
-	}
-
-	// Wait for the page to settle -- iShares pages are JS-heavy
-	page.WaitForTimeout(5000)
-
-	// Try to find and click the download link
-	downloadLink := page.Locator("a[href*='.ajax'][href*='fileType=xls']")
-	count, err := downloadLink.Count()
+	resp, err := client.R().Get(csvURL)
 	if err != nil {
-		t.Fatalf("could not count download links: %v", err)
-	}
-	t.Logf("Found %d download links matching selector", count)
-
-	if count == 0 {
-		// Try alternative selectors
-		t.Log("No links found with primary selector. Trying alternatives...")
-
-		altSelectors := []string{
-			"a[href*='fileType=xls']",
-			"a[href*='.ajax']",
-			"a[download]",
-			"a:has-text('Download')",
-			"a:has-text('Export')",
-		}
-
-		for _, sel := range altSelectors {
-			loc := page.Locator(sel)
-			c, _ := loc.Count()
-			t.Logf("  Selector %q: %d matches", sel, c)
-			if c > 0 {
-				// Print the href of the first match
-				href, _ := loc.First().GetAttribute("href")
-				t.Logf("    First href: %s", href)
-			}
-		}
-
-		t.Fatal("Could not find download link. Adjust the selector.")
+		t.Fatalf("HTTP request failed: %v", err)
 	}
 
-	// Download the file
-	download, err := page.ExpectDownload(func() error {
-		return downloadLink.First().Click()
-	})
-	if err != nil {
-		t.Fatalf("download failed: %v", err)
+	if resp.StatusCode() != 200 {
+		t.Fatalf("HTTP %d: %s", resp.StatusCode(), string(resp.Body()[:min(500, len(resp.Body()))]))
 	}
 
-	path, err := download.Path()
-	if err != nil {
-		t.Fatalf("could not get download path: %v", err)
-	}
+	t.Logf("Downloaded %d bytes", len(resp.Body()))
 
-	fileData, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("could not read downloaded file: %v", err)
-	}
-
-	t.Logf("Downloaded %d bytes", len(fileData))
-
-	// Parse the file
-	result, err := parseISharesXML(fileData)
+	// Parse the CSV
+	result, err := parseISharesCSV(resp.Body())
 	if err != nil {
 		t.Fatalf("parsing failed: %v", err)
 	}
