@@ -16,6 +16,8 @@ package provider
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -32,31 +34,30 @@ import (
 type IShares struct{}
 
 type iSharesETF struct {
-	ProductID string
-	Slug      string
-	IndexName string
+	ProductID string `json:"productId"`
+	Slug      string `json:"slug"`
+	IndexName string `json:"indexName"`
 }
 
-var iSharesETFMap = map[string]iSharesETF{
-	"IVV":  {ProductID: "239726", Slug: "ishares-core-s-p-500-etf", IndexName: "sp500"},
-	"IWB":  {ProductID: "239707", Slug: "ishares-russell-1000-etf", IndexName: "russell-1000"},
-	"IWD":  {ProductID: "239708", Slug: "ishares-russell-1000-value-etf", IndexName: "russell-1000-value"},
-	"IWF":  {ProductID: "239706", Slug: "ishares-russell-1000-growth-etf", IndexName: "russell-1000-growth"},
-	"IWM":  {ProductID: "239710", Slug: "ishares-russell-2000-etf", IndexName: "russell-2000"},
-	"IJH":  {ProductID: "239763", Slug: "ishares-core-s-p-mid-cap-etf", IndexName: "sp-mid-cap-400"},
-	"IJR":  {ProductID: "239774", Slug: "ishares-core-s-p-small-cap-etf", IndexName: "sp-small-cap-600"},
-	"IXUS": {ProductID: "244048", Slug: "ishares-core-msci-total-international-stock-etf", IndexName: "msci-total-intl"},
-	"IEFA": {ProductID: "244049", Slug: "ishares-core-msci-eafe-etf", IndexName: "msci-eafe"},
-	"IEMG": {ProductID: "244050", Slug: "ishares-core-msci-emerging-markets-etf", IndexName: "msci-emerging"},
-	"IVW":  {ProductID: "239725", Slug: "ishares-s-p-500-growth-etf", IndexName: "sp500-growth"},
-	"IVE":  {ProductID: "239728", Slug: "ishares-s-p-500-value-etf", IndexName: "sp500-value"},
-	"ITOT": {ProductID: "239724", Slug: "ishares-core-s-p-total-u-s-stock-market-etf", IndexName: "sp-total-us"},
-	"IWV":  {ProductID: "239714", Slug: "ishares-russell-3000-etf", IndexName: "russell-3000"},
-	"IWR":  {ProductID: "239718", Slug: "ishares-russell-mid-cap-etf", IndexName: "russell-mid-cap"},
-	"IWS":  {ProductID: "239719", Slug: "ishares-russell-mid-cap-value-etf", IndexName: "russell-mid-cap-value"},
-	"IWP":  {ProductID: "239717", Slug: "ishares-russell-mid-cap-growth-etf", IndexName: "russell-mid-cap-growth"},
-	"IWO":  {ProductID: "239709", Slug: "ishares-russell-2000-growth-etf", IndexName: "russell-2000-growth"},
-	"IWN":  {ProductID: "239711", Slug: "ishares-russell-2000-value-etf", IndexName: "russell-2000-value"},
+//go:embed ishares_etfs.json
+var iSharesETFData []byte
+
+var iSharesETFMap map[string]iSharesETF
+
+func init() {
+	var entries []struct {
+		Ticker string `json:"ticker"`
+		iSharesETF
+	}
+
+	if err := json.Unmarshal(iSharesETFData, &entries); err != nil {
+		panic("failed to parse embedded ishares_etfs.json: " + err.Error())
+	}
+
+	iSharesETFMap = make(map[string]iSharesETF, len(entries))
+	for _, e := range entries {
+		iSharesETFMap[e.Ticker] = e.iSharesETF
+	}
 }
 
 func (ishares *IShares) Name() string {
