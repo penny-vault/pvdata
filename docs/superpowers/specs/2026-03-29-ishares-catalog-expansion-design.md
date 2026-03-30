@@ -70,6 +70,52 @@ The JSON file will be populated by researching the iShares US product listing fo
 - Add a test verifying `iSharesETFMap` is populated after package init and that a known ETF (e.g., "IVV") resolves correctly
 - Existing parser and helper tests are unaffected
 
+## Phase 2: CSV API and Rate Limiting
+
+### CSV API
+
+The iShares website exposes a CSV download endpoint that works with plain HTTP requests (no Playwright/browser needed):
+
+```
+https://www.ishares.com/us/products/{productId}/{slug}/1467271812596.ajax?fileType=csv&fileName={ticker}_holdings&dataType=fund
+```
+
+The `1467271812596.ajax` path segment is constant across all products. The CSV format has metadata rows at the top (fund name, holdings date), a blank line, then a standard CSV table with headers: `Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date`.
+
+Switching from Playwright XLS download to direct HTTP CSV download:
+- Eliminates Playwright dependency for iShares (Nasdaq provider still uses it)
+- Is faster and more reliable (no browser overhead)
+- Uses resty (already a project dependency) for HTTP with retry support
+
+### Rate Limiting
+
+With 287 ETFs, a randomized delay between requests prevents hammering the iShares servers. Each request is followed by a random sleep of **5 seconds to 45 seconds** (uniform distribution). This gives an average of ~25 seconds per request, completing a full 287-ETF run in approximately 2 hours.
+
+### Code Changes
+
+**`provider/ishares.go`:**
+- Replace Playwright startup/teardown with a resty client (retry on 429/5xx, 60s timeout)
+- Replace `downloadSingleISharesETF` signature: drop `playwright.Page`, add `*resty.Client` and `ticker string`
+- Build CSV URL from ETF metadata + ticker
+- Add randomized delay (5-45s) between requests in the ticker loop
+- Remove `playwright_helpers` and `playwright-go` imports
+
+**`provider/ishares_parser.go`:**
+- Replace `parseISharesXML` with `parseISharesCSV`
+- Parse metadata rows to extract snapshot date (second row: `Fund Holdings as of,"Mar 27, 2026"`)
+- Parse CSV data rows using `encoding/csv`
+- Same output: `iSharesParseResult` with `SnapshotDate` and `[]iSharesHolding`
+- Same equity-only filter on `Asset Class` column
+- Remove all XML types (`ssWorkbook`, `ssWorksheet`, `ssTable`, `ssRow`, `ssCell`, `ssData`)
+- Remove `sanitizeAmpersands` (XML-specific workaround)
+
+**`provider/ishares_parser_test.go`:**
+- Replace XML sample data with CSV sample data
+- Same test cases: parse holdings, extract date, extract weight, filter non-equity
+
+**`provider/integration_test.go`:**
+- Update `TestISharesDownloadAndParse` to use resty + CSV instead of Playwright + XLS
+
 ## Scope
 
 - Equity ETFs only (bond, commodity, and multi-asset ETFs are excluded by the existing parser filter)
