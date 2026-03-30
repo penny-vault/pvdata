@@ -237,12 +237,14 @@ func downloadSingleISharesETF(
 		Str("IndexName", etf.IndexName).
 		Msg("parsed iShares holdings")
 
-	// Build current holdings map (ticker -> figi)
+	// Build current holdings map (ticker -> figi) and weight map
 	currentHoldings := make(map[string]string, len(parseResult.Holdings))
+	weightMap := make(map[string]float64, len(parseResult.Holdings))
 	for _, holding := range parseResult.Holdings {
 		if figi, ok := figiMap[holding.Ticker]; ok {
 			currentHoldings[holding.Ticker] = figi
 		}
+		weightMap[holding.Ticker] = holding.Weight
 	}
 
 	// Get previous snapshot and emit changelog
@@ -255,7 +257,7 @@ func downloadSingleISharesETF(
 		eventDate = time.Now().UTC().Truncate(24 * time.Hour)
 	}
 
-	emitChangelog(added, removed, etf.IndexName, eventDate, &data.Observation{
+	emitChangelog(added, removed, etf.IndexName, eventDate, weightMap, &data.Observation{
 		ObservationDate:  time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,
@@ -265,11 +267,6 @@ func downloadSingleISharesETF(
 	// Check if a snapshot should be taken
 	lastDate := lastSnapshotDate(ctx, subscription.Library.Pool, table, etf.IndexName)
 	if shouldTakeSnapshot(lastDate, snapshotFrequency) {
-		// Build a weight map for quick lookup
-		weightMap := make(map[string]float64, len(parseResult.Holdings))
-		for _, holding := range parseResult.Holdings {
-			weightMap[holding.Ticker] = holding.Weight
-		}
 
 		snapshotDate := parseResult.SnapshotDate
 		if snapshotDate.IsZero() {

@@ -247,6 +247,7 @@ CREATE TABLE %[1]s_changelog (
     index_name     TEXT                  NOT NULL,
     event_date     DATE                  NOT NULL,
     action         TEXT                  NOT NULL,
+    weight         REAL                  NOT NULL DEFAULT 0.0,
     PRIMARY KEY (composite_figi, index_name, event_date)
 );
 

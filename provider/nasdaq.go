@@ -202,7 +202,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
 
-	emitChangelog(added, removed, "ndx100", eventDate, &data.Observation{
+	emitChangelog(added, removed, "ndx100", eventDate, nil, &data.Observation{
 		ObservationDate:  time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,

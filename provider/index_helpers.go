@@ -116,8 +116,14 @@ func previousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 }
 
 // emitChangelog emits IndexChange observations for adds and removes.
-func emitChangelog(adds, removes map[string]string, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
+// weightMap may be nil if weights are not available (e.g. Nasdaq).
+func emitChangelog(adds, removes map[string]string, indexName string, eventDate time.Time, weightMap map[string]float64, subscription *data.Observation, out chan<- *data.Observation) {
 	for ticker, figi := range adds {
+		var weight float64
+		if weightMap != nil {
+			weight = weightMap[ticker]
+		}
+
 		out <- &data.Observation{
 			IndexChange: &data.IndexChange{
 				Ticker:        ticker,
@@ -125,6 +131,7 @@ func emitChangelog(adds, removes map[string]string, indexName string, eventDate 
 				IndexName:     indexName,
 				EventDate:     eventDate,
 				Action:        "add",
+				Weight:        weight,
 			},
 			ObservationDate:  subscription.ObservationDate,
 			SubscriptionID:   subscription.SubscriptionID,

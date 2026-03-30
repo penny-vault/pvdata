@@ -82,6 +82,7 @@ type IndexChange struct {
 	IndexName     string
 	EventDate     time.Time
 	Action        string // "add" or "remove"
+	Weight        float64
 }
 
 func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
@@ -105,11 +106,13 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 		"ticker",
 		"index_name",
 		"event_date",
-		"action"
+		"action",
+		"weight"
 	) VALUES (
-		$1, $2, $3, $4, $5
+		$1, $2, $3, $4, $5, $6
 	) ON CONFLICT ON CONSTRAINT %[1]s_changelog_pkey DO UPDATE SET
-		action = EXCLUDED.action`, tbl)
+		action = EXCLUDED.action,
+		weight = EXCLUDED.weight`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
 		idx.CompositeFigi,
@@ -117,6 +120,7 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 		idx.IndexName,
 		idx.EventDate,
 		idx.Action,
+		idx.Weight,
 	)
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save index change to DB failed")
