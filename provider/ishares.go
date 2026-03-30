@@ -219,10 +219,10 @@ func downloadSingleISharesETF(
 
 	logger.Info().Int("Bytes", len(fileData)).Str("IndexName", etf.IndexName).Msg("downloaded iShares holdings file")
 
-	// Parse the XML/XLS data
-	parseResult, err := parseISharesXML(fileData)
+	// Parse the CSV data
+	parseResult, err := parseISharesCSV(fileData)
 	if err != nil {
-		return 0, fmt.Errorf("could not parse iShares XML for %s: %w", etf.IndexName, err)
+		return 0, fmt.Errorf("could not parse iShares CSV for %s: %w", etf.IndexName, err)
 	}
 
 	if len(parseResult.Holdings) == 0 {

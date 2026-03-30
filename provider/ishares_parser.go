@@ -1,8 +1,23 @@
+// Copyright 2024
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 package provider
 
 import (
 	"bytes"
-	"encoding/xml"
+	"encoding/csv"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -18,112 +33,43 @@ type iSharesParseResult struct {
 	Holdings     []iSharesHolding
 }
 
-type ssWorkbook struct {
-	XMLName    xml.Name      `xml:"Workbook"`
-	Worksheets []ssWorksheet `xml:"Worksheet"`
-}
-
-type ssWorksheet struct {
-	Name  string  `xml:"Name,attr"`
-	Table ssTable `xml:"Table"`
-}
-
-type ssTable struct {
-	Rows []ssRow `xml:"Row"`
-}
-
-type ssRow struct {
-	Cells []ssCell `xml:"Cell"`
-}
-
-type ssCell struct {
-	StyleID string `xml:"StyleID,attr"`
-	Data    ssData `xml:"Data"`
-}
-
-type ssData struct {
-	Type  string `xml:"Type,attr"`
-	Value string `xml:",chardata"`
-}
-
-// sanitizeAmpersands replaces bare & characters that are not part of valid
-// XML entity references. iShares files contain malformed HTML in their
-// disclaimer text (e.g., "&style" without a semicolon).
-func sanitizeAmpersands(data []byte) []byte {
-	validEntities := []string{"amp;", "lt;", "gt;", "quot;", "apos;", "#"}
-
-	var result []byte
-
-	for i := 0; i < len(data); i++ {
-		if data[i] == '&' {
-			rest := string(data[i+1:])
-			isValid := false
-
-			for _, ent := range validEntities {
-				if strings.HasPrefix(rest, ent) {
-					isValid = true
-					break
-				}
-			}
-
-			if isValid {
-				result = append(result, '&')
-			} else {
-				result = append(result, []byte("&amp;")...)
-			}
-		} else {
-			result = append(result, data[i])
-		}
-	}
-
-	return result
-}
-
-func parseISharesXML(xmlData []byte) (*iSharesParseResult, error) {
-	// Strip BOM (possibly duplicated)
-	xmlData = bytes.TrimPrefix(xmlData, []byte("\xef\xbb\xbf"))
-	xmlData = bytes.TrimPrefix(xmlData, []byte("\xef\xbb\xbf"))
-
-	// Sanitize bare ampersands in disclaimer text (iShares files contain
-	// invalid XML like "&style" without semicolons in their HTML content)
-	xmlData = sanitizeAmpersands(xmlData)
-
-	var workbook ssWorkbook
-	if err := xml.Unmarshal(xmlData, &workbook); err != nil {
-		return nil, err
-	}
+func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
+	// Strip BOM
+	csvData = bytes.TrimPrefix(csvData, []byte("\xef\xbb\xbf"))
 
 	result := &iSharesParseResult{}
+	reader := csv.NewReader(bytes.NewReader(csvData))
+	reader.LazyQuotes = true
+	reader.FieldsPerRecord = -1 // variable field count in metadata rows
 
-	var holdingsSheet *ssWorksheet
+	// Read all records
+	var records [][]string
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
 
-	for i := range workbook.Worksheets {
-		if workbook.Worksheets[i].Name == "Holdings" {
-			holdingsSheet = &workbook.Worksheets[i]
+	// Extract snapshot date from "Fund Holdings as of" row
+	for _, record := range records {
+		if len(record) >= 2 && strings.TrimSpace(record[0]) == "Fund Holdings as of" {
+			dateStr := strings.TrimSpace(record[1])
+			if t, err := time.Parse("Jan 02, 2006", dateStr); err == nil {
+				result.SnapshotDate = t
+			}
 			break
 		}
 	}
 
-	if holdingsSheet == nil {
-		return nil, xml.UnmarshalError("Holdings worksheet not found")
-	}
-
-	rows := holdingsSheet.Table.Rows
-
-	// Extract snapshot date from the first row
-	if len(rows) > 0 && len(rows[0].Cells) > 0 {
-		dateStr := strings.TrimSpace(rows[0].Cells[0].Data.Value)
-		if t, err := time.Parse("02-Jan-2006", dateStr); err == nil {
-			result.SnapshotDate = t
-		}
-	}
-
-	// Find header row
+	// Find the header row (starts with "Ticker")
 	headerIdx := -1
-
-	for i, row := range rows {
-		if len(row.Cells) > 0 && row.Cells[0].StyleID == "headerstyle" &&
-			row.Cells[0].Data.Value == "Ticker" {
+	for i, record := range records {
+		if len(record) > 0 && strings.TrimSpace(record[0]) == "Ticker" {
 			headerIdx = i
 			break
 		}
@@ -135,30 +81,32 @@ func parseISharesXML(xmlData []byte) (*iSharesParseResult, error) {
 
 	// Build column index map
 	colIdx := make(map[string]int)
-	for i, cell := range rows[headerIdx].Cells {
-		colIdx[cell.Data.Value] = i
+	for i, col := range records[headerIdx] {
+		colIdx[strings.TrimSpace(col)] = i
 	}
 
 	tickerCol := colIdx["Ticker"]
 	assetClassCol := colIdx["Asset Class"]
 	weightCol := colIdx["Weight (%)"]
 
-	for _, row := range rows[headerIdx+1:] {
-		if len(row.Cells) <= weightCol {
+	// Parse data rows
+	for _, record := range records[headerIdx+1:] {
+		if len(record) <= weightCol {
 			continue
 		}
 
-		assetClass := row.Cells[assetClassCol].Data.Value
+		assetClass := strings.TrimSpace(record[assetClassCol])
 		if assetClass != "Equity" {
 			continue
 		}
 
-		ticker := strings.TrimSpace(row.Cells[tickerCol].Data.Value)
+		ticker := strings.TrimSpace(record[tickerCol])
 		if ticker == "" {
 			continue
 		}
 
-		weightPct, err := strconv.ParseFloat(row.Cells[weightCol].Data.Value, 64)
+		weightStr := strings.ReplaceAll(record[weightCol], ",", "")
+		weightPct, err := strconv.ParseFloat(strings.TrimSpace(weightStr), 64)
 		if err != nil {
 			continue
 		}
