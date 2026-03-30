@@ -19,16 +19,14 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"os"
+	"math/rand/v2"
 	"strings"
 	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
-	"github.com/penny-vault/pvdata/playwright_helpers"
-	"github.com/playwright-community/playwright-go"
 	"github.com/rs/zerolog"
-	"github.com/spf13/viper"
 )
 
 type IShares struct{}
@@ -88,6 +86,8 @@ func (ishares *IShares) Datasets() map[string]Dataset {
 		},
 	}
 }
+
+const iSharesHoldingsURLTemplate = "https://www.ishares.com/us/products/%s/%s/1467271812596.ajax?fileType=csv&fileName=%s_holdings&dataType=fund"
 
 func downloadISharesHoldings(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	logger := zerolog.Ctx(ctx)
@@ -152,25 +152,40 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 		figiMap[asset.Ticker] = asset.CompositeFigi
 	}
 
-	// Start Playwright
-	page, browserContext, browser, pw := playwright_helpers.StartPlaywright(viper.GetBool("playwright.headless"))
-	defer playwright_helpers.StopPlaywright(page, browserContext, browser, pw)
+	// Create HTTP client
+	client := resty.New().
+		SetRetryCount(3).
+		SetRetryWaitTime(10*time.Second).
+		SetRetryMaxWaitTime(60*time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+		}).
+		SetTimeout(60*time.Second).
+		SetHeader("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36").
+		SetHeader("Accept", "text/csv,text/plain,*/*")
 
 	// Process each ticker
-	for _, ticker := range tickers {
+	for i, ticker := range tickers {
 		etf, ok := iSharesETFMap[ticker]
 		if !ok {
 			logger.Warn().Str("Ticker", ticker).Msg("unknown iShares ETF ticker, skipping")
 			continue
 		}
 
-		n, err := downloadSingleISharesETF(ctx, page, etf, figiMap, snapshotFrequency, subscription, out)
+		n, err := downloadSingleISharesETF(ctx, client, ticker, etf, figiMap, snapshotFrequency, subscription, out)
 		if err != nil {
 			logger.Error().Err(err).Str("Ticker", ticker).Msg("failed to download iShares ETF holdings")
 			continue
 		}
 
 		numObs += n
+
+		// Randomized delay between requests (5-45 seconds), skip after last ticker
+		if i < len(tickers)-1 {
+			delay := 5*time.Second + time.Duration(rand.IntN(41))*time.Second
+			logger.Info().Dur("Delay", delay).Msg("waiting between iShares requests")
+			time.Sleep(delay)
+		}
 	}
 
 	runSummary.Status = data.RunSuccess
@@ -178,7 +193,8 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 
 func downloadSingleISharesETF(
 	ctx context.Context,
-	page playwright.Page,
+	client *resty.Client,
+	ticker string,
 	etf iSharesETF,
 	figiMap map[string]string,
 	snapshotFrequency string,
@@ -188,39 +204,24 @@ func downloadSingleISharesETF(
 	logger := zerolog.Ctx(ctx)
 	numObs := 0
 
-	// Navigate to the product page
-	productURL := fmt.Sprintf("https://www.ishares.com/us/products/%s/%s", etf.ProductID, etf.Slug)
-	logger.Info().Str("URL", productURL).Str("IndexName", etf.IndexName).Msg("navigating to iShares product page")
+	// Download CSV holdings file
+	csvURL := fmt.Sprintf(iSharesHoldingsURLTemplate, etf.ProductID, etf.Slug, ticker)
+	logger.Info().Str("URL", csvURL).Str("IndexName", etf.IndexName).Msg("downloading iShares holdings CSV")
 
-	if _, err := page.Goto(productURL, playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(60000),
-	}); err != nil {
-		return 0, fmt.Errorf("could not navigate to %s: %w", productURL, err)
-	}
-
-	// Download the XLS holdings file
-	download, err := page.ExpectDownload(func() error {
-		return page.Locator("a[href*='.ajax'][href*='fileType=xls']").Click()
-	})
+	resp, err := client.R().SetContext(ctx).Get(csvURL)
 	if err != nil {
-		return 0, fmt.Errorf("download failed for %s: %w", etf.IndexName, err)
+		return 0, fmt.Errorf("HTTP request failed for %s: %w", etf.IndexName, err)
 	}
 
-	path, err := download.Path()
-	if err != nil {
-		return 0, fmt.Errorf("could not get download path for %s: %w", etf.IndexName, err)
+	if resp.StatusCode() != 200 {
+		return 0, fmt.Errorf("HTTP %d for %s", resp.StatusCode(), etf.IndexName)
 	}
 
-	fileData, err := os.ReadFile(path)
-	if err != nil {
-		return 0, fmt.Errorf("could not read downloaded file for %s: %w", etf.IndexName, err)
-	}
-
-	logger.Info().Int("Bytes", len(fileData)).Str("IndexName", etf.IndexName).Msg("downloaded iShares holdings file")
+	csvData := resp.Body()
+	logger.Info().Int("Bytes", len(csvData)).Str("IndexName", etf.IndexName).Msg("downloaded iShares holdings CSV")
 
 	// Parse the CSV data
-	parseResult, err := parseISharesCSV(fileData)
+	parseResult, err := parseISharesCSV(csvData)
 	if err != nil {
 		return 0, fmt.Errorf("could not parse iShares CSV for %s: %w", etf.IndexName, err)
 	}
@@ -275,14 +276,14 @@ func downloadSingleISharesETF(
 			snapshotDate = time.Now().UTC().Truncate(24 * time.Hour)
 		}
 
-		for ticker, figi := range currentHoldings {
+		for t, figi := range currentHoldings {
 			out <- &data.Observation{
 				IndexSnapshot: &data.IndexSnapshot{
-					Ticker:        ticker,
+					Ticker:        t,
 					CompositeFigi: figi,
 					IndexName:     etf.IndexName,
 					SnapshotDate:  snapshotDate,
-					Weight:        weightMap[ticker],
+					Weight:        weightMap[t],
 				},
 				ObservationDate:  time.Now(),
 				SubscriptionID:   subscription.ID,
