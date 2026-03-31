@@ -223,6 +223,11 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 	close(outChan)
 	wg.Wait()
 
+	// Persist run history
+	if err := myLibrary.SaveRunHistory(ctx, summary); err != nil {
+		logger.Error().Err(err).Msg("failed to save run history")
+	}
+
 	// Run post-fetch hooks
 	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
 		for _, hook := range subDataset.PostFetch {
