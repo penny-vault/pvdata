@@ -20,6 +20,7 @@ import (
 	"net/http"
 
 	"github.com/gofiber/fiber/v2/middleware/filesystem"
+	"github.com/rs/zerolog/log"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -32,7 +33,11 @@ var uiAssets embed.FS
 // Non-matching routes fall back to index.html for SPA history-mode routing
 // via the filesystem middleware's NotFoundFile option.
 func SetupSPA(app *fiber.App) {
-	distFS, _ := fs.Sub(uiAssets, "ui/dist")
+	distFS, err := fs.Sub(uiAssets, "ui/dist")
+	if err != nil {
+		log.Warn().Err(err).Msg("could not load embedded UI assets, SPA serving disabled")
+		return
+	}
 
 	app.Use("/", filesystem.New(filesystem.Config{
 		Root:         http.FS(distFS),

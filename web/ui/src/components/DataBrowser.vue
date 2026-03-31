@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { getData } from '@/lib/api'
 
 const props = defineProps<{
@@ -39,9 +39,7 @@ async function fetchData(append = false) {
       params.order = sortOrder.value
     }
 
-    const queryString = new URLSearchParams(params).toString()
-    const path = `?${queryString}`
-    const result = await getData(props.subscriptionId, props.datatype + path)
+    const result = await getData(props.subscriptionId, props.datatype, params)
 
     if (result.columns) {
       columns.value = result.columns

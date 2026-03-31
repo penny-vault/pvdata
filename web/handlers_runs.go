@@ -24,15 +24,7 @@ func GetRunHistory(c *fiber.Ctx) error {
 	id := c.Params("id")
 	limit := c.QueryInt("limit", 25)
 	offset := c.QueryInt("offset", 0)
-
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
+	myLibrary := getLibrary(c)
 
 	entries, total, err := myLibrary.RunHistory(c.UserContext(), id, limit, offset)
 	if err != nil {
@@ -55,15 +47,7 @@ func GetRunHistory(c *fiber.Ctx) error {
 // GetRunSparkline returns daily aggregated observation counts for sparkline display.
 func GetRunSparkline(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
+	myLibrary := getLibrary(c)
 
 	sparkline, err := myLibrary.RunHistorySparkline(c.UserContext(), id)
 	if err != nil {

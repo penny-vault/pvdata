@@ -2,6 +2,14 @@ import { getAccessToken } from './oidc'
 
 const BASE = '/api/v1'
 
+async function handleResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await getAccessToken()
   const headers = new Headers(init?.headers)
@@ -21,12 +29,12 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 
 export async function getSubscriptions() {
   const res = await authFetch('/subscriptions')
-  return res.json()
+  return handleResponse<any[]>(res)
 }
 
 export async function getSubscription(id: string) {
   const res = await authFetch(`/subscriptions/${id}`)
-  return res.json()
+  return handleResponse<any>(res)
 }
 
 export async function createSubscription(body: Record<string, unknown>) {
@@ -34,7 +42,7 @@ export async function createSubscription(body: Record<string, unknown>) {
     method: 'POST',
     body: JSON.stringify(body),
   })
-  return res.json()
+  return handleResponse<any>(res)
 }
 
 export async function updateSubscription(id: string, body: Record<string, unknown>) {
@@ -42,40 +50,44 @@ export async function updateSubscription(id: string, body: Record<string, unknow
     method: 'PUT',
     body: JSON.stringify(body),
   })
-  return res.json()
+  return handleResponse<any>(res)
 }
 
 export async function deleteSubscription(id: string) {
-  return authFetch(`/subscriptions/${id}`, { method: 'DELETE' })
+  const res = await authFetch(`/subscriptions/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
 }
 
 export async function activateSubscription(id: string) {
   const res = await authFetch(`/subscriptions/${id}/activate`, { method: 'POST' })
-  return res.json()
+  return handleResponse<any>(res)
 }
 
 export async function deactivateSubscription(id: string) {
   const res = await authFetch(`/subscriptions/${id}/deactivate`, { method: 'POST' })
-  return res.json()
+  return handleResponse<any>(res)
 }
 
 // ---------- Providers ----------
 
 export async function getProviders() {
   const res = await authFetch('/providers')
-  return res.json()
+  return handleResponse<Record<string, any>>(res)
 }
 
 // ---------- Run History ----------
 
-export async function getRunHistory(subscriptionId: string) {
-  const res = await authFetch(`/subscriptions/${subscriptionId}/runs`)
-  return res.json()
+export async function getRunHistory(subscriptionId: string, limit = 50, offset = 0) {
+  const res = await authFetch(`/subscriptions/${subscriptionId}/runs?limit=${limit}&offset=${offset}`)
+  return handleResponse<any>(res)
 }
 
 export async function getSparkline(subscriptionId: string) {
   const res = await authFetch(`/subscriptions/${subscriptionId}/runs/sparkline`)
-  return res.json()
+  return handleResponse<any[]>(res)
 }
 
 // ---------- Data ----------
@@ -89,7 +101,7 @@ export async function getData(
   const res = await authFetch(
     `/subscriptions/${subscriptionId}/data/${dataType}${qs ? '?' + qs : ''}`,
   )
-  return res.json()
+  return handleResponse<any>(res)
 }
 
 // ---------- SQL ----------
@@ -99,7 +111,7 @@ export async function executeSQL(sql: string) {
     method: 'POST',
     body: JSON.stringify({ query: sql }),
   })
-  return res.json()
+  return handleResponse<any>(res)
 }
 
 export async function exportSQL(sql: string, format: 'csv' | 'parquet' = 'csv') {
@@ -107,6 +119,10 @@ export async function exportSQL(sql: string, format: 'csv' | 'parquet' = 'csv') 
     method: 'POST',
     body: JSON.stringify({ query: sql }),
   })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

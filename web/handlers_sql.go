@@ -34,10 +34,13 @@ type SQLRequest struct {
 }
 
 type queryResult struct {
-	Columns []string        `json:"columns"`
-	Data    [][]any `json:"data"`
-	Count   int             `json:"count"`
+	Columns   []string `json:"columns"`
+	Data      [][]any  `json:"data"`
+	Count     int      `json:"count"`
+	Truncated bool     `json:"truncated"`
 }
+
+const maxQueryRows = 10000
 
 // ExecuteSQL runs a user-provided SQL query in a read-only transaction.
 func ExecuteSQL(c *fiber.Ctx) error {
@@ -56,14 +59,7 @@ func ExecuteSQL(c *fiber.Ctx) error {
 		})
 	}
 
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
+	myLibrary := getLibrary(c)
 
 	result, err := executeReadOnlyQuery(c.UserContext(), myLibrary.Pool, req.Query)
 	if err != nil {
@@ -96,15 +92,7 @@ func ExportSQL(c *fiber.Ctx) error {
 	}
 
 	format := c.Query("format", "csv")
-
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
+	myLibrary := getLibrary(c)
 
 	result, err := executeReadOnlyQuery(c.UserContext(), myLibrary.Pool, req.Query)
 	if err != nil {
@@ -240,8 +228,15 @@ func executeReadOnlyQuery(ctx context.Context, pool *pgxpool.Pool, query string)
 	}
 
 	data := make([][]any, 0)
+	truncated := false
 
 	for rows.Next() {
+		if len(data) >= maxQueryRows {
+			truncated = true
+
+			break
+		}
+
 		values, vErr := rows.Values()
 		if vErr != nil {
 			return nil, fmt.Errorf("could not scan row: %w", vErr)
@@ -255,8 +250,9 @@ func executeReadOnlyQuery(ctx context.Context, pool *pgxpool.Pool, query string)
 	}
 
 	return &queryResult{
-		Columns: columns,
-		Data:    data,
-		Count:   len(data),
+		Columns:   columns,
+		Data:      data,
+		Count:     len(data),
+		Truncated: truncated,
 	}, nil
 }

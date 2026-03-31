@@ -25,40 +25,41 @@ type providerDatasetResponse struct {
 	DataTypes   []string `json:"data_types"`
 }
 
-type providerResponse struct {
-	Name              string                    `json:"name"`
-	Description       string                    `json:"description"`
-	ConfigDescription map[string]string         `json:"config_description"`
-	Datasets          []providerDatasetResponse `json:"datasets"`
+// ProviderResponse describes a single provider and its datasets.
+type ProviderResponse struct {
+	Name              string                             `json:"name"`
+	Description       string                             `json:"description"`
+	ConfigDescription map[string]string                  `json:"config_description"`
+	Datasets          map[string]providerDatasetResponse `json:"datasets"`
 }
 
-// GetProviders returns a list of all registered providers with their datasets.
+// GetProviders returns a map of all registered providers keyed by provider key.
 func GetProviders(c *fiber.Ctx) error {
-	result := make([]providerResponse, 0, len(provider.Map))
+	result := make(map[string]ProviderResponse, len(provider.Map))
 
 	for name, p := range provider.Map {
 		datasets := p.Datasets()
-		datasetList := make([]providerDatasetResponse, 0, len(datasets))
+		datasetMap := make(map[string]providerDatasetResponse, len(datasets))
 
-		for _, ds := range datasets {
+		for dsKey, ds := range datasets {
 			dtNames := make([]string, 0, len(ds.DataTypes))
 			for _, dt := range ds.DataTypes {
 				dtNames = append(dtNames, dt.Name)
 			}
 
-			datasetList = append(datasetList, providerDatasetResponse{
+			datasetMap[dsKey] = providerDatasetResponse{
 				Name:        ds.Name,
 				Description: ds.Description,
 				DataTypes:   dtNames,
-			})
+			}
 		}
 
-		result = append(result, providerResponse{
+		result[name] = ProviderResponse{
 			Name:              name,
 			Description:       p.Description(),
 			ConfigDescription: p.ConfigDescription(),
-			Datasets:          datasetList,
-		})
+			Datasets:          datasetMap,
+		}
 	}
 
 	return c.JSON(result)

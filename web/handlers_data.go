@@ -29,15 +29,7 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	id := c.Params("id")
 	datatype := c.Params("datatype")
 
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
-
+	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
 	sub, err := myLibrary.SubscriptionFromID(ctx, id)
@@ -67,8 +59,9 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 
 	limit := c.QueryInt("limit", 100)
 	offset := c.QueryInt("offset", 0)
-	search := c.Query("search")
+	search := c.Query("q")
 	sort := c.Query("sort", "")
+	order := c.Query("order", "asc")
 
 	// Build the count query
 	countQuery := fmt.Sprintf("SELECT count(*) FROM %s", tableName)
@@ -110,7 +103,12 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	}
 
 	if sort != "" && validTableName.MatchString(sort) {
-		dataQuery += fmt.Sprintf(" ORDER BY %s", sort)
+		direction := "ASC"
+		if order == "desc" {
+			direction = "DESC"
+		}
+
+		dataQuery += fmt.Sprintf(" ORDER BY %s %s", sort, direction)
 	}
 
 	dataQuery += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)

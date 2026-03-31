@@ -36,7 +36,12 @@ const selectedProviderData = computed(() => {
 
 const datasetOptions = computed(() => {
   if (!selectedProviderData.value) return []
-  return selectedProviderData.value.datasets || []
+  const datasets = selectedProviderData.value.datasets || {}
+  return Object.entries(datasets).map(([key, val]: [string, any]) => ({
+    key,
+    name: val.name || key,
+    description: val.description || '',
+  }))
 })
 
 const canNext = computed(() => {
@@ -190,10 +195,10 @@ onMounted(async () => {
           >
             <cv-radio-button
               v-for="ds in datasetOptions"
-              :key="ds"
-              :value="ds"
-              :label="ds"
-              :checked="selectedDataset === ds"
+              :key="ds.key"
+              :value="ds.key"
+              :label="ds.description ? `${ds.name} - ${ds.description}` : ds.name"
+              :checked="selectedDataset === ds.key"
               name="dataset"
             />
           </cv-radio-group>

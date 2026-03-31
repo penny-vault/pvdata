@@ -111,14 +111,14 @@ onMounted(async () => {
             <td>{{ sub.dataset }}</td>
             <td>
               <cv-tag
-                :label="sub.enabled ? 'Active' : 'Inactive'"
-                :kind="sub.enabled ? 'green' : 'gray'"
+                :label="sub.active ? 'Active' : 'Inactive'"
+                :kind="sub.active ? 'green' : 'gray'"
               />
             </td>
             <td>
               <SparklineCell :data="sparklines[sub.id] || []" />
             </td>
-            <td>{{ formatDate(sub.last_run_time) }}</td>
+            <td>{{ formatDate(sub.last_run) }}</td>
             <td>{{ formatNumber(sub.num_records_last_import) }}</td>
             <td>{{ sub.next_run_human || '--' }}</td>
           </tr>

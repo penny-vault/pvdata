@@ -65,22 +65,13 @@ async function loadSubscription() {
 async function loadRuns(append = false) {
   loadingRuns.value = true
   try {
-    const result = await getRunHistory(id.value)
-    if (Array.isArray(result)) {
-      if (append) {
-        runs.value = [...runs.value, ...result]
-      } else {
-        runs.value = result
-      }
-      runsTotal.value = result.length
+    const result = await getRunHistory(id.value, runsLimit, runsOffset.value)
+    if (append) {
+      runs.value = [...runs.value, ...(result.data || [])]
     } else {
-      if (append) {
-        runs.value = [...runs.value, ...(result.data || [])]
-      } else {
-        runs.value = result.data || []
-      }
-      runsTotal.value = result.total || runs.value.length
+      runs.value = result.data || []
     }
+    runsTotal.value = result.total || runs.value.length
   } catch {
     // Non-critical
   } finally {
@@ -163,14 +154,14 @@ onMounted(() => {
             <cv-tag :label="subscription.provider" kind="blue" />
             <cv-tag :label="subscription.dataset" kind="purple" />
             <cv-tag
-              :label="subscription.enabled ? 'Active' : 'Inactive'"
-              :kind="subscription.enabled ? 'green' : 'gray'"
+              :label="subscription.active ? 'Active' : 'Inactive'"
+              :kind="subscription.active ? 'green' : 'gray'"
             />
           </div>
         </div>
         <div class="detail-header__actions">
           <cv-button kind="ghost" @click="toggleActive">
-            {{ subscription.enabled ? 'Deactivate' : 'Activate' }}
+            {{ subscription.active ? 'Deactivate' : 'Activate' }}
           </cv-button>
           <cv-button kind="secondary" @click="editing = !editing">
             {{ editing ? 'Cancel Edit' : 'Edit' }}
@@ -226,7 +217,7 @@ onMounted(() => {
         <div class="stat-card">
           <span class="stat-card__label">Last Import</span>
           <span class="stat-card__value">
-            {{ formatDate(subscription.last_run_time) }}
+            {{ formatDate(subscription.last_run) }}
           </span>
         </div>
         <div class="stat-card">

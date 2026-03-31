@@ -19,7 +19,6 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
 )
 
 type HttpError struct {
@@ -45,28 +44,14 @@ type UpdateSubscriptionRequest struct {
 	Active        *bool              `json:"active"`
 }
 
-// getLibrary creates a library connection from viper config.
-func getLibrary(c *fiber.Ctx) (*library.Library, error) {
-	myLibrary, err := library.NewFromDB(c.UserContext(), viper.GetString("db.url"))
-	if err != nil {
-		log.Error().Err(err).Msg("could not load library info")
-
-		return nil, err
-	}
-
-	return myLibrary, nil
+// getLibrary retrieves the shared library connection pool from request context.
+func getLibrary(c *fiber.Ctx) *library.Library {
+	return c.Locals("library").(*library.Library)
 }
 
 // GetSubscriptions returns all subscriptions.
 func GetSubscriptions(c *fiber.Ctx) error {
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
+	myLibrary := getLibrary(c)
 
 	subscriptions, err := myLibrary.Subscriptions(c.UserContext())
 	if err != nil {
@@ -84,15 +69,7 @@ func GetSubscriptions(c *fiber.Ctx) error {
 // GetSubscription returns a single subscription by ID prefix.
 func GetSubscription(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
+	myLibrary := getLibrary(c)
 
 	sub, err := myLibrary.SubscriptionFromID(c.UserContext(), id)
 	if err != nil {
@@ -124,14 +101,7 @@ func CreateSubscription(c *fiber.Ctx) error {
 		})
 	}
 
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
+	myLibrary := getLibrary(c)
 
 	sub, err := provider.NewSubscription(req.Provider, req.Dataset, req.Config, req.DataTypes, myLibrary)
 	if err != nil {
@@ -175,15 +145,7 @@ func UpdateSubscription(c *fiber.Ctx) error {
 		})
 	}
 
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
-
+	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
 	sub, err := myLibrary.SubscriptionFromID(ctx, id)
@@ -274,16 +236,7 @@ func UpdateSubscription(c *fiber.Ctx) error {
 // DeleteSubscription deletes a subscription by ID.
 func DeleteSubscription(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
-
+	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
 	sub, err := myLibrary.SubscriptionFromID(ctx, id)
@@ -311,16 +264,7 @@ func DeleteSubscription(c *fiber.Ctx) error {
 // ActivateSubscription activates a subscription by ID.
 func ActivateSubscription(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
-
+	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
 	sub, err := myLibrary.SubscriptionFromID(ctx, id)
@@ -348,16 +292,7 @@ func ActivateSubscription(c *fiber.Ctx) error {
 // DeactivateSubscription deactivates a subscription by ID.
 func DeactivateSubscription(c *fiber.Ctx) error {
 	id := c.Params("id")
-
-	myLibrary, err := getLibrary(c)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
-			Code:    "500",
-			Message: "could not load library info",
-		})
-	}
-	defer myLibrary.Close()
-
+	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
 	sub, err := myLibrary.SubscriptionFromID(ctx, id)
