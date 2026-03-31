@@ -91,11 +91,11 @@ async function onExecute() {
   }
 }
 
-async function onExportCsv() {
+async function onExport(format: 'csv' | 'parquet') {
   const query = getEditorContent().trim()
   if (!query) return
   try {
-    await exportSQL(query)
+    await exportSQL(query, format)
   } catch (e: any) {
     error.value = e.message || 'Export failed'
   }
@@ -177,9 +177,16 @@ onMounted(() => {
         <cv-button
           kind="ghost"
           :disabled="rows.length === 0"
-          @click="onExportCsv"
+          @click="onExport('csv')"
         >
           Export CSV
+        </cv-button>
+        <cv-button
+          kind="ghost"
+          :disabled="rows.length === 0"
+          @click="onExport('parquet')"
+        >
+          Export Parquet
         </cv-button>
         <div class="editor-toolbar__spacer"></div>
         <cv-button kind="ghost" @click="showHistory = !showHistory">

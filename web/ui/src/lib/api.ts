@@ -80,8 +80,15 @@ export async function getSparkline(subscriptionId: string) {
 
 // ---------- Data ----------
 
-export async function getData(subscriptionId: string, dataType: string) {
-  const res = await authFetch(`/subscriptions/${subscriptionId}/data/${dataType}`)
+export async function getData(
+  subscriptionId: string,
+  dataType: string,
+  params: Record<string, string> = {},
+) {
+  const qs = new URLSearchParams(params).toString()
+  const res = await authFetch(
+    `/subscriptions/${subscriptionId}/data/${dataType}${qs ? '?' + qs : ''}`,
+  )
   return res.json()
 }
 
@@ -95,8 +102,8 @@ export async function executeSQL(sql: string) {
   return res.json()
 }
 
-export async function exportSQL(sql: string) {
-  const res = await authFetch('/sql/export', {
+export async function exportSQL(sql: string, format: 'csv' | 'parquet' = 'csv') {
+  const res = await authFetch(`/sql/export?format=${format}`, {
     method: 'POST',
     body: JSON.stringify({ query: sql }),
   })
@@ -104,7 +111,7 @@ export async function exportSQL(sql: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = 'export.csv'
+  a.download = `export.${format}`
   a.click()
   URL.revokeObjectURL(url)
 }
