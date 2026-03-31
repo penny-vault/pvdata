@@ -201,6 +201,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	// Get previous snapshot and emit changelog
 	table := subscription.DataTablesMap[data.IndexKey]
 	prevRaw := previousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
+
 	previous := make(map[string]indexMember, len(prevRaw))
 	for ticker, figi := range prevRaw {
 		previous[ticker] = indexMember{CompositeFigi: figi}

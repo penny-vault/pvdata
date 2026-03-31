@@ -19,6 +19,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -346,17 +347,13 @@ func downloadSingleISharesETF(
 		}
 
 		// Update in-memory state
-		for t, m := range added {
-			state[t] = m
-		}
+		maps.Copy(state, added)
 
 		for t := range removed {
 			delete(state, t)
 		}
 
-		for t, m := range weightChanged {
-			state[t] = m
-		}
+		maps.Copy(state, weightChanged)
 
 		// Rate-limit delay between requests (skip after last)
 		if i < len(dates)-1 {

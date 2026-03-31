@@ -166,7 +166,6 @@ var _ = Describe("diffSnapshots", func() {
 	})
 })
 
-
 var _ = Describe("tradingDays", func() {
 	It("returns an error when pool is nil", func() {
 		start := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)

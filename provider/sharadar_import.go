@@ -84,6 +84,7 @@ func detectFileFormat(path string) (fileFormat, error) {
 // are normalized to lowercase. Each subsequent row is returned as a map[string]string.
 func parseCSV(r io.Reader) ([]map[string]string, error) {
 	cr := csv.NewReader(r)
+
 	headers, err := cr.Read()
 	if err != nil {
 		return nil, fmt.Errorf("read CSV headers: %w", err)
@@ -94,11 +95,13 @@ func parseCSV(r io.Reader) ([]map[string]string, error) {
 	}
 
 	var rows []map[string]string
+
 	for {
 		record, err := cr.Read()
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			return nil, fmt.Errorf("read CSV row: %w", err)
 		}
@@ -109,6 +112,7 @@ func parseCSV(r io.Reader) ([]map[string]string, error) {
 				row[h] = record[i]
 			}
 		}
+
 		rows = append(rows, row)
 	}
 
@@ -158,6 +162,7 @@ func readCSVZipRows(path string) ([]map[string]string, error) {
 				return nil, fmt.Errorf("open CSV entry %s in ZIP %s: %w", f.Name, path, err)
 			}
 			defer rc.Close()
+
 			return parseCSV(rc)
 		}
 	}
@@ -189,28 +194,36 @@ func readParquetRows(path string) ([]map[string]string, error) {
 		if readCount > numRows {
 			readCount = numRows
 		}
+
 		batch, err := pr.ReadByNumber(readCount)
 		if err != nil {
 			return nil, fmt.Errorf("read parquet rows: %w", err)
 		}
+
 		for _, rawRow := range batch {
 			val := reflect.ValueOf(rawRow)
 			if val.Kind() == reflect.Ptr {
 				val = val.Elem()
 			}
+
 			if val.Kind() != reflect.Struct {
 				continue
 			}
+
 			typ := val.Type()
+
 			row := make(map[string]string, typ.NumField())
 			for j := 0; j < typ.NumField(); j++ {
 				name := strings.ToLower(typ.Field(j).Name)
 				row[name] = fmt.Sprintf("%v", val.Field(j).Interface())
 			}
+
 			rows = append(rows, row)
 		}
+
 		numRows -= readCount
 	}
+
 	return rows, nil
 }
 
@@ -241,7 +254,9 @@ func parseFloat(s string) float64 {
 	if s == "" || s == "<nil>" || s == "None" {
 		return 0
 	}
+
 	v, _ := strconv.ParseFloat(s, 64)
+
 	return v
 }
 
@@ -252,10 +267,12 @@ func parseInt(s string) int64 {
 	if s == "" || s == "<nil>" || s == "None" {
 		return 0
 	}
+
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0
 	}
+
 	return int64(f)
 }
 
@@ -462,10 +479,12 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 
 	defer func() {
 		runSummary.EndTime = time.Now()
+
 		runSummary.NumObservations = numObs
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
+
 		exit <- runSummary
 	}()
 
@@ -475,13 +494,16 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 		rows, err := readFileRows(filePath)
 		if err != nil {
 			logger.Error().Err(err).Str("file", filePath).Msg("failed to read file")
+
 			runSummary.Status = data.RunFailed
+
 			return
 		}
 
 		logger.Info().Int("rows", len(rows)).Str("file", filePath).Msg("file loaded")
 
 		var n int
+
 		switch sub.Dataset {
 		case "Fundamentals":
 			n, err = importFundamentalsRows(ctx, sub, rows, out)
@@ -495,7 +517,9 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 
 		if err != nil {
 			logger.Error().Err(err).Str("file", filePath).Msg("failed to import file")
+
 			runSummary.Status = data.RunFailed
+
 			return
 		}
 
@@ -525,6 +549,7 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 	}
 
 	count := 0
+
 	for i, row := range rows {
 		fundamental := mapRowToSharadarFundamental(row)
 		pvFundamental := fundamental.PvFundamental(figiMap)
@@ -572,6 +597,7 @@ func importMetricsRows(ctx context.Context, sub *library.Subscription, rows []ma
 	}
 
 	count := 0
+
 	for i, row := range rows {
 		metric := mapRowToSharadarMetric(row)
 		pvMetric := metric.PvMetric(figiMap, nyc)
@@ -644,6 +670,7 @@ func importTickersRows(ctx context.Context, sub *library.Subscription, rows []ma
 	}
 
 	count := 0
+
 	for _, asset := range allAssets {
 		out <- &data.Observation{
 			AssetObject:      asset,
@@ -651,6 +678,7 @@ func importTickersRows(ctx context.Context, sub *library.Subscription, rows []ma
 			SubscriptionID:   sub.ID,
 			SubscriptionName: sub.Name,
 		}
+
 		count++
 	}
 

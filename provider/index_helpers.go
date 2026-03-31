@@ -178,6 +178,7 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 
 		for rows.Next() {
 			var ticker, figi string
+
 			var weight float64
 
 			if err := rows.Scan(&ticker, &figi, &weight); err != nil {
@@ -204,6 +205,7 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 
 	for changeRows.Next() {
 		var ticker, figi, action string
+
 		var weight float64
 
 		if err := changeRows.Scan(&ticker, &figi, &action, &weight); err != nil {
