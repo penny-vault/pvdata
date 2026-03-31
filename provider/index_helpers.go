@@ -19,8 +19,8 @@ type indexMember struct {
 const weightChangeThreshold = 0.01
 
 // shouldTakeSnapshot returns true if a new snapshot should be taken based on the
-// configured frequency and the date of the last snapshot.
-func shouldTakeSnapshot(lastSnapshotDate time.Time, frequency string) bool {
+// configured frequency, the date of the last snapshot, and the current processing date.
+func shouldTakeSnapshot(lastSnapshotDate, currentDate time.Time, frequency string) bool {
 	if lastSnapshotDate.IsZero() {
 		return true
 	}
@@ -40,7 +40,7 @@ func shouldTakeSnapshot(lastSnapshotDate time.Time, frequency string) bool {
 		interval = 7 * 24 * time.Hour
 	}
 
-	return time.Since(lastSnapshotDate) >= interval
+	return currentDate.Sub(lastSnapshotDate) >= interval
 }
 
 // diffSnapshots compares current holdings against previous holdings

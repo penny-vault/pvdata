@@ -219,7 +219,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	// Check if a snapshot should be taken
 	lastDate := lastSnapshotDate(ctx, subscription.Library.Pool, table, "ndx100")
-	if shouldTakeSnapshot(lastDate, snapshotFrequency) {
+	if shouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
 		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
 
 		for ticker, member := range currentHoldings {

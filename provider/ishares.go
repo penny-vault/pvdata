@@ -272,7 +272,7 @@ func downloadSingleISharesETF(
 
 	// Check if a snapshot should be taken
 	lastDate := lastSnapshotDate(ctx, subscription.Library.Pool, table, etf.IndexName)
-	if shouldTakeSnapshot(lastDate, snapshotFrequency) {
+	if shouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
 
 		snapshotDate := parseResult.SnapshotDate
 		if snapshotDate.IsZero() {

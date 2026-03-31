@@ -8,48 +8,49 @@ import (
 )
 
 var _ = Describe("shouldTakeSnapshot", func() {
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+
 	It("returns true when no previous snapshot exists", func() {
-		Expect(shouldTakeSnapshot(time.Time{}, "weekly")).To(BeTrue())
+		Expect(shouldTakeSnapshot(time.Time{}, now, "weekly")).To(BeTrue())
 	})
 
 	It("returns true when daily and last snapshot was yesterday", func() {
-		yesterday := time.Now().AddDate(0, 0, -1)
-		Expect(shouldTakeSnapshot(yesterday, "daily")).To(BeTrue())
+		yesterday := now.AddDate(0, 0, -1)
+		Expect(shouldTakeSnapshot(yesterday, now, "daily")).To(BeTrue())
 	})
 
 	It("returns false when daily and last snapshot was today", func() {
-		today := time.Now()
-		Expect(shouldTakeSnapshot(today, "daily")).To(BeFalse())
+		Expect(shouldTakeSnapshot(now, now, "daily")).To(BeFalse())
 	})
 
 	It("returns true when weekly and last snapshot was 8 days ago", func() {
-		eightDaysAgo := time.Now().AddDate(0, 0, -8)
-		Expect(shouldTakeSnapshot(eightDaysAgo, "weekly")).To(BeTrue())
+		eightDaysAgo := now.AddDate(0, 0, -8)
+		Expect(shouldTakeSnapshot(eightDaysAgo, now, "weekly")).To(BeTrue())
 	})
 
 	It("returns false when weekly and last snapshot was 3 days ago", func() {
-		threeDaysAgo := time.Now().AddDate(0, 0, -3)
-		Expect(shouldTakeSnapshot(threeDaysAgo, "weekly")).To(BeFalse())
+		threeDaysAgo := now.AddDate(0, 0, -3)
+		Expect(shouldTakeSnapshot(threeDaysAgo, now, "weekly")).To(BeFalse())
 	})
 
 	It("returns true when monthly and last snapshot was 32 days ago", func() {
-		thirtyTwoDaysAgo := time.Now().AddDate(0, 0, -32)
-		Expect(shouldTakeSnapshot(thirtyTwoDaysAgo, "monthly")).To(BeTrue())
+		thirtyTwoDaysAgo := now.AddDate(0, 0, -32)
+		Expect(shouldTakeSnapshot(thirtyTwoDaysAgo, now, "monthly")).To(BeTrue())
 	})
 
 	It("returns false when monthly and last snapshot was 15 days ago", func() {
-		fifteenDaysAgo := time.Now().AddDate(0, 0, -15)
-		Expect(shouldTakeSnapshot(fifteenDaysAgo, "monthly")).To(BeFalse())
+		fifteenDaysAgo := now.AddDate(0, 0, -15)
+		Expect(shouldTakeSnapshot(fifteenDaysAgo, now, "monthly")).To(BeFalse())
 	})
 
 	It("returns true when quarterly and last snapshot was 95 days ago", func() {
-		ninetyFiveDaysAgo := time.Now().AddDate(0, 0, -95)
-		Expect(shouldTakeSnapshot(ninetyFiveDaysAgo, "quarterly")).To(BeTrue())
+		ninetyFiveDaysAgo := now.AddDate(0, 0, -95)
+		Expect(shouldTakeSnapshot(ninetyFiveDaysAgo, now, "quarterly")).To(BeTrue())
 	})
 
 	It("defaults to weekly for unknown frequency", func() {
-		eightDaysAgo := time.Now().AddDate(0, 0, -8)
-		Expect(shouldTakeSnapshot(eightDaysAgo, "bogus")).To(BeTrue())
+		eightDaysAgo := now.AddDate(0, 0, -8)
+		Expect(shouldTakeSnapshot(eightDaysAgo, now, "bogus")).To(BeTrue())
 	})
 })
 
