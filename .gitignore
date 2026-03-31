@@ -25,6 +25,10 @@ go.work
 .thumbs.db
 node_modules
 
+# Frontend build output (keep placeholder for go:embed)
+web/ui/dist/*
+!web/ui/dist/index.html
+
 # Configuration
 public/config.json
 

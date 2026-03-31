@@ -36,6 +36,7 @@ func CreateFiberApp() *fiber.App {
 	}))
 
 	SetupRoutes(app)
+	SetupSPA(app)
 
 	return app
 }
