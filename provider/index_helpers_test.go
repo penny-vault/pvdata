@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -162,5 +163,13 @@ var _ = Describe("diffSnapshots", func() {
 		Expect(removes).To(HaveKey("MSFT"))
 		Expect(weightChanges).To(HaveLen(1))
 		Expect(weightChanges).To(HaveKey("AAPL"))
+	})
+})
+
+var _ = Describe("currentIndexMembers", func() {
+	It("returns empty map when pool is nil", func() {
+		asOf := time.Date(2026, 3, 30, 0, 0, 0, 0, time.UTC)
+		result := currentIndexMembers(context.Background(), nil, "test_table", "sp500", asOf)
+		Expect(result).To(BeEmpty())
 	})
 })
