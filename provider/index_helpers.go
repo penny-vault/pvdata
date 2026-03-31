@@ -175,6 +175,7 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 			log.Error().Err(err).Msg("could not query snapshot for currentIndexMembers")
 			return map[string]indexMember{}
 		}
+		defer rows.Close()
 
 		for rows.Next() {
 			var ticker, figi string
@@ -188,8 +189,6 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 
 			result[ticker] = indexMember{CompositeFigi: figi, Weight: weight}
 		}
-
-		rows.Close()
 	}
 
 	// Apply changelog entries after the snapshot date up to asOfDate

@@ -359,7 +359,12 @@ func downloadSingleISharesETF(
 		if i < len(dates)-1 {
 			delay := 5*time.Second + time.Duration(rand.IntN(41))*time.Second
 			logger.Info().Dur("Delay", delay).Msg("waiting between iShares historical requests")
-			time.Sleep(delay)
+
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return numObs, ctx.Err()
+			}
 		}
 	}
 
