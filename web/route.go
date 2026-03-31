@@ -17,6 +17,23 @@ package web
 import "github.com/gofiber/fiber/v2"
 
 func SetupRoutes(app *fiber.App) {
-	api := app.Group("/api/v1")
-	api.Get("subscriptions", GetSubscriptions)
+	api := app.Group("/api/v1", NewAuthMiddleware())
+
+	api.Get("/subscriptions", GetSubscriptions)
+	api.Post("/subscriptions", CreateSubscription)
+	api.Get("/subscriptions/:id", GetSubscription)
+	api.Put("/subscriptions/:id", UpdateSubscription)
+	api.Delete("/subscriptions/:id", DeleteSubscription)
+	api.Post("/subscriptions/:id/activate", ActivateSubscription)
+	api.Post("/subscriptions/:id/deactivate", DeactivateSubscription)
+
+	api.Get("/providers", GetProviders)
+
+	api.Get("/subscriptions/:id/runs", GetRunHistory)
+	api.Get("/subscriptions/:id/runs/sparkline", GetRunSparkline)
+
+	api.Get("/subscriptions/:id/data/:datatype", GetSubscriptionData)
+
+	api.Post("/sql", ExecuteSQL)
+	api.Post("/sql/export", ExportSQL)
 }

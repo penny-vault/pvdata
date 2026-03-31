@@ -25,8 +25,8 @@ func CreateFiberApp() *fiber.App {
 
 	// Or extend your config for customization
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "http://localhost:9000",
-		AllowHeaders: "Origin, Content-Type, Accept",
+		AllowOrigins: "http://localhost:5173, http://localhost:9000",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
 	// Or extend your config for customization
