@@ -19,6 +19,20 @@ import {
   CvSkipToContent,
   CvLoading,
   CvButton,
+  CvTag,
+  CvTabs,
+  CvTab,
+  CvTextInput,
+  CvSearch,
+  CvProgress,
+  CvProgressStep,
+  CvRadioButton,
+  CvRadioGroup,
+  CvInlineNotification,
+  CvModal,
+  CvInlineLoading,
+  CvToggle,
+  CvTile,
 } from '@carbon/vue'
 
 const app = createApp(App)
@@ -35,5 +49,19 @@ app.component('CvContent', CvContent)
 app.component('CvSkipToContent', CvSkipToContent)
 app.component('CvLoading', CvLoading)
 app.component('CvButton', CvButton)
+app.component('CvTag', CvTag)
+app.component('CvTabs', CvTabs)
+app.component('CvTab', CvTab)
+app.component('CvTextInput', CvTextInput)
+app.component('CvSearch', CvSearch)
+app.component('CvProgress', CvProgress)
+app.component('CvProgressStep', CvProgressStep)
+app.component('CvRadioButton', CvRadioButton)
+app.component('CvRadioGroup', CvRadioGroup)
+app.component('CvInlineNotification', CvInlineNotification)
+app.component('CvModal', CvModal)
+app.component('CvInlineLoading', CvInlineLoading)
+app.component('CvToggle', CvToggle)
+app.component('CvTile', CvTile)
 
 app.mount('#app')
