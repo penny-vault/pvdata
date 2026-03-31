@@ -5,8 +5,12 @@ GIT_VERSION:=$$(git describe --always | awk '{n=split($$0, a, "-"); if (n=="3") 
 COMMIT_HASH:=$$(git rev-parse --short HEAD)
 BUILD_DATE:=$$(date -Iseconds)
 
+.PHONY: build-ui
+build-ui:
+	cd web/ui && npm ci && npm run build
+
 .PHONY: build
-build:
+build: build-ui
 	go build -o ${EXECUTABLE_NAME} -ldflags "-X $(GO_MODULE)/pkginfo.Version=$(GIT_VERSION) -X $(GO_MODULE)/pkginfo.BuildDate=$(BUILD_DATE) -X $(GO_MODULE)/pkginfo.CommitHash=$(COMMIT_HASH)"
 
 .PHONY: install
