@@ -15,16 +15,9 @@
 package provider
 
 import (
-	"testing"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestISharesEmbed(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "iShares Embed Suite")
-}
 
 var _ = Describe("iSharesETFMap", func() {
 	It("is populated with entries from the embedded JSON", func() {

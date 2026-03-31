@@ -101,6 +101,7 @@ Examples:
 		fi.ImportFiles(fetchCtx, sub, files, outChan, exitChan)
 
 		summary := <-exitChan
+
 		close(outChan)
 		wg.Wait()
 
@@ -137,6 +138,7 @@ func resolveSubscription(ctx context.Context, lib *library.Library, nameOrID str
 	}
 
 	var matches []*library.Subscription
+
 	for _, s := range allSubs {
 		if s.Name == nameOrID {
 			matches = append(matches, s)
@@ -155,6 +157,7 @@ func resolveSubscription(ctx context.Context, lib *library.Library, nameOrID str
 
 func init() {
 	importCmd.Flags().StringP("subscription", "s", "", "Subscription name or ID (required)")
+
 	if err := importCmd.MarkFlagRequired("subscription"); err != nil {
 		log.Fatal().Err(err).Msg("could not mark subscription flag as required")
 	}
