@@ -1,17 +1,11 @@
 package provider
 
 import (
-	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestIndexHelpers(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Index Helpers Suite")
-}
 
 var _ = Describe("shouldTakeSnapshot", func() {
 	It("returns true when no previous snapshot exists", func() {
