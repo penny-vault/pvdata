@@ -237,27 +237,33 @@ func downloadSingleISharesETF(
 		Str("IndexName", etf.IndexName).
 		Msg("parsed iShares holdings")
 
-	// Build current holdings map (ticker -> figi) and weight map
-	currentHoldings := make(map[string]string, len(parseResult.Holdings))
-	weightMap := make(map[string]float64, len(parseResult.Holdings))
+	// Build current holdings map (ticker -> indexMember)
+	currentHoldings := make(map[string]indexMember, len(parseResult.Holdings))
 	for _, holding := range parseResult.Holdings {
 		if figi, ok := figiMap[holding.Ticker]; ok {
-			currentHoldings[holding.Ticker] = figi
+			currentHoldings[holding.Ticker] = indexMember{
+				CompositeFigi: figi,
+				Weight:        holding.Weight,
+			}
 		}
-		weightMap[holding.Ticker] = holding.Weight
 	}
 
 	// Get previous snapshot and emit changelog
 	table := subscription.DataTablesMap[data.IndexKey]
-	previous := previousSnapshotTickers(ctx, subscription.Library.Pool, table, etf.IndexName)
-	added, removed := diffSnapshots(currentHoldings, previous)
+	prevRaw := previousSnapshotTickers(ctx, subscription.Library.Pool, table, etf.IndexName)
+	previous := make(map[string]indexMember, len(prevRaw))
+	for ticker, figi := range prevRaw {
+		previous[ticker] = indexMember{CompositeFigi: figi}
+	}
+
+	added, removed, _ := diffSnapshots(currentHoldings, previous)
 
 	eventDate := parseResult.SnapshotDate
 	if eventDate.IsZero() {
 		eventDate = time.Now().UTC().Truncate(24 * time.Hour)
 	}
 
-	emitChangelog(added, removed, etf.IndexName, eventDate, weightMap, &data.Observation{
+	emitChangelog(added, removed, etf.IndexName, eventDate, &data.Observation{
 		ObservationDate:  time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,
@@ -273,14 +279,14 @@ func downloadSingleISharesETF(
 			snapshotDate = time.Now().UTC().Truncate(24 * time.Hour)
 		}
 
-		for t, figi := range currentHoldings {
+		for t, member := range currentHoldings {
 			out <- &data.Observation{
 				IndexSnapshot: &data.IndexSnapshot{
 					Ticker:        t,
-					CompositeFigi: figi,
+					CompositeFigi: member.CompositeFigi,
 					IndexName:     etf.IndexName,
 					SnapshotDate:  snapshotDate,
-					Weight:        weightMap[t],
+					Weight:        member.Weight,
 				},
 				ObservationDate:  time.Now(),
 				SubscriptionID:   subscription.ID,

@@ -55,35 +55,111 @@ var _ = Describe("shouldTakeSnapshot", func() {
 
 var _ = Describe("diffSnapshots", func() {
 	It("returns all as added when previous is empty", func() {
-		current := map[string]string{"AAPL": "BBG000B9XRY4", "MSFT": "BBG000BPH459"}
-		adds, removes := diffSnapshots(current, map[string]string{})
+		current := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.04},
+		}
+		adds, removes, weightChanges := diffSnapshots(current, map[string]indexMember{})
 		Expect(adds).To(HaveLen(2))
 		Expect(removes).To(BeEmpty())
+		Expect(weightChanges).To(BeEmpty())
 	})
 
 	It("returns all as removed when current is empty", func() {
-		previous := map[string]string{"AAPL": "BBG000B9XRY4"}
-		adds, removes := diffSnapshots(map[string]string{}, previous)
+		previous := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+		}
+		adds, removes, weightChanges := diffSnapshots(map[string]indexMember{}, previous)
 		Expect(adds).To(BeEmpty())
 		Expect(removes).To(HaveLen(1))
 		Expect(removes).To(HaveKey("AAPL"))
+		Expect(weightChanges).To(BeEmpty())
 	})
 
 	It("detects additions and removals", func() {
-		current := map[string]string{"AAPL": "BBG000B9XRY4", "GOOG": "BBG009S39JX6"}
-		previous := map[string]string{"AAPL": "BBG000B9XRY4", "MSFT": "BBG000BPH459"}
-		adds, removes := diffSnapshots(current, previous)
+		current := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"GOOG": {CompositeFigi: "BBG009S39JX6", Weight: 0.03},
+		}
+		previous := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.04},
+		}
+		adds, removes, weightChanges := diffSnapshots(current, previous)
 		Expect(adds).To(HaveLen(1))
 		Expect(adds).To(HaveKey("GOOG"))
 		Expect(removes).To(HaveLen(1))
 		Expect(removes).To(HaveKey("MSFT"))
+		Expect(weightChanges).To(BeEmpty())
 	})
 
 	It("returns empty when sets are identical", func() {
-		current := map[string]string{"AAPL": "BBG000B9XRY4"}
-		previous := map[string]string{"AAPL": "BBG000B9XRY4"}
-		adds, removes := diffSnapshots(current, previous)
+		current := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+		}
+		previous := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+		}
+		adds, removes, weightChanges := diffSnapshots(current, previous)
 		Expect(adds).To(BeEmpty())
 		Expect(removes).To(BeEmpty())
+		Expect(weightChanges).To(BeEmpty())
+	})
+
+	It("detects significant weight change above 0.01 threshold", func() {
+		current := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.065},
+		}
+		previous := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+		}
+		adds, removes, weightChanges := diffSnapshots(current, previous)
+		Expect(adds).To(BeEmpty())
+		Expect(removes).To(BeEmpty())
+		Expect(weightChanges).To(HaveLen(1))
+		Expect(weightChanges).To(HaveKey("AAPL"))
+		Expect(weightChanges["AAPL"].Weight).To(BeNumerically("~", 0.065, 0.0001))
+	})
+
+	It("ignores weight change below 0.01 threshold", func() {
+		current := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.055},
+		}
+		previous := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+		}
+		adds, removes, weightChanges := diffSnapshots(current, previous)
+		Expect(adds).To(BeEmpty())
+		Expect(removes).To(BeEmpty())
+		Expect(weightChanges).To(BeEmpty())
+	})
+
+	It("detects weight change exactly at 0.01 boundary", func() {
+		current := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.06},
+		}
+		previous := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+		}
+		_, _, weightChanges := diffSnapshots(current, previous)
+		Expect(weightChanges).To(HaveLen(1))
+	})
+
+	It("handles simultaneous adds, removes, and weight changes", func() {
+		current := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.08},
+			"GOOG": {CompositeFigi: "BBG009S39JX6", Weight: 0.03},
+		}
+		previous := map[string]indexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.04},
+		}
+		adds, removes, weightChanges := diffSnapshots(current, previous)
+		Expect(adds).To(HaveLen(1))
+		Expect(adds).To(HaveKey("GOOG"))
+		Expect(removes).To(HaveLen(1))
+		Expect(removes).To(HaveKey("MSFT"))
+		Expect(weightChanges).To(HaveLen(1))
+		Expect(weightChanges).To(HaveKey("AAPL"))
 	})
 })

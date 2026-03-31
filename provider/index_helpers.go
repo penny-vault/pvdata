@@ -10,6 +10,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// indexMember represents a constituent of an index with its FIGI and weight.
+type indexMember struct {
+	CompositeFigi string
+	Weight        float64
+}
+
+const weightChangeThreshold = 0.01
+
 // shouldTakeSnapshot returns true if a new snapshot should be taken based on the
 // configured frequency and the date of the last snapshot.
 func shouldTakeSnapshot(lastSnapshotDate time.Time, frequency string) bool {
@@ -35,21 +43,34 @@ func shouldTakeSnapshot(lastSnapshotDate time.Time, frequency string) bool {
 	return time.Since(lastSnapshotDate) >= interval
 }
 
-// diffSnapshots compares current holdings (ticker->figi) against previous holdings
-// and returns maps of added and removed tickers.
-func diffSnapshots(current, previous map[string]string) (added, removed map[string]string) {
-	added = make(map[string]string)
-	removed = make(map[string]string)
+// diffSnapshots compares current holdings against previous holdings
+// and returns maps of added, removed, and weight-changed tickers.
+// A weight change is significant when the absolute difference exceeds weightChangeThreshold.
+func diffSnapshots(current, previous map[string]indexMember) (added, removed, weightChanged map[string]indexMember) {
+	added = make(map[string]indexMember)
+	removed = make(map[string]indexMember)
+	weightChanged = make(map[string]indexMember)
 
-	for ticker, figi := range current {
-		if _, ok := previous[ticker]; !ok {
-			added[ticker] = figi
+	for ticker, member := range current {
+		prev, ok := previous[ticker]
+		if !ok {
+			added[ticker] = member
+			continue
+		}
+
+		delta := member.Weight - prev.Weight
+		if delta < 0 {
+			delta = -delta
+		}
+
+		if delta >= weightChangeThreshold-1e-9 {
+			weightChanged[ticker] = member
 		}
 	}
 
-	for ticker, figi := range previous {
+	for ticker, member := range previous {
 		if _, ok := current[ticker]; !ok {
-			removed[ticker] = figi
+			removed[ticker] = member
 		}
 	}
 
@@ -116,22 +137,16 @@ func previousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 }
 
 // emitChangelog emits IndexChange observations for adds and removes.
-// weightMap may be nil if weights are not available (e.g. Nasdaq).
-func emitChangelog(adds, removes map[string]string, indexName string, eventDate time.Time, weightMap map[string]float64, subscription *data.Observation, out chan<- *data.Observation) {
-	for ticker, figi := range adds {
-		var weight float64
-		if weightMap != nil {
-			weight = weightMap[ticker]
-		}
-
+func emitChangelog(adds, removes map[string]indexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
+	for ticker, member := range adds {
 		out <- &data.Observation{
 			IndexChange: &data.IndexChange{
 				Ticker:        ticker,
-				CompositeFigi: figi,
+				CompositeFigi: member.CompositeFigi,
 				IndexName:     indexName,
 				EventDate:     eventDate,
 				Action:        "add",
-				Weight:        weight,
+				Weight:        member.Weight,
 			},
 			ObservationDate:  subscription.ObservationDate,
 			SubscriptionID:   subscription.SubscriptionID,
@@ -139,11 +154,11 @@ func emitChangelog(adds, removes map[string]string, indexName string, eventDate 
 		}
 	}
 
-	for ticker, figi := range removes {
+	for ticker, member := range removes {
 		out <- &data.Observation{
 			IndexChange: &data.IndexChange{
 				Ticker:        ticker,
-				CompositeFigi: figi,
+				CompositeFigi: member.CompositeFigi,
 				IndexName:     indexName,
 				EventDate:     eventDate,
 				Action:        "remove",
