@@ -166,6 +166,16 @@ var _ = Describe("diffSnapshots", func() {
 	})
 })
 
+
+var _ = Describe("tradingDays", func() {
+	It("returns an error when pool is nil", func() {
+		start := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+		end := time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)
+		_, err := tradingDays(context.Background(), nil, start, end)
+		Expect(err).To(HaveOccurred())
+	})
+})
+
 var _ = Describe("currentIndexMembers", func() {
 	It("returns empty map when pool is nil", func() {
 		asOf := time.Date(2026, 3, 30, 0, 0, 0, 0, time.UTC)

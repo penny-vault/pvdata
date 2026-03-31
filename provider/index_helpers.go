@@ -246,6 +246,39 @@ func emitWeightChanges(changes map[string]indexMember, indexName string, eventDa
 	}
 }
 
+// tradingDays returns NYSE trading days between start and end (inclusive)
+// by calling the database's trading_days(DATE, DATE) function.
+func tradingDays(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) ([]time.Time, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("database pool is nil")
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not acquire db connection for tradingDays: %w", err)
+	}
+	defer conn.Release()
+
+	rows, err := conn.Query(ctx, `SELECT dt FROM trading_days($1::date, $2::date) AS dt ORDER BY dt`, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("could not query trading days: %w", err)
+	}
+	defer rows.Close()
+
+	var days []time.Time
+
+	for rows.Next() {
+		var dt time.Time
+		if err := rows.Scan(&dt); err != nil {
+			return nil, fmt.Errorf("error scanning trading day: %w", err)
+		}
+
+		days = append(days, dt)
+	}
+
+	return days, nil
+}
+
 // emitChangelog emits IndexChange observations for adds and removes.
 func emitChangelog(adds, removes map[string]indexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
 	for ticker, member := range adds {
