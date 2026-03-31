@@ -35,7 +35,7 @@ type SQLRequest struct {
 
 type queryResult struct {
 	Columns []string        `json:"columns"`
-	Data    [][]interface{} `json:"data"`
+	Data    [][]any `json:"data"`
 	Count   int             `json:"count"`
 }
 
@@ -239,7 +239,7 @@ func executeReadOnlyQuery(ctx context.Context, pool *pgxpool.Pool, query string)
 		columns = append(columns, string(fd.Name))
 	}
 
-	data := make([][]interface{}, 0)
+	data := make([][]any, 0)
 
 	for rows.Next() {
 		values, vErr := rows.Values()

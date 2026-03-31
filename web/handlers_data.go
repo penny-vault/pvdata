@@ -133,7 +133,7 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 			columns = append(columns, string(fd.Name))
 		}
 
-		data := make([][]interface{}, 0)
+		data := make([][]any, 0)
 
 		for r.Next() {
 			values, vErr := r.Values()
@@ -175,7 +175,7 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 		columns = append(columns, string(fd.Name))
 	}
 
-	data := make([][]interface{}, 0)
+	data := make([][]any, 0)
 
 	for r.Next() {
 		values, vErr := r.Values()
