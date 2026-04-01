@@ -44,14 +44,17 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 
 	// Read all records
 	var records [][]string
+
 	for {
 		record, err := reader.Read()
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			return nil, err
 		}
+
 		records = append(records, record)
 	}
 
@@ -62,12 +65,14 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 			if t, err := time.Parse("Jan 02, 2006", dateStr); err == nil {
 				result.SnapshotDate = t
 			}
+
 			break
 		}
 	}
 
 	// Find the header row (starts with "Ticker")
 	headerIdx := -1
+
 	for i, record := range records {
 		if len(record) > 0 && strings.TrimSpace(record[0]) == "Ticker" {
 			headerIdx = i
@@ -106,6 +111,7 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 		}
 
 		weightStr := strings.ReplaceAll(record[weightCol], ",", "")
+
 		weightPct, err := strconv.ParseFloat(strings.TrimSpace(weightStr), 64)
 		if err != nil {
 			continue
