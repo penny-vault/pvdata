@@ -10,8 +10,11 @@ build-ui:
 	cd web/ui && npm ci && npm run build
 
 .PHONY: build
-build: build-ui
+build:
 	go build -o ${EXECUTABLE_NAME} -ldflags "-X $(GO_MODULE)/pkginfo.Version=$(GIT_VERSION) -X $(GO_MODULE)/pkginfo.BuildDate=$(BUILD_DATE) -X $(GO_MODULE)/pkginfo.CommitHash=$(COMMIT_HASH)"
+
+.PHONY: build-all
+build-all: build-ui build
 
 .PHONY: install
 install:
