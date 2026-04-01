@@ -17,12 +17,46 @@ package web
 import (
 	"fmt"
 	"regexp"
+	"slices"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog/log"
 )
 
 var validTableName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
+// indexedColumnsForDataType returns the columns that have indexes for a given
+// data type, suitable for exact-match filtering.
+func indexedColumnsForDataType(datatype string) []string {
+	switch datatype {
+	case "eod":
+		return []string{"ticker", "composite_figi", "event_date"}
+	case "fundamental":
+		return []string{"ticker", "composite_figi", "event_date", "dimension"}
+	case "metric":
+		return []string{"ticker", "composite_figi", "event_date"}
+	case "rating":
+		return []string{"ticker", "composite_figi", "event_date"}
+	case "consensus":
+		return []string{"ticker", "composite_figi", "event_date"}
+	case "estimate":
+		return []string{"ticker", "composite_figi", "event_date", "series"}
+	case "custom":
+		return []string{"ticker", "composite_figi", "event_date", "key"}
+	case "quote":
+		return []string{"ticker", "composite_figi"}
+	case "economic-indicator":
+		return []string{"series", "event_date"}
+	case "index":
+		return []string{"ticker", "index_name", "event_date"}
+	case "asset-description":
+		return []string{"ticker", "composite_figi", "name"}
+	case "market-holidays":
+		return []string{"exchange", "event_date"}
+	default:
+		return []string{}
+	}
+}
 
 // GetSubscriptionData queries dynamic data from a subscription's data table.
 func GetSubscriptionData(c *fiber.Ctx) error {
@@ -63,36 +97,19 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	sort := c.Query("sort", "")
 	order := c.Query("order", "asc")
 
-	// Determine which column to search. Prefer 'ticker' if it exists,
-	// otherwise search across all columns with a row-to-text cast.
-	searchCol := tableName // fallback: cast whole row
+	// The frontend sends which column to search via search_col param.
+	// We validate it against the known indexed columns for this data type.
+	indexedCols := indexedColumnsForDataType(datatype)
+	searchCol := c.Query("search_col", "")
 
-	if search != "" {
-		// Check if the table has a 'ticker' column
-		var hasTicker bool
-
-		checkConn, checkErr := myLibrary.Pool.Acquire(ctx)
-		if checkErr == nil {
-			if err := checkConn.QueryRow(ctx,
-				`SELECT EXISTS (
-					SELECT 1 FROM information_schema.columns
-					WHERE table_name = $1 AND column_name = 'ticker'
-				)`, tableName).Scan(&hasTicker); err != nil {
-				log.Warn().Err(err).Str("table", tableName).Msg("could not check for ticker column")
-			}
-
-			checkConn.Release()
-		}
-
-		if hasTicker {
-			searchCol = "ticker"
-		}
+	if searchCol != "" && !slices.Contains(indexedCols, searchCol) {
+		searchCol = ""
 	}
 
 	// Build the count query
 	countQuery := fmt.Sprintf("SELECT count(*) FROM %s", tableName)
-	if search != "" {
-		countQuery = fmt.Sprintf("SELECT count(*) FROM %s WHERE %s::text ILIKE $1", tableName, searchCol)
+	if search != "" && searchCol != "" {
+		countQuery = fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = $1", tableName, searchCol)
 	}
 
 	conn, err := myLibrary.Pool.Acquire(ctx)
@@ -106,8 +123,8 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 
 	var total int
 
-	if search != "" {
-		err = conn.QueryRow(ctx, countQuery, "%"+search+"%").Scan(&total)
+	if search != "" && searchCol != "" {
+		err = conn.QueryRow(ctx, countQuery, search).Scan(&total)
 	} else {
 		err = conn.QueryRow(ctx, countQuery).Scan(&total)
 	}
@@ -124,8 +141,8 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	// Build the data query
 	dataQuery := fmt.Sprintf("SELECT * FROM %s", tableName)
 
-	if search != "" {
-		dataQuery = fmt.Sprintf("SELECT * FROM %s WHERE %s::text ILIKE $1", tableName, searchCol)
+	if search != "" && searchCol != "" {
+		dataQuery = fmt.Sprintf("SELECT * FROM %s WHERE %s = $1", tableName, searchCol)
 	}
 
 	if sort != "" && validTableName.MatchString(sort) {
@@ -139,8 +156,8 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 
 	dataQuery += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-	if search != "" {
-		r, qErr := conn.Query(ctx, dataQuery, "%"+search+"%")
+	if search != "" && searchCol != "" {
+		r, qErr := conn.Query(ctx, dataQuery, search)
 		if qErr != nil {
 			log.Error().Err(qErr).Msg("could not query data")
 
@@ -174,11 +191,12 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 		}
 
 		return c.JSON(fiber.Map{
-			"columns": columns,
-			"data":    data,
-			"total":   total,
-			"limit":   limit,
-			"offset":  offset,
+			"columns":        columns,
+			"data":           data,
+			"total":          total,
+			"limit":          limit,
+			"offset":         offset,
+			"search_columns": indexedCols,
 		})
 	}
 
@@ -216,10 +234,11 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"columns": columns,
-		"data":    data,
-		"total":   total,
-		"limit":   limit,
-		"offset":  offset,
+		"columns":        columns,
+		"data":           data,
+		"total":          total,
+		"limit":          limit,
+		"offset":         offset,
+		"search_columns": indexedCols,
 	})
 }

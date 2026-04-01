@@ -3,19 +3,20 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { getData } from '@/lib/api'
 import RevoGrid from '@revolist/vue3-datagrid'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 
-const props = defineProps<{ subscriptionId: string; datatype: string; tableName?: string }>()
+const props = defineProps<{ subscriptionId: string; datatype: string }>()
 
 const columns = ref<string[]>([])
+const searchColumns = ref<string[]>([])
 const rows = ref<any[]>([])
 const total = ref(0)
 const loading = ref(false)
 const loadingMore = ref(false)
 const searchQuery = ref('')
-const sortColumn = ref('')
-const sortOrder = ref<'asc' | 'desc'>('asc')
+const searchField = ref('')
 const offset = ref(0)
 const limit = 50
 
@@ -23,10 +24,18 @@ async function fetchData(append = false) {
   if (append) loadingMore.value = true; else { loading.value = true; offset.value = 0 }
   try {
     const params: Record<string, string> = { limit: String(limit), offset: String(offset.value) }
-    if (searchQuery.value) params.q = searchQuery.value
-    if (sortColumn.value) { params.sort = sortColumn.value; params.order = sortOrder.value }
+    if (searchQuery.value && searchField.value) {
+      params.q = searchQuery.value
+      params.search_col = searchField.value
+    }
     const result = await getData(props.subscriptionId, props.datatype, params)
     if (result.columns) columns.value = result.columns
+    if (result.search_columns) {
+      searchColumns.value = result.search_columns
+      if (!searchField.value && result.search_columns.length > 0) {
+        searchField.value = result.search_columns[0]
+      }
+    }
     rows.value = append ? [...rows.value, ...(result.data || [])] : (result.data || [])
     total.value = result.total || rows.value.length
   } catch (e) { console.error('Failed to fetch data:', e) }
@@ -36,11 +45,24 @@ async function fetchData(append = false) {
 function formatCell(value: any): string {
   if (value === null || value === undefined) return '--'
   if (typeof value === 'number') return value.toLocaleString()
+  if (typeof value === 'object') {
+    // Handle PostgreSQL time/date objects that come as {hours, minutes, ...} or similar
+    try { return JSON.stringify(value) } catch { return '--' }
+  }
   return String(value)
 }
 
 const gridColumns = computed(() =>
-  columns.value.map(col => ({ prop: col, name: col, sortable: true, autoSize: true }))
+  columns.value.map(col => {
+    // Size columns based on content type heuristics
+    let size = 120
+    if (col === 'composite_figi' || col === 'share_class_figi') size = 150
+    else if (col.includes('date') || col.includes('time')) size = 180
+    else if (col === 'ticker' || col === 'series') size = 100
+    else if (col === 'name' || col === 'description') size = 250
+    else if (col.length > 12) size = col.length * 10
+    return { prop: col, name: col, sortable: true, size }
+  })
 )
 
 const gridRows = computed(() =>
@@ -54,16 +76,38 @@ const gridRows = computed(() =>
   })
 )
 
+function doSearch() {
+  fetchData(false)
+}
+
+function clearSearch() {
+  searchQuery.value = ''
+  fetchData(false)
+}
+
 onMounted(() => fetchData(false))
-watch(() => [props.subscriptionId, props.datatype], () => fetchData(false))
+watch(() => [props.subscriptionId, props.datatype], () => { searchQuery.value = ''; fetchData(false) })
 </script>
 
 <template>
   <div>
-    <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem">
       <div style="display: flex; align-items: center; gap: 0.5rem">
-        <InputText v-model="searchQuery" placeholder="Search..." @keyup.enter="fetchData(false)" />
-        <Button label="Search" icon="pi pi-search" size="small" @click="fetchData(false)" />
+        <Select
+          v-if="searchColumns.length > 0"
+          v-model="searchField"
+          :options="searchColumns"
+          placeholder="Column"
+          style="width: 160px"
+        />
+        <InputText
+          v-model="searchQuery"
+          :placeholder="searchField ? `Filter by ${searchField}...` : 'Search...'"
+          @keyup.enter="doSearch"
+          style="width: 200px"
+        />
+        <Button icon="pi pi-search" size="small" @click="doSearch" />
+        <Button v-if="searchQuery" icon="pi pi-times" severity="secondary" text size="small" @click="clearSearch" />
       </div>
       <span>{{ rows.length.toLocaleString() }} of {{ total.toLocaleString() }} rows</span>
     </div>

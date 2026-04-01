@@ -24,7 +24,7 @@ const gridColumns = [
   { prop: 'status', name: 'Status', sortable: true, size: 110, cellTemplate: VGridVueTemplate(StatusCell) },
   { prop: 'total_records', name: 'Total Records', sortable: true, size: 180 },
   { prop: 'last_run', name: 'Last Import', sortable: true, size: 180 },
-  { prop: 'records_last', name: 'Records Last', sortable: true, size: 130 },
+  { prop: 'records_last', name: 'Records Last', sortable: true, size: 150 },
   { prop: 'next_run', name: 'Next Import', sortable: true, size: 160 },
 ]
 

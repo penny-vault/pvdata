@@ -58,6 +58,9 @@ async function onExport(format: 'csv' | 'parquet') {
 function formatCell(value: any): string {
   if (value === null || value === undefined) return 'NULL'
   if (typeof value === 'number') return value.toLocaleString()
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value) } catch { return '--' }
+  }
   return String(value)
 }
 
