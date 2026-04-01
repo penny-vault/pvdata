@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { getData } from '@/lib/api'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
+import RevoGrid from '@revolist/vue3-datagrid'
 import InputText from 'primevue/inputtext'
 import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
@@ -34,23 +33,26 @@ async function fetchData(append = false) {
   finally { loading.value = false; loadingMore.value = false }
 }
 
-function onSort(event: any) {
-  if (event.sortField) { sortColumn.value = event.sortField; sortOrder.value = event.sortOrder === 1 ? 'asc' : 'desc'; fetchData(false) }
-}
-
 function formatCell(value: any): string {
   if (value === null || value === undefined) return '--'
   if (typeof value === 'number') return value.toLocaleString()
   return String(value)
 }
 
-function rowsAsObjects(): Record<string, any>[] {
-  return rows.value.map(row => {
+const gridColumns = computed(() =>
+  columns.value.map(col => ({ prop: col, name: col, sortable: true, autoSize: true }))
+)
+
+const gridRows = computed(() =>
+  rows.value.map(row => {
     const obj: Record<string, any> = {}
-    columns.value.forEach((col, i) => { obj[col] = Array.isArray(row) ? row[i] : row[col] })
+    columns.value.forEach((col, i) => {
+      const val = Array.isArray(row) ? row[i] : row[col]
+      obj[col] = formatCell(val)
+    })
     return obj
   })
-}
+)
 
 onMounted(() => fetchData(false))
 watch(() => [props.subscriptionId, props.datatype], () => fetchData(false))
@@ -69,11 +71,13 @@ watch(() => [props.subscriptionId, props.datatype], () => fetchData(false))
     <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem 0"><ProgressSpinner /></div>
 
     <div v-else>
-      <DataTable :value="rowsAsObjects()" :scrollable="true" scrollHeight="500px" stripedRows :rowHover="true" @sort="onSort" :removableSort="true">
-        <Column v-for="col in columns" :key="col" :field="col" :header="col" :sortable="true">
-          <template #body="{ data }"><span style="white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; display: inline-block">{{ formatCell(data[col]) }}</span></template>
-        </Column>
-      </DataTable>
+      <RevoGrid
+        :columns="gridColumns"
+        :source="gridRows"
+        :resize="true"
+        theme="darkCompact"
+        style="height: 500px"
+      />
       <div v-if="rows.length < total && !loadingMore" style="display: flex; justify-content: center; padding: 0.5rem 0">
         <Button label="Load more" text size="small" @click="offset = rows.length; fetchData(true)" />
       </div>

@@ -63,10 +63,36 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	sort := c.Query("sort", "")
 	order := c.Query("order", "asc")
 
+	// Determine which column to search. Prefer 'ticker' if it exists,
+	// otherwise search across all columns with a row-to-text cast.
+	searchCol := tableName // fallback: cast whole row
+
+	if search != "" {
+		// Check if the table has a 'ticker' column
+		var hasTicker bool
+
+		checkConn, checkErr := myLibrary.Pool.Acquire(ctx)
+		if checkErr == nil {
+			if err := checkConn.QueryRow(ctx,
+				`SELECT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_name = $1 AND column_name = 'ticker'
+				)`, tableName).Scan(&hasTicker); err != nil {
+				log.Warn().Err(err).Str("table", tableName).Msg("could not check for ticker column")
+			}
+
+			checkConn.Release()
+		}
+
+		if hasTicker {
+			searchCol = "ticker"
+		}
+	}
+
 	// Build the count query
 	countQuery := fmt.Sprintf("SELECT count(*) FROM %s", tableName)
 	if search != "" {
-		countQuery = fmt.Sprintf("SELECT count(*) FROM %s WHERE %s::text ILIKE $1", tableName, tableName)
+		countQuery = fmt.Sprintf("SELECT count(*) FROM %s WHERE %s::text ILIKE $1", tableName, searchCol)
 	}
 
 	conn, err := myLibrary.Pool.Acquire(ctx)
@@ -99,7 +125,7 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	dataQuery := fmt.Sprintf("SELECT * FROM %s", tableName)
 
 	if search != "" {
-		dataQuery = fmt.Sprintf("SELECT * FROM %s WHERE %s::text ILIKE $1", tableName, tableName)
+		dataQuery = fmt.Sprintf("SELECT * FROM %s WHERE %s::text ILIKE $1", tableName, searchCol)
 	}
 
 	if sort != "" && validTableName.MatchString(sort) {

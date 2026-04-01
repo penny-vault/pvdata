@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, shallowRef } from 'vue'
+import { ref, computed, onMounted, shallowRef } from 'vue'
 import { useRoute } from 'vue-router'
 import { executeSQL, exportSQL } from '@/lib/api'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { PostgreSQL } from '@codemirror/lang-sql'
 import { oneDark } from '@codemirror/theme-one-dark'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
+import RevoGrid from '@revolist/vue3-datagrid'
 import Button from 'primevue/button'
 import Toolbar from 'primevue/toolbar'
 import Message from 'primevue/message'
@@ -62,17 +61,24 @@ function formatCell(value: any): string {
   return String(value)
 }
 
-function rowsAsObjects(): Record<string, any>[] {
-  return rows.value.map(row => {
+const gridColumns = computed(() =>
+  columns.value.map(col => ({ prop: col, name: col, sortable: true }))
+)
+
+const gridRows = computed(() =>
+  rows.value.map(row => {
     const obj: Record<string, any> = {}
-    columns.value.forEach((col, i) => { obj[col] = Array.isArray(row) ? row[i] : row[col] })
+    columns.value.forEach((col, i) => {
+      const val = Array.isArray(row) ? row[i] : row[col]
+      obj[col] = formatCell(val)
+    })
     return obj
   })
-}
+)
 
 onMounted(() => {
   loadHistory()
-  const initialQuery = (route.query.q as string) || 'SELECT 1;'
+  const initialQuery = (route.query.q as string) || "SELECT ticker, event_date, open, high, low, close, volume\nFROM eod\nWHERE event_date >= now() - interval '7 days'\nORDER BY event_date DESC, ticker\nLIMIT 100;"
   const startState = EditorState.create({
     doc: initialQuery,
     extensions: [
@@ -123,11 +129,12 @@ onMounted(() => {
 
     <div v-if="columns.length > 0">
       <p style="margin-bottom: 0.5rem">{{ rowCount.toLocaleString() }} row{{ rowCount === 1 ? '' : 's' }}</p>
-      <DataTable :value="rowsAsObjects()" :scrollable="true" scrollHeight="500px" stripedRows :rowHover="true" size="small">
-        <Column v-for="col in columns" :key="col" :field="col" :header="col">
-          <template #body="{ data }"><span style="white-space: nowrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; display: inline-block">{{ formatCell(data[col]) }}</span></template>
-        </Column>
-      </DataTable>
+      <RevoGrid
+        :columns="gridColumns"
+        :source="gridRows"
+        theme="darkCompact"
+        style="height: 500px"
+      />
     </div>
   </div>
 </template>

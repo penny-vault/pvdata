@@ -5,8 +5,7 @@ import {
   getSubscription, getRunHistory,
   activateSubscription, deactivateSubscription, deleteSubscription,
 } from '@/lib/api'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
+import RevoGrid from '@revolist/vue3-datagrid'
 import Tag from 'primevue/tag'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -16,6 +15,7 @@ import Tab from 'primevue/tab'
 import TabPanels from 'primevue/tabpanels'
 import TabPanel from 'primevue/tabpanel'
 import Dialog from 'primevue/dialog'
+import InputText from 'primevue/inputtext'
 import ProgressSpinner from 'primevue/progressspinner'
 import Message from 'primevue/message'
 import RunHistoryChart from '@/components/RunHistoryChart.vue'
@@ -37,6 +37,7 @@ const loadingRuns = ref(false)
 const runsOffset = ref(0)
 const runsLimit = 20
 const activeTab = ref('0')
+const deleteConfirmText = ref('')
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr || dateStr.startsWith('0001')) return '--'
@@ -61,11 +62,21 @@ function formatDuration(start: string, end: string | null): string {
   return `${(ms / 60000).toFixed(1)}m`
 }
 
-function statusSeverity(status: string): "success" | "danger" | "secondary" | "info" | "warn" | "contrast" | undefined {
-  if (status === 'success') return 'success'
-  if (status === 'failed') return 'danger'
-  return 'secondary'
-}
+const runHistoryColumns = [
+  { prop: 'date', name: 'Date', sortable: true, size: 200 },
+  { prop: 'status', name: 'Status', sortable: true, size: 120 },
+  { prop: 'records', name: 'Records', sortable: true, size: 120 },
+  { prop: 'duration', name: 'Duration', sortable: true, size: 120 },
+]
+
+const runHistoryRows = computed(() =>
+  runs.value.map(run => ({
+    date: formatDate(run.start_time),
+    status: run.status || 'unknown',
+    records: formatNumber(run.num_observations),
+    duration: formatDuration(run.start_time, run.end_time),
+  }))
+)
 
 async function loadSubscription() {
   try { subscription.value = await getSubscription(id.value) }
@@ -131,7 +142,7 @@ onMounted(() => { loadSubscription(); loadRuns() })
           </div>
         </div>
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
-          <Button :label="subscription.active ? 'Deactivate' : 'Activate'" :icon="subscription.active ? 'pi pi-pause' : 'pi pi-play'" text @click="toggleActive" />
+          <Button v-if="subscription.provider !== 'legacy'" :label="subscription.active ? 'Deactivate' : 'Activate'" :icon="subscription.active ? 'pi pi-pause' : 'pi pi-play'" text @click="toggleActive" />
           <Button :label="editing ? 'Cancel Edit' : 'Edit'" icon="pi pi-pencil" severity="secondary" @click="editing = !editing" />
           <Button label="Delete" icon="pi pi-trash" severity="danger" @click="showDeleteConfirm = true" />
         </div>
@@ -139,11 +150,13 @@ onMounted(() => { loadSubscription(); loadRuns() })
 
       <Message v-if="error" severity="error" :closable="true" style="margin-bottom: 1rem" @close="error = ''">{{ error }}</Message>
 
-      <Dialog v-model:visible="showDeleteConfirm" header="Delete Subscription" :modal="true" :style="{ width: '28rem' }">
-        <p>Are you sure you want to delete <strong>{{ subscription.name || subscription.id }}</strong>? This cannot be undone.</p>
+      <Dialog v-model:visible="showDeleteConfirm" header="Delete Subscription" :modal="true" :style="{ width: '30rem' }">
+        <p>This will permanently delete <strong>{{ subscription.name || subscription.id }}</strong> and all its data tables. This cannot be undone.</p>
+        <p style="margin-top: 0.75rem">Type <strong>{{ subscription.name }}</strong> to confirm:</p>
+        <InputText v-model="deleteConfirmText" :placeholder="subscription.name" style="width: 100%; margin-top: 0.5rem" />
         <template #footer>
-          <Button label="Cancel" severity="secondary" @click="showDeleteConfirm = false" />
-          <Button label="Delete" severity="danger" @click="onDelete" />
+          <Button label="Cancel" severity="secondary" @click="showDeleteConfirm = false; deleteConfirmText = ''" />
+          <Button label="Delete" severity="danger" :disabled="deleteConfirmText !== subscription.name" @click="onDelete" />
         </template>
       </Dialog>
 
@@ -171,12 +184,12 @@ onMounted(() => { loadSubscription(); loadRuns() })
           <TabPanels>
             <TabPanel value="0">
               <RunHistoryChart :runs="runs" />
-              <DataTable :value="runs" stripedRows :rowHover="true" size="small" style="margin-top: 1rem">
-                <Column header="Date"><template #body="{ data }">{{ formatDate(data.start_time) }}</template></Column>
-                <Column header="Status"><template #body="{ data }"><Tag :value="data.status || 'unknown'" :severity="statusSeverity(data.status)" /></template></Column>
-                <Column header="Records"><template #body="{ data }">{{ formatNumber(data.num_observations) }}</template></Column>
-                <Column header="Duration"><template #body="{ data }">{{ formatDuration(data.start_time, data.end_time) }}</template></Column>
-              </DataTable>
+              <RevoGrid
+                :columns="runHistoryColumns"
+                :source="runHistoryRows"
+                theme="darkCompact"
+                style="height: 400px; margin-top: 1rem"
+              />
               <p v-if="runs.length === 0 && !loadingRuns">No runs recorded yet.</p>
               <div v-if="runs.length < runsTotal && !loadingRuns" style="display: flex; justify-content: center; padding: 0.5rem 0">
                 <Button label="Load more" text @click="runsOffset = runs.length; loadRuns(true)" />

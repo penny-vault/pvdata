@@ -1,20 +1,32 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSubscriptions, getSparkline } from '@/lib/api'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
-import Tag from 'primevue/tag'
+import { getSubscriptions } from '@/lib/api'
+import RevoGrid, { VGridVueTemplate } from '@revolist/vue3-datagrid'
 import Button from 'primevue/button'
+import InputText from 'primevue/inputtext'
 import ProgressSpinner from 'primevue/progressspinner'
 import Message from 'primevue/message'
-import SparklineCell from '@/components/SparklineCell.vue'
+import StatusCell from '@/components/StatusCell.vue'
+import ProviderCell from '@/components/ProviderCell.vue'
+import DatasetCell from '@/components/DatasetCell.vue'
 
 const router = useRouter()
 const subscriptions = ref<any[]>([])
-const sparklines = ref<Record<string, any[]>>({})
 const loading = ref(true)
 const error = ref('')
+const searchQuery = ref('')
+
+const gridColumns = [
+  { prop: 'name', name: 'Name', sortable: true, size: 220 },
+  { prop: 'provider', name: 'Provider', sortable: true, size: 130, cellTemplate: VGridVueTemplate(ProviderCell) },
+  { prop: 'dataset', name: 'Dataset', sortable: true, size: 200, cellTemplate: VGridVueTemplate(DatasetCell) },
+  { prop: 'status', name: 'Status', sortable: true, size: 110, cellTemplate: VGridVueTemplate(StatusCell) },
+  { prop: 'total_records', name: 'Total Records', sortable: true, size: 180 },
+  { prop: 'last_run', name: 'Last Import', sortable: true, size: 180 },
+  { prop: 'records_last', name: 'Records Last', sortable: true, size: 130 },
+  { prop: 'next_run', name: 'Next Import', sortable: true, size: 160 },
+]
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr || dateStr.startsWith('0001')) return '--'
@@ -31,12 +43,51 @@ function formatNumber(n: number | null | undefined): string {
   return n.toLocaleString()
 }
 
-function onRowClick(event: any) {
-  if (event.data?.id) router.push(`/subscriptions/${event.data.id}`)
+const allRows = computed(() =>
+  subscriptions.value.map(sub => ({
+    _id: sub.id,
+    name: sub.name || sub.id,
+    provider: sub.provider,
+    dataset: sub.dataset,
+    status: sub.active ? 'Active' : 'Inactive',
+    total_records: formatNumber(sub.total_records),
+    last_run: formatDate(sub.last_run),
+    records_last: formatNumber(sub.num_records_last_import),
+    next_run: sub.next_run_human || '--',
+  }))
+)
+
+const datasetFilter = ref('')
+
+const uniqueDatasets = computed(() =>
+  [...new Set(allRows.value.map(r => r.dataset))].sort()
+)
+
+const gridRows = computed(() => {
+  let rows = allRows.value
+  if (datasetFilter.value) {
+    rows = rows.filter(r => r.dataset === datasetFilter.value)
+  }
+  const q = searchQuery.value.toLowerCase().trim()
+  if (q) {
+    rows = rows.filter(row =>
+      Object.values(row).some(val =>
+        String(val).toLowerCase().includes(q)
+      )
+    )
+  }
+  return rows
+})
+
+function toggleDatasetFilter(ds: string) {
+  datasetFilter.value = datasetFilter.value === ds ? '' : ds
 }
 
-async function loadSparkline(id: string) {
-  try { sparklines.value[id] = await getSparkline(id) } catch { /* non-critical */ }
+function onCellFocus(e: CustomEvent) {
+  const detail = e.detail
+  if (detail?.model?._id) {
+    router.push(`/subscriptions/${detail.model._id}`)
+  }
 }
 
 onMounted(async () => {
@@ -47,7 +98,6 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-  for (const sub of subscriptions.value) loadSparkline(sub.id)
 })
 </script>
 
@@ -66,29 +116,34 @@ onMounted(async () => {
 
     <p v-else-if="subscriptions.length === 0">No subscriptions yet. Create one to get started.</p>
 
-    <DataTable v-else :value="subscriptions" :rowHover="true" size="small" @row-click="onRowClick" style="cursor: pointer">
-      <Column field="name" header="Name">
-        <template #body="{ data }">{{ data.name || data.id }}</template>
-      </Column>
-      <Column field="provider" header="Provider" />
-      <Column field="dataset" header="Dataset" />
-      <Column field="active" header="Status">
-        <template #body="{ data }">
-          <Tag :value="data.active ? 'Active' : 'Inactive'" :severity="data.active ? 'success' : 'secondary'" />
-        </template>
-      </Column>
-      <Column header="Sparkline" :sortable="false" style="width: 140px">
-        <template #body="{ data }"><SparklineCell :data="sparklines[data.id] || []" /></template>
-      </Column>
-      <Column header="Last Import">
-        <template #body="{ data }">{{ formatDate(data.last_run) }}</template>
-      </Column>
-      <Column header="Records">
-        <template #body="{ data }">{{ formatNumber(data.num_records_last_import) }}</template>
-      </Column>
-      <Column header="Next Import">
-        <template #body="{ data }">{{ data.next_run_human || '--' }}</template>
-      </Column>
-    </DataTable>
+    <template v-else>
+      <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap">
+        <InputText
+          v-model="searchQuery"
+          placeholder="Search subscriptions..."
+          style="width: 300px"
+        />
+        <Button
+          v-for="ds in uniqueDatasets"
+          :key="ds"
+          :label="ds"
+          size="small"
+          :severity="datasetFilter === ds ? undefined : 'secondary'"
+          :outlined="datasetFilter !== ds"
+          @click="toggleDatasetFilter(ds)"
+        />
+      </div>
+
+      <RevoGrid
+        :columns="gridColumns"
+        :source="gridRows"
+        :filter="true"
+        :resize="true"
+        :rowSize="36"
+        theme="darkCompact"
+        style="height: 600px; cursor: pointer"
+        @beforecellfocus="onCellFocus"
+      />
+    </template>
   </div>
 </template>

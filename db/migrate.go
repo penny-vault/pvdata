@@ -27,7 +27,7 @@ import (
 var migrationFS embed.FS
 
 // RequiredVersion is the migration version that the application expects.
-const RequiredVersion uint = 4
+const RequiredVersion uint = 5
 
 // Migrate runs database migrations for a data library
 func Migrate(databaseURL string) error {
