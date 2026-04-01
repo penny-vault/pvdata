@@ -1,77 +1,89 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import Menubar from 'primevue/menubar'
+import Button from 'primevue/button'
+import ProgressSpinner from 'primevue/progressspinner'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 const router = useRouter()
 
+const menuItems = [
+  { label: 'Subscriptions', icon: 'pi pi-database', command: () => router.push('/') },
+  { label: 'SQL Console', icon: 'pi pi-code', command: () => router.push('/sql') },
+]
+
 onMounted(() => {
   auth.init()
 })
-
-function navigateTo(path: string) {
-  router.push(path)
-}
 </script>
 
 <template>
-  <div>
-    <cv-header aria-label="pvdata">
-      <cv-skip-to-content href="#main-content" />
-      <cv-header-name prefix="pv" to="/" @click.prevent="navigateTo('/')">
-        data
-      </cv-header-name>
-      <cv-header-nav v-if="auth.isAuthenticated" aria-label="main navigation">
-        <cv-header-menu-item @click="navigateTo('/')">
-          Subscriptions
-        </cv-header-menu-item>
-        <cv-header-menu-item @click="navigateTo('/sql')">
-          SQL Console
-        </cv-header-menu-item>
-      </cv-header-nav>
-      <template v-if="auth.authEnabled && auth.isAuthenticated" #header-global>
-        <span class="auth-user">{{ auth.userName }}</span>
-        <cv-button kind="ghost" size="sm" @click="auth.logout()">Logout</cv-button>
-      </template>
-    </cv-header>
-
-    <cv-content id="main-content">
-      <div v-if="auth.isLoading" class="loading-container">
-        <cv-loading active />
+  <div class="dark">
+    <div class="header-bar">
+      <div class="header-inner">
+        <Menubar :model="menuItems">
+          <template #start>
+            <span class="app-logo" @click="router.push('/')">pv<strong>data</strong></span>
+          </template>
+          <template #end>
+            <div v-if="auth.authEnabled && auth.isAuthenticated" style="display: flex; align-items: center; gap: 0.5rem">
+              <span>{{ auth.userName }}</span>
+              <Button label="Logout" severity="secondary" text size="small" @click="auth.logout()" />
+            </div>
+          </template>
+        </Menubar>
       </div>
-      <div v-else-if="!auth.isAuthenticated && auth.authEnabled" class="login-container">
+    </div>
+
+    <main class="app-content">
+      <div v-if="auth.isLoading" style="display: flex; justify-content: center; align-items: center; min-height: 50vh">
+        <ProgressSpinner />
+      </div>
+      <div v-else-if="!auth.isAuthenticated && auth.authEnabled" style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; min-height: 50vh">
         <h2>Authentication Required</h2>
         <p>Please sign in to access pvdata.</p>
-        <cv-button @click="auth.login()">Sign In</cv-button>
+        <Button label="Sign In" @click="auth.login()" />
       </div>
       <router-view v-else />
-    </cv-content>
+    </main>
   </div>
 </template>
 
 <style scoped>
-.loading-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 50vh;
+.header-bar {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.login-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 50vh;
-  gap: 1rem;
+.header-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 2rem;
 }
 
-.auth-user {
-  display: flex;
-  align-items: center;
-  padding: 0 1rem;
-  color: var(--cds-text-secondary, #c6c6c6);
-  font-size: 0.875rem;
+:deep(.p-menubar) {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-logo {
+  font-size: 1.25rem;
+  cursor: pointer;
+  margin-right: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.app-logo strong {
+  color: var(--p-primary-color);
+}
+
+.app-content {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 2rem;
 }
 </style>

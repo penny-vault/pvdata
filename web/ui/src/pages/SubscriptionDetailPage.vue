@@ -2,12 +2,22 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  getSubscription,
-  getRunHistory,
-  activateSubscription,
-  deactivateSubscription,
-  deleteSubscription,
+  getSubscription, getRunHistory,
+  activateSubscription, deactivateSubscription, deleteSubscription,
 } from '@/lib/api'
+import DataTable from 'primevue/datatable'
+import Column from 'primevue/column'
+import Tag from 'primevue/tag'
+import Button from 'primevue/button'
+import Card from 'primevue/card'
+import Tabs from 'primevue/tabs'
+import TabList from 'primevue/tablist'
+import Tab from 'primevue/tab'
+import TabPanels from 'primevue/tabpanels'
+import TabPanel from 'primevue/tabpanel'
+import Dialog from 'primevue/dialog'
+import ProgressSpinner from 'primevue/progressspinner'
+import Message from 'primevue/message'
 import RunHistoryChart from '@/components/RunHistoryChart.vue'
 import DataBrowser from '@/components/DataBrowser.vue'
 import SubscriptionForm from '@/components/SubscriptionForm.vue'
@@ -26,16 +36,15 @@ const showDeleteConfirm = ref(false)
 const loadingRuns = ref(false)
 const runsOffset = ref(0)
 const runsLimit = 20
+const activeTab = ref('0')
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '--'
+  if (!dateStr || dateStr.startsWith('0001')) return '--'
   const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '--'
   return d.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
   })
 }
 
@@ -52,59 +61,40 @@ function formatDuration(start: string, end: string | null): string {
   return `${(ms / 60000).toFixed(1)}m`
 }
 
+function statusSeverity(status: string): "success" | "danger" | "secondary" | "info" | "warn" | "contrast" | undefined {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  return 'secondary'
+}
+
 async function loadSubscription() {
-  try {
-    subscription.value = await getSubscription(id.value)
-  } catch (e: any) {
-    error.value = e.message || 'Failed to load subscription'
-  } finally {
-    loading.value = false
-  }
+  try { subscription.value = await getSubscription(id.value) }
+  catch (e: any) { error.value = e.message || 'Failed to load subscription' }
+  finally { loading.value = false }
 }
 
 async function loadRuns(append = false) {
   loadingRuns.value = true
   try {
     const result = await getRunHistory(id.value, runsLimit, runsOffset.value)
-    if (append) {
-      runs.value = [...runs.value, ...(result.data || [])]
-    } else {
-      runs.value = result.data || []
-    }
+    runs.value = append ? [...runs.value, ...(result.data || [])] : (result.data || [])
     runsTotal.value = result.total || runs.value.length
-  } catch {
-    // Non-critical
-  } finally {
-    loadingRuns.value = false
-  }
-}
-
-async function loadMoreRuns() {
-  runsOffset.value = runs.value.length
-  await loadRuns(true)
+  } catch { /* non-critical */ }
+  finally { loadingRuns.value = false }
 }
 
 async function toggleActive() {
   if (!subscription.value) return
   try {
-    if (subscription.value.enabled) {
-      await deactivateSubscription(id.value)
-    } else {
-      await activateSubscription(id.value)
-    }
-    subscription.value.enabled = !subscription.value.enabled
-  } catch (e: any) {
-    error.value = e.message || 'Failed to toggle subscription'
-  }
+    if (subscription.value.active) await deactivateSubscription(id.value)
+    else await activateSubscription(id.value)
+    subscription.value.active = !subscription.value.active
+  } catch (e: any) { error.value = e.message || 'Failed to toggle subscription' }
 }
 
 async function onDelete() {
-  try {
-    await deleteSubscription(id.value)
-    router.push('/')
-  } catch (e: any) {
-    error.value = e.message || 'Failed to delete subscription'
-  }
+  try { await deleteSubscription(id.value); router.push('/') }
+  catch (e: any) { error.value = e.message || 'Failed to delete subscription' }
 }
 
 function onSaved(updated: any) {
@@ -114,348 +104,92 @@ function onSaved(updated: any) {
 
 function openSqlConsole() {
   const sub = subscription.value
-  const table = sub?.data_types?.[0] || 'unknown'
-  const query = `SELECT * FROM ${table} LIMIT 100`
-  router.push({ path: '/sql', query: { q: query } })
+  const table = sub?.data_tables_map?.[sub?.data_types?.[0]] || 'unknown'
+  router.push({ path: '/sql', query: { q: `SELECT * FROM ${table} LIMIT 100` } })
 }
 
-onMounted(() => {
-  loadSubscription()
-  loadRuns()
-})
+onMounted(() => { loadSubscription(); loadRuns() })
 </script>
 
 <template>
-  <div class="detail-page">
-    <div v-if="loading" class="page-loading">
-      <cv-loading active />
-    </div>
+  <div>
+    <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem 0"><ProgressSpinner /></div>
 
     <div v-else-if="error && !subscription">
-      <cv-inline-notification
-        kind="error"
-        :title="error"
-        @close="error = ''"
-      />
+      <Message severity="error" :closable="true" @close="error = ''">{{ error }}</Message>
     </div>
 
     <template v-else-if="subscription">
-      <!-- Header -->
-      <div class="detail-header">
-        <div class="detail-header__info">
-          <button
-            class="back-link"
-            @click="router.push('/')"
-          >
-            &larr; Subscriptions
-          </button>
-          <h2>{{ subscription.name || subscription.id }}</h2>
-          <div class="detail-header__tags">
-            <cv-tag :label="subscription.provider" kind="blue" />
-            <cv-tag :label="subscription.dataset" kind="purple" />
-            <cv-tag
-              :label="subscription.active ? 'Active' : 'Inactive'"
-              :kind="subscription.active ? 'green' : 'gray'"
-            />
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; gap: 1rem; flex-wrap: wrap">
+        <div>
+          <Button label="Subscriptions" icon="pi pi-arrow-left" text size="small" @click="router.push('/')" style="margin-bottom: 0.5rem" />
+          <h2 style="margin-bottom: 0.5rem">{{ subscription.name || subscription.id }}</h2>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+            <Tag :value="subscription.provider" severity="info" />
+            <Tag :value="subscription.dataset" severity="warn" />
+            <Tag :value="subscription.active ? 'Active' : 'Inactive'" :severity="subscription.active ? 'success' : 'secondary'" />
           </div>
         </div>
-        <div class="detail-header__actions">
-          <cv-button kind="ghost" @click="toggleActive">
-            {{ subscription.active ? 'Deactivate' : 'Activate' }}
-          </cv-button>
-          <cv-button kind="secondary" @click="editing = !editing">
-            {{ editing ? 'Cancel Edit' : 'Edit' }}
-          </cv-button>
-          <cv-button kind="danger" @click="showDeleteConfirm = true">
-            Delete
-          </cv-button>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+          <Button :label="subscription.active ? 'Deactivate' : 'Activate'" :icon="subscription.active ? 'pi pi-pause' : 'pi pi-play'" text @click="toggleActive" />
+          <Button :label="editing ? 'Cancel Edit' : 'Edit'" icon="pi pi-pencil" severity="secondary" @click="editing = !editing" />
+          <Button label="Delete" icon="pi pi-trash" severity="danger" @click="showDeleteConfirm = true" />
         </div>
       </div>
 
-      <div v-if="error" style="margin-bottom: 1rem">
-        <cv-inline-notification
-          kind="error"
-          :title="error"
-          @close="error = ''"
-        />
-      </div>
+      <Message v-if="error" severity="error" :closable="true" style="margin-bottom: 1rem" @close="error = ''">{{ error }}</Message>
 
-      <!-- Delete confirmation -->
-      <cv-modal
-        :visible="showDeleteConfirm"
-        kind="danger"
-        @modal-hidden="showDeleteConfirm = false"
-        @primary-click="onDelete"
-      >
-        <template #title>Delete Subscription</template>
-        <template #content>
-          <p>
-            Are you sure you want to delete
-            <strong>{{ subscription.name || subscription.id }}</strong>?
-            This action cannot be undone.
-          </p>
+      <Dialog v-model:visible="showDeleteConfirm" header="Delete Subscription" :modal="true" :style="{ width: '28rem' }">
+        <p>Are you sure you want to delete <strong>{{ subscription.name || subscription.id }}</strong>? This cannot be undone.</p>
+        <template #footer>
+          <Button label="Cancel" severity="secondary" @click="showDeleteConfirm = false" />
+          <Button label="Delete" severity="danger" @click="onDelete" />
         </template>
-      </cv-modal>
+      </Dialog>
 
-      <!-- Edit form -->
-      <div v-if="editing" class="detail-section">
-        <SubscriptionForm
-          :subscription="subscription"
-          @saved="onSaved"
-          @cancel="editing = false"
-        />
+      <div v-if="editing" style="margin-bottom: 1rem">
+        <Card>
+          <template #content>
+            <SubscriptionForm :subscription="subscription" @saved="onSaved" @cancel="editing = false" />
+          </template>
+        </Card>
       </div>
 
-      <!-- Stats row -->
-      <div v-if="!editing" class="stats-grid">
-        <div class="stat-card">
-          <span class="stat-card__label">Total Records</span>
-          <span class="stat-card__value">
-            {{ formatNumber(subscription.total_records) }}
-          </span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-card__label">Last Import</span>
-          <span class="stat-card__value">
-            {{ formatDate(subscription.last_run) }}
-          </span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-card__label">Records Last Import</span>
-          <span class="stat-card__value">
-            {{ formatNumber(subscription.num_records_last_import) }}
-          </span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-card__label">Next Run</span>
-          <span class="stat-card__value">
-            {{ subscription.next_run_human || '--' }}
-          </span>
-        </div>
+      <div v-if="!editing" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem">
+        <Card><template #content><small>TOTAL RECORDS</small><h3>{{ formatNumber(subscription.total_records) }}</h3></template></Card>
+        <Card><template #content><small>LAST IMPORT</small><h3>{{ formatDate(subscription.last_run) }}</h3></template></Card>
+        <Card><template #content><small>RECORDS LAST IMPORT</small><h3>{{ formatNumber(subscription.num_records_last_import) }}</h3></template></Card>
+        <Card><template #content><small>NEXT RUN</small><h3>{{ subscription.next_run_human || '--' }}</h3></template></Card>
       </div>
 
-      <!-- Tabs -->
-      <div v-if="!editing" class="detail-tabs">
-        <cv-tabs>
-          <cv-tab label="Run History">
-            <div class="tab-content">
+      <div v-if="!editing" style="margin-bottom: 1rem">
+        <Tabs v-model:value="activeTab">
+          <TabList>
+            <Tab value="0">Run History</Tab>
+            <Tab v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(idx + 1)">{{ dt }}</Tab>
+          </TabList>
+          <TabPanels>
+            <TabPanel value="0">
               <RunHistoryChart :runs="runs" />
-
-              <div class="runs-table-wrap">
-                <table class="bx--data-table bx--data-table--compact">
-                  <thead>
-                    <tr>
-                      <th><span class="bx--table-header-label">Date</span></th>
-                      <th><span class="bx--table-header-label">Status</span></th>
-                      <th><span class="bx--table-header-label">Records</span></th>
-                      <th><span class="bx--table-header-label">Duration</span></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="run in runs" :key="run.id || run.start_time">
-                      <td>{{ formatDate(run.start_time) }}</td>
-                      <td>
-                        <cv-tag
-                          :label="run.status || 'unknown'"
-                          :kind="run.status === 'success' ? 'green' : run.status === 'failed' ? 'red' : 'gray'"
-                        />
-                      </td>
-                      <td>{{ formatNumber(run.num_observations) }}</td>
-                      <td>{{ formatDuration(run.start_time, run.end_time) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <div v-if="runs.length === 0 && !loadingRuns" class="runs-empty">
-                  No runs recorded yet.
-                </div>
-
-                <div v-if="loadingRuns" class="runs-loading">
-                  Loading...
-                </div>
-
-                <div
-                  v-if="runs.length < runsTotal && !loadingRuns"
-                  class="runs-load-more"
-                >
-                  <cv-button kind="ghost" @click="loadMoreRuns">
-                    Load more
-                  </cv-button>
-                </div>
+              <DataTable :value="runs" stripedRows :rowHover="true" size="small" style="margin-top: 1rem">
+                <Column header="Date"><template #body="{ data }">{{ formatDate(data.start_time) }}</template></Column>
+                <Column header="Status"><template #body="{ data }"><Tag :value="data.status || 'unknown'" :severity="statusSeverity(data.status)" /></template></Column>
+                <Column header="Records"><template #body="{ data }">{{ formatNumber(data.num_observations) }}</template></Column>
+                <Column header="Duration"><template #body="{ data }">{{ formatDuration(data.start_time, data.end_time) }}</template></Column>
+              </DataTable>
+              <p v-if="runs.length === 0 && !loadingRuns">No runs recorded yet.</p>
+              <div v-if="runs.length < runsTotal && !loadingRuns" style="display: flex; justify-content: center; padding: 0.5rem 0">
+                <Button label="Load more" text @click="runsOffset = runs.length; loadRuns(true)" />
               </div>
-            </div>
-          </cv-tab>
-
-          <cv-tab
-            v-for="dt in (subscription.data_types || [])"
-            :key="dt"
-            :label="dt"
-          >
-            <div class="tab-content">
-              <DataBrowser
-                :subscription-id="id"
-                :datatype="dt"
-              />
-            </div>
-          </cv-tab>
-        </cv-tabs>
+            </TabPanel>
+            <TabPanel v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(idx + 1)">
+              <DataBrowser :subscription-id="id" :datatype="dt" />
+            </TabPanel>
+          </TabPanels>
+        </Tabs>
       </div>
 
-      <!-- SQL link -->
-      <div v-if="!editing" class="detail-footer">
-        <cv-button kind="ghost" @click="openSqlConsole">
-          Open in SQL Console
-        </cv-button>
-      </div>
+      <Button v-if="!editing" label="Open in SQL Console" icon="pi pi-code" text @click="openSqlConsole" />
     </template>
   </div>
 </template>
-
-<style scoped>
-.detail-page {
-  padding: 2rem;
-  max-width: 1400px;
-  margin: 0 auto;
-}
-
-.page-loading {
-  display: flex;
-  justify-content: center;
-  padding: 4rem;
-}
-
-.back-link {
-  background: none;
-  border: none;
-  color: var(--cds-link-primary, #78a9ff);
-  cursor: pointer;
-  padding: 0;
-  font-size: 0.875rem;
-  margin-bottom: 0.5rem;
-  display: inline-block;
-}
-
-.back-link:hover {
-  text-decoration: underline;
-}
-
-.detail-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 2rem;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.detail-header__info h2 {
-  margin: 0 0 0.75rem 0;
-  font-weight: 400;
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.detail-header__tags {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.detail-header__actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1rem;
-  margin-bottom: 2rem;
-}
-
-@media (max-width: 768px) {
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-.stat-card {
-  background-color: var(--cds-layer-01, #262626);
-  border: 1px solid var(--cds-border-subtle-01, #393939);
-  border-radius: 2px;
-  padding: 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.stat-card__label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.32px;
-  color: var(--cds-text-secondary, #c6c6c6);
-}
-
-.stat-card__value {
-  font-size: 1.5rem;
-  font-weight: 300;
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.detail-tabs {
-  margin-bottom: 2rem;
-}
-
-.tab-content {
-  padding: 1.5rem 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-}
-
-.runs-table-wrap {
-  border: 1px solid var(--cds-border-subtle-01, #393939);
-  border-radius: 2px;
-  overflow-x: auto;
-}
-
-.runs-table-wrap .bx--data-table {
-  width: 100%;
-}
-
-.runs-table-wrap .bx--data-table thead th {
-  background-color: var(--cds-layer-accent-01, #333333);
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.runs-table-wrap .bx--data-table tbody td {
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.runs-empty,
-.runs-loading {
-  text-align: center;
-  padding: 2rem;
-  color: var(--cds-text-secondary, #c6c6c6);
-}
-
-.runs-load-more {
-  display: flex;
-  justify-content: center;
-  padding: 0.75rem;
-}
-
-.detail-section {
-  margin-bottom: 2rem;
-  padding: 1.5rem;
-  background-color: var(--cds-layer-01, #262626);
-  border: 1px solid var(--cds-border-subtle-01, #393939);
-  border-radius: 2px;
-}
-
-.detail-footer {
-  padding-top: 1rem;
-  border-top: 1px solid var(--cds-border-subtle-01, #393939);
-}
-</style>

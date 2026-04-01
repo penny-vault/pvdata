@@ -2,6 +2,18 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getProviders, createSubscription } from '@/lib/api'
+import Stepper from 'primevue/stepper'
+import StepList from 'primevue/steplist'
+import StepPanels from 'primevue/steppanels'
+import StepPanel from 'primevue/steppanel'
+import StepItem from 'primevue/stepitem'
+import Step from 'primevue/step'
+import RadioButton from 'primevue/radiobutton'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
+import Card from 'primevue/card'
+import Message from 'primevue/message'
+import ProgressSpinner from 'primevue/progressspinner'
 
 const router = useRouter()
 
@@ -9,7 +21,7 @@ const providers = ref<Record<string, any>>({})
 const loading = ref(true)
 const creating = ref(false)
 const error = ref('')
-const currentStep = ref(0)
+const activeStep = ref('1')
 
 // Form state
 const selectedProvider = ref('')
@@ -17,8 +29,6 @@ const selectedDataset = ref('')
 const schedule = ref('0 6 * * *')
 const configEntries = ref<{ key: string; value: string }[]>([])
 const healthCheckId = ref('')
-
-const steps = ['Provider', 'Dataset', 'Schedule', 'Configuration', 'Health Check', 'Confirm']
 
 const providerList = computed(() => {
   return Object.entries(providers.value).map(([key, val]) => ({
@@ -44,44 +54,15 @@ const datasetOptions = computed(() => {
   }))
 })
 
-const canNext = computed(() => {
-  switch (currentStep.value) {
-    case 0:
-      return !!selectedProvider.value
-    case 1:
-      return !!selectedDataset.value
-    case 2:
-      return !!schedule.value.trim()
-    case 3:
-      return true
-    case 4:
-      return true
-    case 5:
-      return true
-    default:
-      return false
-  }
-})
-
-function next() {
-  if (currentStep.value < steps.length - 1) {
-    currentStep.value++
-    // Pre-populate config keys when entering config step
-    if (currentStep.value === 3 && configEntries.value.length === 0) {
-      const desc = selectedProviderData.value?.config_description || {}
-      const keys = Object.keys(desc)
-      if (keys.length > 0) {
-        configEntries.value = keys.map((k) => ({ key: k, value: '' }))
-      } else {
-        configEntries.value = [{ key: '', value: '' }]
-      }
+function populateConfigKeys() {
+  if (configEntries.value.length === 0) {
+    const desc = selectedProviderData.value?.config_description || {}
+    const keys = Object.keys(desc)
+    if (keys.length > 0) {
+      configEntries.value = keys.map((k) => ({ key: k, value: '' }))
+    } else {
+      configEntries.value = [{ key: '', value: '' }]
     }
-  }
-}
-
-function back() {
-  if (currentStep.value > 0) {
-    currentStep.value--
   }
 }
 
@@ -130,286 +111,247 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="new-sub-page">
-    <div class="page-header">
-      <button class="back-link" @click="router.push('/')">
-        &larr; Subscriptions
-      </button>
+  <div class="new-sub-page" style="max-width: 48rem; margin-left: auto; margin-right: auto">
+    <div style="margin-bottom: 1.5rem">
+      <Button label="Subscriptions" icon="pi pi-arrow-left" text size="small" @click="router.push('/')" style="margin-bottom: 0.5rem" />
       <h2>New Subscription</h2>
     </div>
 
-    <div v-if="loading" class="page-loading">
-      <cv-loading active />
+    <div v-if="loading" style="display: flex; justify-content: center; padding: 4rem 0">
+      <ProgressSpinner />
     </div>
 
     <template v-else>
-      <div v-if="error" class="error-notice">
-        <cv-inline-notification
-          kind="error"
-          :title="error"
-          @close="error = ''"
-        />
-      </div>
+      <Message v-if="error" severity="error" :closable="true" style="margin-bottom: 1rem" @close="error = ''">
+        {{ error }}
+      </Message>
 
-      <!-- Progress indicator -->
-      <div class="wizard-progress">
-        <cv-progress :initial-step="currentStep" :steps="steps" />
-      </div>
-
-      <!-- Step content -->
-      <div class="wizard-content">
-        <!-- Step 0: Provider -->
-        <div v-if="currentStep === 0" class="step-panel">
-          <h3>Select a Provider</h3>
-          <cv-radio-group
-            legend-text="Available Providers"
-            :hide-legend="true"
-            vertical
-            @change="(val: string) => selectedProvider = val"
-          >
-            <cv-radio-button
-              v-for="p in providerList"
-              :key="p.id"
-              :value="p.id"
-              :label="p.name"
-              :checked="selectedProvider === p.id"
-              name="provider"
-            />
-          </cv-radio-group>
-          <p
-            v-if="selectedProviderData?.description"
-            class="step-description"
-          >
-            {{ selectedProviderData.description }}
-          </p>
-        </div>
-
-        <!-- Step 1: Dataset -->
-        <div v-if="currentStep === 1" class="step-panel">
-          <h3>Select a Dataset</h3>
-          <cv-radio-group
-            legend-text="Available Datasets"
-            :hide-legend="true"
-            vertical
-            @change="(val: string) => selectedDataset = val"
-          >
-            <cv-radio-button
-              v-for="ds in datasetOptions"
-              :key="ds.key"
-              :value="ds.key"
-              :label="ds.description ? `${ds.name} - ${ds.description}` : ds.name"
-              :checked="selectedDataset === ds.key"
-              name="dataset"
-            />
-          </cv-radio-group>
-          <p v-if="datasetOptions.length === 0" class="step-description">
-            No datasets available for this provider.
-          </p>
-        </div>
-
-        <!-- Step 2: Schedule -->
-        <div v-if="currentStep === 2" class="step-panel">
-          <h3>Set Schedule</h3>
-          <cv-text-input
-            v-model="schedule"
-            label="Cron Expression"
-            helper-text="e.g. 0 6 * * 1-5 for weekdays at 6am, 0 0 * * 0 for weekly"
-            placeholder="0 6 * * *"
-          />
-        </div>
-
-        <!-- Step 3: Configuration -->
-        <div v-if="currentStep === 3" class="step-panel">
-          <h3>Configuration</h3>
-          <p class="step-description">
-            Set provider-specific configuration values.
-          </p>
-          <div
-            v-for="(entry, i) in configEntries"
-            :key="i"
-            class="config-row"
-          >
-            <cv-text-input
-              v-model="entry.key"
-              label="Key"
-              :placeholder="'config_key'"
-            />
-            <cv-text-input
-              v-model="entry.value"
-              label="Value"
-              :placeholder="'config_value'"
-            />
-            <button
-              class="bx--btn bx--btn--ghost bx--btn--sm config-remove"
-              @click="removeConfigEntry(i)"
-            >
-              Remove
-            </button>
-          </div>
-          <button
-            class="bx--btn bx--btn--ghost bx--btn--sm"
-            @click="addConfigEntry"
-          >
-            + Add config entry
-          </button>
-        </div>
-
-        <!-- Step 4: Health Check -->
-        <div v-if="currentStep === 4" class="step-panel">
-          <h3>Health Check (optional)</h3>
-          <cv-text-input
-            v-model="healthCheckId"
-            label="Health Check ID"
-            helper-text="healthchecks.io check UUID (optional)"
-            placeholder="UUID"
-          />
-        </div>
-
-        <!-- Step 5: Confirm -->
-        <div v-if="currentStep === 5" class="step-panel">
-          <h3>Review &amp; Create</h3>
-          <div class="review-grid">
-            <div class="review-item">
-              <span class="review-label">Provider</span>
-              <span class="review-value">{{ selectedProviderData?.name || selectedProvider }}</span>
-            </div>
-            <div class="review-item">
-              <span class="review-label">Dataset</span>
-              <span class="review-value">{{ selectedDataset }}</span>
-            </div>
-            <div class="review-item">
-              <span class="review-label">Schedule</span>
-              <span class="review-value">{{ schedule }}</span>
-            </div>
-            <div class="review-item">
-              <span class="review-label">Health Check</span>
-              <span class="review-value">{{ healthCheckId || 'None' }}</span>
-            </div>
-            <div v-if="configEntries.some(e => e.key.trim())" class="review-item review-item--full">
-              <span class="review-label">Configuration</span>
-              <div class="review-config">
+      <Stepper v-model:value="activeStep" linear>
+        <StepList>
+          <Step value="1">Provider</Step>
+          <Step value="2">Dataset</Step>
+          <Step value="3">Schedule</Step>
+          <Step value="4">Configuration</Step>
+          <Step value="5">Health Check</Step>
+          <Step value="6">Confirm</Step>
+        </StepList>
+        <StepPanels>
+          <!-- Step 1: Provider -->
+          <StepPanel v-slot="{ activateCallback }" value="1">
+            <div class="step-content">
+              <h3 style="margin-bottom: 1rem">Select a Provider</h3>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem">
                 <div
-                  v-for="entry in configEntries.filter(e => e.key.trim())"
-                  :key="entry.key"
-                  class="review-config-entry"
+                  v-for="p in providerList"
+                  :key="p.id"
+                  style="display: flex; align-items: center; gap: 0.75rem"
                 >
-                  <code>{{ entry.key }}</code>: {{ entry.value || '(empty)' }}
+                  <RadioButton
+                    v-model="selectedProvider"
+                    :inputId="'provider-' + p.id"
+                    :value="p.id"
+                    name="provider"
+                  />
+                  <label :for="'provider-' + p.id" style="cursor: pointer">
+                    {{ p.name }}
+                  </label>
                 </div>
               </div>
+              <p v-if="selectedProviderData?.description" style="margin-top: 0.5rem">
+                {{ selectedProviderData.description }}
+              </p>
+              <div style="display: flex; justify-content: flex-end; margin-top: 1.5rem">
+                <Button
+                  label="Next"
+                  icon="pi pi-arrow-right"
+                  iconPos="right"
+                  :disabled="!selectedProvider"
+                  @click="activateCallback('2')"
+                />
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
+          </StepPanel>
 
-      <!-- Navigation buttons -->
-      <div class="wizard-nav">
-        <cv-button
-          v-if="currentStep > 0"
-          kind="secondary"
-          @click="back"
-        >
-          Back
-        </cv-button>
-        <div class="wizard-nav__spacer"></div>
-        <cv-button
-          v-if="currentStep < steps.length - 1"
-          kind="primary"
-          :disabled="!canNext"
-          @click="next"
-        >
-          Next
-        </cv-button>
-        <cv-button
-          v-if="currentStep === steps.length - 1"
-          kind="primary"
-          :disabled="creating"
-          @click="onCreate"
-        >
-          {{ creating ? 'Creating...' : 'Create Subscription' }}
-        </cv-button>
-      </div>
+          <!-- Step 2: Dataset -->
+          <StepPanel v-slot="{ activateCallback }" value="2">
+            <div class="step-content">
+              <h3 style="margin-bottom: 1rem">Select a Dataset</h3>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem">
+                <div
+                  v-for="ds in datasetOptions"
+                  :key="ds.key"
+                  style="display: flex; align-items: center; gap: 0.75rem"
+                >
+                  <RadioButton
+                    v-model="selectedDataset"
+                    :inputId="'dataset-' + ds.key"
+                    :value="ds.key"
+                    name="dataset"
+                  />
+                  <label :for="'dataset-' + ds.key" style="cursor: pointer">
+                    {{ ds.description ? `${ds.name} - ${ds.description}` : ds.name }}
+                  </label>
+                </div>
+              </div>
+              <p v-if="datasetOptions.length === 0" style="margin-top: 0.5rem">
+                No datasets available for this provider.
+              </p>
+              <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
+                <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('1')" />
+                <Button
+                  label="Next"
+                  icon="pi pi-arrow-right"
+                  iconPos="right"
+                  :disabled="!selectedDataset"
+                  @click="activateCallback('3')"
+                />
+              </div>
+            </div>
+          </StepPanel>
+
+          <!-- Step 3: Schedule -->
+          <StepPanel v-slot="{ activateCallback }" value="3">
+            <div class="step-content">
+              <h3 style="margin-bottom: 1rem">Set Schedule</h3>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem; max-width: 28rem">
+                <label>Cron Expression</label>
+                <InputText v-model="schedule" placeholder="0 6 * * *" />
+                <small>
+                  e.g. 0 6 * * 1-5 for weekdays at 6am, 0 0 * * 0 for weekly
+                </small>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
+                <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('2')" />
+                <Button
+                  label="Next"
+                  icon="pi pi-arrow-right"
+                  iconPos="right"
+                  :disabled="!schedule.trim()"
+                  @click="populateConfigKeys(); activateCallback('4')"
+                />
+              </div>
+            </div>
+          </StepPanel>
+
+          <!-- Step 4: Configuration -->
+          <StepPanel v-slot="{ activateCallback }" value="4">
+            <div class="step-content">
+              <h3 style="margin-bottom: 0.5rem">Configuration</h3>
+              <p style="margin-bottom: 1rem">
+                Set provider-specific configuration values.
+              </p>
+              <div style="display: flex; flex-direction: column; gap: 0.75rem">
+                <div
+                  v-for="(entry, i) in configEntries"
+                  :key="i"
+                  style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.75rem; align-items: flex-end"
+                >
+                  <div style="display: flex; flex-direction: column; gap: 0.25rem">
+                    <label>Key</label>
+                    <InputText v-model="entry.key" placeholder="config_key" />
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 0.25rem">
+                    <label>Value</label>
+                    <InputText v-model="entry.value" placeholder="config_value" />
+                  </div>
+                  <Button
+                    icon="pi pi-trash"
+                    severity="danger"
+                    text
+                    size="small"
+                    @click="removeConfigEntry(i)"
+                  />
+                </div>
+                <div>
+                  <Button
+                    label="+ Add config entry"
+                    text
+                    size="small"
+                    @click="addConfigEntry"
+                  />
+                </div>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
+                <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('3')" />
+                <Button label="Next" icon="pi pi-arrow-right" iconPos="right" @click="activateCallback('5')" />
+              </div>
+            </div>
+          </StepPanel>
+
+          <!-- Step 5: Health Check -->
+          <StepPanel v-slot="{ activateCallback }" value="5">
+            <div class="step-content">
+              <h3 style="margin-bottom: 1rem">Health Check (optional)</h3>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem; max-width: 28rem">
+                <label>Health Check ID</label>
+                <InputText v-model="healthCheckId" placeholder="UUID" />
+                <small>healthchecks.io check UUID (optional)</small>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
+                <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('4')" />
+                <Button label="Next" icon="pi pi-arrow-right" iconPos="right" @click="activateCallback('6')" />
+              </div>
+            </div>
+          </StepPanel>
+
+          <!-- Step 6: Confirm -->
+          <StepPanel v-slot="{ activateCallback }" value="6">
+            <div class="step-content">
+              <h3 style="margin-bottom: 1rem">Review &amp; Create</h3>
+              <div class="review-grid">
+                <div class="review-item">
+                  <span class="review-label">Provider</span>
+                  <span class="review-value">{{ selectedProviderData?.name || selectedProvider }}</span>
+                </div>
+                <div class="review-item">
+                  <span class="review-label">Dataset</span>
+                  <span class="review-value">{{ selectedDataset }}</span>
+                </div>
+                <div class="review-item">
+                  <span class="review-label">Schedule</span>
+                  <span class="review-value">{{ schedule }}</span>
+                </div>
+                <div class="review-item">
+                  <span class="review-label">Health Check</span>
+                  <span class="review-value">{{ healthCheckId || 'None' }}</span>
+                </div>
+                <div
+                  v-if="configEntries.some(e => e.key.trim())"
+                  class="review-item col-span-2"
+                >
+                  <span class="review-label">Configuration</span>
+                  <div style="display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.25rem">
+                    <div
+                      v-for="entry in configEntries.filter(e => e.key.trim())"
+                      :key="entry.key"
+                      style="font-size: 0.875rem"
+                    >
+                      <code>{{ entry.key }}</code>: {{ entry.value || '(empty)' }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
+                <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('5')" />
+                <Button
+                  :label="creating ? 'Creating...' : 'Create Subscription'"
+                  icon="pi pi-check"
+                  :loading="creating"
+                  @click="onCreate"
+                />
+              </div>
+            </div>
+          </StepPanel>
+        </StepPanels>
+      </Stepper>
     </template>
   </div>
 </template>
 
 <style scoped>
-.new-sub-page {
-  padding: 2rem;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-.page-header {
-  margin-bottom: 2rem;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-weight: 400;
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.back-link {
-  background: none;
-  border: none;
-  color: var(--cds-link-primary, #78a9ff);
-  cursor: pointer;
-  padding: 0;
-  font-size: 0.875rem;
-  margin-bottom: 0.5rem;
-  display: inline-block;
-}
-
-.back-link:hover {
-  text-decoration: underline;
-}
-
-.page-loading {
-  display: flex;
-  justify-content: center;
-  padding: 4rem;
-}
-
-.error-notice {
-  margin-bottom: 1rem;
-}
-
-.wizard-progress {
-  margin-bottom: 2rem;
-}
-
-.wizard-content {
-  min-height: 300px;
-  margin-bottom: 2rem;
-}
-
-.step-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.step-panel h3 {
-  font-weight: 400;
-  margin: 0;
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.step-description {
-  color: var(--cds-text-secondary, #c6c6c6);
-  font-size: 0.875rem;
-}
-
-.config-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 0.75rem;
-  align-items: flex-end;
-  margin-bottom: 0.5rem;
-}
-
-.config-remove {
-  margin-bottom: 0.25rem;
+.step-content {
+  min-height: 250px;
+  padding: 1.5rem 0;
 }
 
 .review-grid {
@@ -418,56 +360,7 @@ onMounted(async () => {
   gap: 1rem;
 }
 
-.review-item {
-  background-color: var(--cds-layer-01, #262626);
-  border: 1px solid var(--cds-border-subtle-01, #393939);
-  border-radius: 2px;
-  padding: 1rem;
-}
-
-.review-item--full {
+.col-span-2 {
   grid-column: 1 / -1;
-}
-
-.review-label {
-  display: block;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.32px;
-  color: var(--cds-text-secondary, #c6c6c6);
-  margin-bottom: 0.5rem;
-}
-
-.review-value {
-  font-size: 1rem;
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.review-config {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.review-config-entry {
-  font-size: 0.875rem;
-  color: var(--cds-text-primary, #f4f4f4);
-}
-
-.review-config-entry code {
-  color: var(--cds-link-primary, #78a9ff);
-  font-family: 'IBM Plex Mono', monospace;
-}
-
-.wizard-nav {
-  display: flex;
-  gap: 0.75rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--cds-border-subtle-01, #393939);
-}
-
-.wizard-nav__spacer {
-  flex: 1;
 }
 </style>

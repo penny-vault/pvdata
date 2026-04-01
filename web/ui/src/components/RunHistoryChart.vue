@@ -32,7 +32,7 @@ const chartData = computed(() => {
       y: height - 20 - barHeight,
       width: barWidth,
       height: barHeight,
-      color: run.status === 'failed' ? '#da1e28' : '#4589ff',
+      color: run.status === 'failed' ? 'var(--p-red-400)' : 'var(--p-primary-color)',
       label: new Date(run.start_time).toLocaleDateString(undefined, {
         month: 'short',
         day: 'numeric',
@@ -42,7 +42,6 @@ const chartData = computed(() => {
     }
   })
 
-  // Y-axis labels
   const yLabels = [0, Math.round(maxVal / 2), maxVal]
 
   return { bars, width, height, maxVal, yLabels }
@@ -81,7 +80,7 @@ const chartData = computed(() => {
           :width="bar.width"
           :height="Math.max(bar.height, 1)"
           :fill="bar.color"
-          rx="1"
+          rx="2"
         >
           <title>{{ bar.label }}: {{ bar.value.toLocaleString() }} records ({{ bar.status }})</title>
         </rect>
@@ -113,13 +112,14 @@ const chartData = computed(() => {
   height: auto;
 }
 .chart-axis-label {
-  fill: var(--cds-text-secondary, #c6c6c6);
+  fill: currentColor;
+  opacity: 0.5;
   font-size: 10px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
 }
 .chart-empty {
   padding: 2rem;
   text-align: center;
-  color: var(--cds-text-placeholder, #6f6f6f);
+  opacity: 0.4;
 }
 </style>

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { updateSubscription } from '@/lib/api'
+import InputText from 'primevue/inputtext'
+import Button from 'primevue/button'
+import Message from 'primevue/message'
 
 interface Subscription {
   id: string
@@ -71,117 +74,59 @@ async function onSave() {
 </script>
 
 <template>
-  <div class="subscription-form">
-    <div v-if="error" class="form-error">
-      <cv-inline-notification
-        kind="error"
-        :title="error"
-        @close="error = ''"
-      />
+  <div class="subscription-form" style="display: flex; flex-direction: column; gap: 1.5rem; max-width: 36rem">
+    <Message v-if="error" severity="error" :closable="true" @close="error = ''">
+      {{ error }}
+    </Message>
+
+    <div style="display: flex; flex-direction: column; gap: 0.5rem">
+      <label>Schedule (cron expression)</label>
+      <InputText v-model="schedule" placeholder="0 6 * * *" />
+      <small>e.g. 0 6 * * 1-5 for weekdays at 6am</small>
     </div>
 
-    <div class="form-field">
-      <cv-text-input
-        v-model="schedule"
-        label="Schedule (cron expression)"
-        helper-text="e.g. 0 6 * * 1-5 for weekdays at 6am"
-        placeholder="0 6 * * *"
-      />
-    </div>
-
-    <div class="form-section">
-      <h4 class="form-section__title">Configuration</h4>
+    <div style="display: flex; flex-direction: column; gap: 0.75rem">
+      <label>Configuration</label>
       <div
         v-for="(entry, i) in configEntries"
         :key="i"
-        class="config-row"
+        style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.75rem; align-items: flex-end"
       >
-        <cv-text-input
-          v-model="entry.key"
-          label="Key"
-          :placeholder="'config_key'"
-        />
-        <cv-text-input
-          v-model="entry.value"
-          label="Value"
-          :placeholder="'config_value'"
-        />
-        <button
-          class="bx--btn bx--btn--ghost bx--btn--sm config-remove"
+        <div style="display: flex; flex-direction: column; gap: 0.25rem">
+          <label>Key</label>
+          <InputText v-model="entry.key" placeholder="config_key" />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.25rem">
+          <label>Value</label>
+          <InputText v-model="entry.value" placeholder="config_value" />
+        </div>
+        <Button
+          icon="pi pi-trash"
+          severity="danger"
+          text
+          size="small"
           @click="removeConfigEntry(i)"
-        >
-          Remove
-        </button>
+        />
       </div>
-      <button
-        class="bx--btn bx--btn--ghost bx--btn--sm"
-        @click="addConfigEntry"
-      >
-        + Add config entry
-      </button>
+      <div>
+        <Button
+          label="+ Add config entry"
+          text
+          size="small"
+          @click="addConfigEntry"
+        />
+      </div>
     </div>
 
-    <div class="form-field">
-      <cv-text-input
-        v-model="healthCheckId"
-        label="Health Check ID"
-        helper-text="Optional healthchecks.io check ID"
-        placeholder="UUID"
-      />
+    <div style="display: flex; flex-direction: column; gap: 0.5rem">
+      <label>Health Check ID</label>
+      <InputText v-model="healthCheckId" placeholder="UUID" />
+      <small>Optional healthchecks.io check ID</small>
     </div>
 
-    <div class="form-actions">
-      <cv-button kind="primary" :disabled="saving" @click="onSave">
-        {{ saving ? 'Saving...' : 'Save' }}
-      </cv-button>
-      <cv-button kind="secondary" @click="$emit('cancel')">
-        Cancel
-      </cv-button>
+    <div style="display: flex; gap: 0.75rem; padding-top: 1rem">
+      <Button label="Save" :loading="saving" @click="onSave" />
+      <Button label="Cancel" severity="secondary" @click="$emit('cancel')" />
     </div>
   </div>
 </template>
-
-<style scoped>
-.subscription-form {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  max-width: 640px;
-}
-
-.form-error {
-  margin-bottom: 0.5rem;
-}
-
-.form-field {
-  display: flex;
-  flex-direction: column;
-}
-
-.form-section__title {
-  color: var(--cds-text-secondary, #c6c6c6);
-  font-size: 0.875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.32px;
-  margin-bottom: 0.75rem;
-}
-
-.config-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 0.75rem;
-  align-items: flex-end;
-  margin-bottom: 0.5rem;
-}
-
-.config-remove {
-  margin-bottom: 0.25rem;
-}
-
-.form-actions {
-  display: flex;
-  gap: 0.75rem;
-  padding-top: 1rem;
-}
-</style>

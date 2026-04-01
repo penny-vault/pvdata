@@ -15,53 +15,38 @@
 package cmd
 
 import (
-	"context"
 	"strings"
 
 	"github.com/penny-vault/pvdata/db"
-	"github.com/penny-vault/pvdata/library"
-	"github.com/penny-vault/pvdata/web"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start the web UI server",
-	Long:  `Start the Fiber web server that serves the pvdata web UI and API.`,
+var migrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Run pending database migrations",
 	Run: func(cmd *cobra.Command, args []string) {
-		ctx := context.Background()
-
 		dbURL := viper.GetString("db.url")
+		if dbURL == "" {
+			log.Fatal().Msg("db.url not configured")
+		}
 
-		// Verify database is at the expected migration version
 		migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
-		if err := db.CheckVersion(migrateURL); err != nil {
-			log.Fatal().Err(err).Msg("database version check failed")
+
+		if err := db.Migrate(migrateURL); err != nil {
+			if err.Error() == "no change" {
+				log.Info().Uint("version", db.RequiredVersion).Msg("database is already up to date")
+				return
+			}
+
+			log.Fatal().Err(err).Msg("migration failed")
 		}
 
-		myLibrary, err := library.NewFromDB(ctx, dbURL)
-		if err != nil {
-			log.Fatal().Err(err).Msg("could not connect to library")
-		}
-		defer myLibrary.Close()
-
-		port := viper.GetString("web.port")
-		if port == "" {
-			port = "3000"
-		}
-
-		app := web.CreateFiberApp(myLibrary)
-
-		log.Info().Str("port", port).Msg("starting web server")
-
-		if err := app.Listen(":" + port); err != nil {
-			log.Fatal().Err(err).Msg("web server failed")
-		}
+		log.Info().Uint("version", db.RequiredVersion).Msg("migrations applied successfully")
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(migrateCmd)
 }

@@ -36,7 +36,7 @@ const hasData = computed(() => props.data && props.data.length > 0)
     <polyline
       :points="points"
       fill="none"
-      stroke="#4589ff"
+      stroke="var(--p-primary-color)"
       stroke-width="1.5"
       stroke-linejoin="round"
       stroke-linecap="round"
@@ -46,7 +46,7 @@ const hasData = computed(() => props.data && props.data.length > 0)
 
 <style scoped>
 .sparkline-empty {
-  color: var(--cds-text-placeholder, #6f6f6f);
+  opacity: 0.4;
 }
 .sparkline-svg {
   display: block;
