@@ -1,16 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import {
-  CvHeader,
-  CvHeaderName,
-  CvHeaderNav,
-  CvHeaderMenuItem,
-  CvContent,
-  CvSkipToContent,
-  CvLoading,
-  CvButton,
-} from '@carbon/vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
