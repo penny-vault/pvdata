@@ -23,16 +23,22 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// IndexConstituent represents a single member of an index at a point in time.
+type IndexConstituent struct {
+	Ticker        string  `json:"ticker"`
+	CompositeFigi string  `json:"composite_figi"`
+	Weight        float64 `json:"weight"`
+}
+
+// IndexSnapshot represents the full composition of an index at a point in time.
 type IndexSnapshot struct {
-	Ticker        string
-	CompositeFigi string
-	IndexName     string
-	SnapshotDate  time.Time
-	Weight        float64
+	IndexName    string             `json:"index_name"`
+	SnapshotDate time.Time          `json:"snapshot_date"`
+	Constituents []IndexConstituent `json:"constituents"`
 }
 
 func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
-	if idx.CompositeFigi == "" {
+	if len(idx.Constituents) == 0 {
 		return nil
 	}
 
@@ -48,22 +54,18 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 	}()
 
 	sql := fmt.Sprintf(`INSERT INTO %[1]s_snapshot (
-		"composite_figi",
-		"ticker",
 		"index_name",
 		"snapshot_date",
-		"weight"
+		"constituents"
 	) VALUES (
-		$1, $2, $3, $4, $5
+		$1, $2, $3
 	) ON CONFLICT ON CONSTRAINT %[1]s_snapshot_pkey DO UPDATE SET
-		weight = EXCLUDED.weight`, tbl)
+		constituents = EXCLUDED.constituents`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
-		idx.CompositeFigi,
-		idx.Ticker,
 		idx.IndexName,
 		idx.SnapshotDate,
-		idx.Weight,
+		idx.Constituents,
 	)
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save index snapshot to DB failed")

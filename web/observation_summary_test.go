@@ -34,14 +34,16 @@ var _ = Describe("summarizeObservation", func() {
 		obs := &data.Observation{
 			IndexSnapshot: &data.IndexSnapshot{
 				IndexName:    "sp-500",
-				Ticker:       "AAPL",
-				Weight:       0.0712,
 				SnapshotDate: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+				Constituents: []data.IndexConstituent{
+					{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", Weight: 0.0712},
+					{Ticker: "MSFT", CompositeFigi: "BBG000BPH459", Weight: 0.0651},
+				},
 			},
 		}
 		typ, summary := summarizeObservation(obs)
 		Expect(typ).To(Equal("index_snapshot"))
-		Expect(summary).To(Equal("sp-500 AAPL weight=0.0712 2026-04-01"))
+		Expect(summary).To(Equal("sp-500 2 constituents 2026-04-01"))
 	})
 
 	It("summarizes an IndexChange", func() {

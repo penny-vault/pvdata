@@ -126,35 +126,8 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	}
 
 	forDate := time.Now().Format("2006-01-02")
-	today, _ := time.Parse("2006-01-02", forDate)
 
-	if resp != nil && resp.StatusCode() < 400 {
-		responseBody := string(resp.Body())
-
-		result := gjson.Get(responseBody, "datatable.data")
-		for _, val := range result.Array() {
-			ticker := strings.ReplaceAll(val.Get("2").String(), ".", "/")
-
-			figi, ok := figiMap[ticker]
-			if !ok {
-				continue
-			}
-
-			out <- &data.Observation{
-				IndexSnapshot: &data.IndexSnapshot{
-					Ticker:        ticker,
-					CompositeFigi: figi,
-					IndexName:     "sp500",
-					SnapshotDate:  today,
-				},
-				ObservationDate:  time.Now(),
-				SubscriptionID:   subscription.ID,
-				SubscriptionName: subscription.Name,
-			}
-
-			numObs++
-		}
-	} else if resp != nil {
+	if resp != nil && resp.StatusCode() >= 400 {
 		logger.Error().Int("StatusCode", resp.StatusCode()).Str("Url", sp500Url).Bytes("Body", resp.Body()).Msg("error when requesting SP500 url")
 	}
 

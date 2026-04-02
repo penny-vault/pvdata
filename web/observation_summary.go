@@ -26,8 +26,8 @@ func summarizeObservation(obs *data.Observation) (string, string) {
 	case obs.IndexSnapshot != nil:
 		s := obs.IndexSnapshot
 
-		return "index_snapshot", fmt.Sprintf("%s %s weight=%.4f %s",
-			s.IndexName, s.Ticker, s.Weight, s.SnapshotDate.Format("2006-01-02"))
+		return "index_snapshot", fmt.Sprintf("%s %d constituents %s",
+			s.IndexName, len(s.Constituents), s.SnapshotDate.Format("2006-01-02"))
 
 	case obs.IndexChange != nil:
 		c := obs.IndexChange

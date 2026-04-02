@@ -333,6 +333,7 @@ func downloadSingleISharesETF(
 
 		// Build current holdings map -- fail this index if any ticker is unresolved
 		currentHoldings := make(map[string]indexMember, len(parseResult.Holdings))
+
 		var unresolved []string
 
 		for _, holding := range parseResult.Holdings {
@@ -376,30 +377,34 @@ func downloadSingleISharesETF(
 
 		// Check if snapshot is due
 		if shouldTakeSnapshot(memLastSnapshotDate, eventDate, "yearly") {
+			constituents := make([]data.IndexConstituent, 0, len(currentHoldings))
 			for t, member := range currentHoldings {
-				out <- &data.Observation{
-					IndexSnapshot: &data.IndexSnapshot{
-						Ticker:        t,
-						CompositeFigi: member.CompositeFigi,
-						IndexName:     etf.IndexName,
-						SnapshotDate:  eventDate,
-						Weight:        member.Weight,
-					},
-					ObservationDate:  obsTemplate.ObservationDate,
-					SubscriptionID:   obsTemplate.SubscriptionID,
-					SubscriptionName: obsTemplate.SubscriptionName,
-				}
-
-				numObs++
+				constituents = append(constituents, data.IndexConstituent{
+					Ticker:        t,
+					CompositeFigi: member.CompositeFigi,
+					Weight:        member.Weight,
+				})
 			}
 
+			out <- &data.Observation{
+				IndexSnapshot: &data.IndexSnapshot{
+					IndexName:    etf.IndexName,
+					SnapshotDate: eventDate,
+					Constituents: constituents,
+				},
+				ObservationDate:  obsTemplate.ObservationDate,
+				SubscriptionID:   obsTemplate.SubscriptionID,
+				SubscriptionName: obsTemplate.SubscriptionName,
+			}
+
+			numObs++
 			memLastSnapshotDate = eventDate
 
 			logger.Info().
-				Int("NumConstituents", len(currentHoldings)).
+				Int("NumConstituents", len(constituents)).
 				Str("IndexName", etf.IndexName).
 				Time("SnapshotDate", eventDate).
-				Msg("emitted index snapshots")
+				Msg("emitted index snapshot")
 		}
 
 		// Update in-memory state

@@ -182,28 +182,20 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 	result := make(map[string]indexMember)
 
 	if !snapshotDate.IsZero() {
-		// Load the snapshot
-		rows, err := conn.Query(ctx,
-			fmt.Sprintf(`SELECT ticker, composite_figi, weight FROM %s_snapshot WHERE index_name = $1 AND snapshot_date = $2`, table),
+		// Load the snapshot (single row with JSONB constituents)
+		var constituents []data.IndexConstituent
+
+		err = conn.QueryRow(ctx,
+			fmt.Sprintf(`SELECT constituents FROM %s_snapshot WHERE index_name = $1 AND snapshot_date = $2`, table),
 			indexName, snapshotDate,
-		)
+		).Scan(&constituents)
 		if err != nil {
 			log.Error().Err(err).Msg("could not query snapshot for currentIndexMembers")
 			return map[string]indexMember{}
 		}
-		defer rows.Close()
 
-		for rows.Next() {
-			var ticker, figi string
-
-			var weight float64
-
-			if err := rows.Scan(&ticker, &figi, &weight); err != nil {
-				log.Error().Err(err).Msg("error scanning snapshot row in currentIndexMembers")
-				continue
-			}
-
-			result[ticker] = indexMember{CompositeFigi: figi, Weight: weight}
+		for _, c := range constituents {
+			result[c.Ticker] = indexMember{CompositeFigi: c.CompositeFigi, Weight: c.Weight}
 		}
 	}
 

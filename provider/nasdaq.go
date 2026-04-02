@@ -223,27 +223,32 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	if shouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
 		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
 
+		constituents := make([]data.IndexConstituent, 0, len(currentHoldings))
 		for ticker, member := range currentHoldings {
-			out <- &data.Observation{
-				IndexSnapshot: &data.IndexSnapshot{
-					Ticker:        ticker,
-					CompositeFigi: member.CompositeFigi,
-					IndexName:     "ndx100",
-					SnapshotDate:  snapshotDate,
-					Weight:        member.Weight,
-				},
-				ObservationDate:  time.Now(),
-				SubscriptionID:   subscription.ID,
-				SubscriptionName: subscription.Name,
-			}
-
-			numObs++
+			constituents = append(constituents, data.IndexConstituent{
+				Ticker:        ticker,
+				CompositeFigi: member.CompositeFigi,
+				Weight:        member.Weight,
+			})
 		}
 
+		out <- &data.Observation{
+			IndexSnapshot: &data.IndexSnapshot{
+				IndexName:    "ndx100",
+				SnapshotDate: snapshotDate,
+				Constituents: constituents,
+			},
+			ObservationDate:  time.Now(),
+			SubscriptionID:   subscription.ID,
+			SubscriptionName: subscription.Name,
+		}
+
+		numObs++
+
 		logger.Info().
-			Int("NumSnapshots", len(currentHoldings)).
+			Int("NumConstituents", len(constituents)).
 			Time("SnapshotDate", snapshotDate).
-			Msg("emitted NDX-100 index snapshots")
+			Msg("emitted NDX-100 index snapshot")
 	}
 
 	runSummary.Status = data.RunSuccess
