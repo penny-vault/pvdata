@@ -25,21 +25,25 @@ func summarizeObservation(obs *data.Observation) (string, string) {
 	switch {
 	case obs.IndexSnapshot != nil:
 		s := obs.IndexSnapshot
+
 		return "index_snapshot", fmt.Sprintf("%s %s weight=%.4f %s",
 			s.IndexName, s.Ticker, s.Weight, s.SnapshotDate.Format("2006-01-02"))
 
 	case obs.IndexChange != nil:
 		c := obs.IndexChange
+
 		return "index_change", fmt.Sprintf("%s %s %s weight=%.4f %s",
 			c.IndexName, c.Ticker, c.Action, c.Weight, c.EventDate.Format("2006-01-02"))
 
 	case obs.EodQuote != nil:
 		e := obs.EodQuote
+
 		return "eod", fmt.Sprintf("%s close=%.2f vol=%.0f %s",
 			e.Ticker, e.Close, e.Volume, e.Date.Format("2006-01-02"))
 
 	case obs.Fundamental != nil:
 		f := obs.Fundamental
+
 		return "fundamental", fmt.Sprintf("%s %s %s",
 			f.Ticker, f.Dimension, f.ReportPeriod.Format("2006-01-02"))
 

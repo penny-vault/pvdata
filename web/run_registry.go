@@ -45,6 +45,7 @@ func NewRunRegistry() *RunRegistry {
 func (r *RunRegistry) Store(subscriptionID string, run *activeRun) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.runs[subscriptionID] = run
 }
 
@@ -52,7 +53,9 @@ func (r *RunRegistry) Store(subscriptionID string, run *activeRun) {
 func (r *RunRegistry) Load(subscriptionID string) (*activeRun, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	run, ok := r.runs[subscriptionID]
+
 	return run, ok
 }
 
@@ -60,5 +63,6 @@ func (r *RunRegistry) Load(subscriptionID string) (*activeRun, bool) {
 func (r *RunRegistry) Delete(subscriptionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	delete(r.runs, subscriptionID)
 }
