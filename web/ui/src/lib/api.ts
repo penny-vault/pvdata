@@ -131,3 +131,20 @@ export async function exportSQL(sql: string, format: 'csv' | 'parquet' = 'csv') 
   a.click()
   URL.revokeObjectURL(url)
 }
+
+// ---------- Run On Demand ----------
+
+export async function runSubscription(id: string, lookback?: string): Promise<void> {
+  const qs = lookback ? `?lookback=${encodeURIComponent(lookback)}` : ''
+  const res = await authFetch(`/subscriptions/${id}/run${qs}`, { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
+}
+
+export async function subscribeRunEvents(id: string): Promise<EventSource> {
+  const token = await getAccessToken()
+  const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+  return new EventSource(`${BASE}/subscriptions/${id}/run/events${qs}`)
+}
