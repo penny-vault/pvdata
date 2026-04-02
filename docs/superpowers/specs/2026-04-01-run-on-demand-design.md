@@ -96,11 +96,13 @@ export async function runSubscription(id: string): Promise<void> {
 }
 
 export function subscribeRunEvents(id: string): EventSource {
-  return new EventSource(`${BASE}/subscriptions/${id}/run/events`)
+  const token = getAccessToken()
+  const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+  return new EventSource(`${BASE}/subscriptions/${id}/run/events${qs}`)
 }
 ```
 
-Note: `EventSource` does not support custom headers. Since auth is disabled in dev and the SSE endpoint is read-only, this is acceptable. If auth is enabled later, switch to `fetch()` with `ReadableStream` or a polyfill that supports headers.
+The SSE endpoint accepts the JWT via a `token` query parameter. The handler validates it the same way as the `Authorization: Bearer` header -- checking either source.
 
 ### Run Now Button (`SubscriptionDetailPage.vue`)
 
@@ -171,5 +173,4 @@ The `triggerRun` function POSTs to start the run, then opens an EventSource. Eve
 
 - Multiple concurrent runs for different subscriptions (support one active run per subscription, multiple subscriptions can run concurrently).
 - Persisting run progress across server restarts (in-memory only).
-- Auth on the SSE endpoint (EventSource limitation; address when auth is required).
 - Cancel/abort a running subscription from the UI (future enhancement).
