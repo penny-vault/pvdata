@@ -835,7 +835,7 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		AssetType:            data.AssetType(massiveAsset.Type),
 		HeadquartersLocation: location,
 		CIK:                  massiveAsset.CIK,
-		SIC:                  sicCode,
+		SIC:                  &sicCode,
 		CorporateUrl:         massiveAsset.CorporateURL,
 		Icon:                 icon,
 		IconMimeType:         iconMimeType,

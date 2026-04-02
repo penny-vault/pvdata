@@ -277,7 +277,7 @@ func (ticker *sharadarTicker) ToAsset() *data.Asset {
 		AssetType:            ticker.NormalizedCategory(),
 		Active:               ticker.IsDelisted == "N",
 		CorporateUrl:         ticker.CompanySite,
-		SIC:                  int(ticker.SICCode),
+		SIC:                  func() *int { v := int(ticker.SICCode); return &v }(),
 		HeadquartersLocation: ticker.Location,
 		Industry:             ticker.Industry,
 		Sector:               ticker.Sector,

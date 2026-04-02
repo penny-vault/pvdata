@@ -67,7 +67,7 @@ type Asset struct {
 	CUSIP                []string  `json:"cusips" parquet:"name=cusip, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"cusips"`
 	ISIN                 []string  `json:"isins" parquet:"name=isin, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"isins"`
 	CIK                  string    `json:"cik" parquet:"name=cik, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	SIC                  int       `json:"sic" db:"sic_code"`
+	SIC                  *int      `json:"sic" db:"sic_code"`
 	ListingDate          string    `json:"listing_date" toml:"listing_date" parquet:"name=listing_date, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"listed"`
 	DelistingDate        string    `json:"delisting_date" toml:"delisting_date" parquet:"name=delisting_date, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"delisted"`
 	Industry             string    `json:"industry" parquet:"name=industry, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
@@ -278,7 +278,9 @@ func (asset *Asset) MarshalZerologObject(e *zerolog.Event) {
 	e.Strs("CUSIP", asset.CUSIP)
 	e.Strs("ISIN", asset.ISIN)
 	e.Str("CIK", asset.CIK)
-	e.Int("SIC", asset.SIC)
+	if asset.SIC != nil {
+		e.Int("SIC", *asset.SIC)
+	}
 	e.Str("ListingDate", asset.ListingDate)
 	e.Str("DelistingDate", asset.DelistingDate)
 	e.Str("Industry", asset.Industry)

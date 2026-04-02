@@ -84,6 +84,17 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 		})
 	}
 
+	// The index data type uses _snapshot and _changelog suffixed tables.
+	// Default to browsing the changelog (membership changes over time).
+	subtable := c.Query("subtable", "")
+	if datatype == "index" {
+		if subtable == "snapshot" {
+			tableName += "_snapshot"
+		} else {
+			tableName += "_changelog"
+		}
+	}
+
 	if !validTableName.MatchString(tableName) {
 		return c.Status(fiber.StatusBadRequest).JSON(HttpError{
 			Code:    "400",
