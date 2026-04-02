@@ -27,7 +27,7 @@ Integration tests use build tag: `ginkgo run -race --tags=integration ./...`
 
 **TUI**: Built with charm/bubbletea v2. Interactive forms use charm/huh v2.
 
-**Web UI**: Vue 3 + Carbon Design System (`@carbon/vue`) in `web/ui/`. Go backend uses Fiber v2 in `web/`. Frontend is built with Vite and embedded into the Go binary via `go:embed`. Run `make build-ui` to build the frontend, or `make build` to build everything. Start the web server with `pvdata serve`.
+**Web UI**: Vue 3 + Carbon Design System (`@carbon/vue`) in `web/ui/`. Go backend uses Fiber v2 in `web/`. Frontend is built with Vite and embedded into the Go binary via `go:embed`. Run `make build-ui` to build the frontend, or `make build` to build everything. Start the web server and subscription scheduler with `pvdata serve`.
 
 **Web scraping**: `playwright_helpers/` wraps playwright-go with stealth evasion injection. To update stealth JS: `npx extract-stealth-evasions@latest` then copy `stealth.min.js` into `playwright_helpers/`.
 

@@ -16,10 +16,18 @@ package cmd
 
 import (
 	"context"
+	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
+	"github.com/go-co-op/gocron/v2"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/db"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/penny-vault/pvdata/web"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -28,8 +36,9 @@ import (
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start the web UI server",
-	Long:  `Start the Fiber web server that serves the pvdata web UI and API.`,
+	Short: "Start the web server and subscription scheduler",
+	Long: `Start the web server and schedule active subscriptions on their cron schedules.
+The server runs until interrupted with Ctrl+C.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
 
@@ -47,6 +56,48 @@ var serveCmd = &cobra.Command{
 		}
 		defer myLibrary.Close()
 
+		// Start the scheduler
+		nyc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not load timezone")
+		}
+
+		scheduler, err := gocron.NewScheduler(gocron.WithLocation(nyc))
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not create scheduler")
+		}
+
+		allSubs, err := myLibrary.Subscriptions(ctx)
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not load subscriptions")
+		}
+
+		var scheduled int
+
+		for _, sub := range allSubs {
+			if !sub.Active {
+				continue
+			}
+
+			_, err := scheduler.NewJob(
+				gocron.CronJob(sub.Schedule, false),
+				gocron.NewTask(func() {
+					runSubscription(ctx, myLibrary, sub)
+				}),
+			)
+			if err != nil {
+				log.Fatal().Err(err).Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("could not schedule subscription")
+			}
+
+			log.Info().Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("scheduled subscription")
+
+			scheduled++
+		}
+
+		scheduler.Start()
+		log.Info().Int("count", scheduled).Msg("scheduler started")
+
+		// Start the web server
 		port := viper.GetString("web.port")
 		if port == "" {
 			port = "3000"
@@ -54,14 +105,93 @@ var serveCmd = &cobra.Command{
 
 		app := web.CreateFiberApp(myLibrary)
 
-		log.Info().Str("port", port).Msg("starting web server")
+		go func() {
+			log.Info().Str("port", port).Msg("starting web server")
 
-		if err := app.Listen(":" + port); err != nil {
-			log.Fatal().Err(err).Msg("web server failed")
+			if err := app.Listen(":" + port); err != nil {
+				log.Error().Err(err).Msg("web server failed")
+			}
+		}()
+
+		// Block until signal
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+
+		log.Info().Msg("shutting down")
+
+		if err := app.Shutdown(); err != nil {
+			log.Error().Err(err).Msg("error shutting down web server")
+		}
+
+		if err := scheduler.Shutdown(); err != nil {
+			log.Error().Err(err).Msg("error shutting down scheduler")
 		}
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(serveCmd)
+}
+
+func runSubscription(ctx context.Context, myLibrary *library.Library, subscription *library.Subscription) {
+	logger := log.With().Str("subscription", subscription.Name).Logger()
+	logger.Info().Msg("starting subscription run")
+
+	if err := subscription.ManagePartitions(ctx); err != nil {
+		logger.Error().Err(err).Msg("ManagePartitions failed")
+	}
+
+	if err := subscription.RunMigrations(ctx); err != nil {
+		logger.Error().Err(err).Msg("RunMigrations failed")
+	}
+
+	subProvider, ok := provider.Map[subscription.Provider]
+	if !ok {
+		logger.Error().Str("provider", subscription.Provider).Msg("provider not found")
+		return
+	}
+
+	subDataset, ok := subProvider.Datasets()[subscription.Dataset]
+	if !ok {
+		logger.Error().Str("dataset", subscription.Dataset).Msg("dataset not found")
+		return
+	}
+
+	outChan := make(chan *data.Observation, 1000)
+	exitChan := make(chan data.RunSummary, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go myLibrary.SaveObservations(outChan, &wg)
+
+	fetchLogger := logger.With().Str("SubscriptionID", subscription.ID.String()).Logger()
+	fetchCtx := fetchLogger.WithContext(ctx)
+
+	subDataset.Fetch(fetchCtx, subscription, outChan, exitChan)
+
+	summary := <-exitChan
+
+	close(outChan)
+	wg.Wait()
+
+	if err := myLibrary.SaveRunHistory(ctx, summary); err != nil {
+		logger.Error().Err(err).Msg("failed to save run history")
+	}
+
+	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
+		for _, hook := range subDataset.PostFetch {
+			if err := hook(ctx, subscription); err != nil {
+				logger.Error().Err(err).Msg("post-fetch hook failed")
+				break
+			}
+		}
+	}
+
+	if summary.Status == data.RunFailed {
+		logger.Error().Int("observations", summary.NumObservations).Msg("subscription run failed")
+	} else {
+		logger.Info().Int("observations", summary.NumObservations).Msg("subscription run completed")
+	}
 }
