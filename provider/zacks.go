@@ -55,8 +55,8 @@ func (zacks *Zacks) Description() string {
 
 func (zacks *Zacks) Datasets() map[string]Dataset {
 	return map[string]Dataset{
-		"Zacks Screener Data": {
-			Name:        "Zacks Screener Data",
+		"zacks-screener": {
+			Name:        "zacks-screener",
 			Description: "Download data using Zacks stock screener tool.",
 			DataTypes: []*data.DataType{
 				data.DataTypes[data.RatingKey],

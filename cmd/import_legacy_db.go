@@ -21,8 +21,8 @@ import (
 )
 
 var migrateLegacyCmd = &cobra.Command{
-	Use:   "migrate-legacy",
-	Short: "Migrate data from a legacy penny-vault database",
+	Use:   "import-legacy-db",
+	Short: "Import data from a legacy penny-vault database",
 	Long: `Copies and transforms data from a legacy penny-vault database into the
 current pv-data library. Requires two separate databases: the legacy source
 and the pv-data destination (already initialized with 'pvdata init').

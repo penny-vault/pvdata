@@ -16,6 +16,7 @@ package db
 
 import (
 	"embed"
+	"fmt"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -24,6 +25,9 @@ import (
 
 //go:embed migrations/*
 var migrationFS embed.FS
+
+// RequiredVersion is the migration version that the application expects.
+const RequiredVersion uint = 5
 
 // Migrate runs database migrations for a data library
 func Migrate(databaseURL string) error {
@@ -40,4 +44,33 @@ func Migrate(databaseURL string) error {
 	err = migration.Up()
 
 	return err
+}
+
+// CheckVersion verifies the database is at the required migration version.
+// Returns an error if the version is wrong or the database is dirty.
+func CheckVersion(databaseURL string) error {
+	migrationDir, err := iofs.New(migrationFS, "migrations")
+	if err != nil {
+		return err
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", migrationDir, databaseURL)
+	if err != nil {
+		return err
+	}
+
+	version, dirty, err := m.Version()
+	if err != nil {
+		return fmt.Errorf("could not read database migration version: %w", err)
+	}
+
+	if dirty {
+		return fmt.Errorf("database is in a dirty state at version %d; fix manually and retry", version)
+	}
+
+	if version < RequiredVersion {
+		return fmt.Errorf("database is at version %d but version %d is required; run 'pvdata init --from-config' to apply migrations", version, RequiredVersion)
+	}
+
+	return nil
 }

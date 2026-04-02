@@ -20,6 +20,7 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/penny-vault/pvdata/tui"
+	"github.com/penny-vault/pvdata/web"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -165,6 +166,22 @@ func runDaemon(ctx context.Context, myLibrary *library.Library, filterIDs []stri
 		log.Info().Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("scheduled subscription")
 	}
 
+	// Start the web server in a goroutine
+	port := viper.GetString("web.port")
+	if port == "" {
+		port = "3000"
+	}
+
+	app := web.CreateFiberApp(myLibrary)
+
+	go func() {
+		log.Info().Str("port", port).Msg("starting web server")
+
+		if err := app.Listen(":" + port); err != nil {
+			log.Error().Err(err).Msg("web server failed")
+		}
+	}()
+
 	scheduler.Start()
 	log.Info().Int("count", len(subscriptions)).Msg("daemon started, waiting for scheduled runs")
 
@@ -174,6 +191,10 @@ func runDaemon(ctx context.Context, myLibrary *library.Library, filterIDs []stri
 	<-sigCh
 
 	log.Info().Msg("shutting down daemon")
+
+	if err := app.Shutdown(); err != nil {
+		log.Error().Err(err).Msg("error shutting down web server")
+	}
 
 	if err := scheduler.Shutdown(); err != nil {
 		log.Error().Err(err).Msg("error shutting down scheduler")
@@ -222,6 +243,11 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 
 	close(outChan)
 	wg.Wait()
+
+	// Persist run history
+	if err := myLibrary.SaveRunHistory(ctx, summary); err != nil {
+		logger.Error().Err(err).Msg("failed to save run history")
+	}
 
 	// Run post-fetch hooks
 	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {

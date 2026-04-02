@@ -18,15 +18,28 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/penny-vault/pvdata/library"
+	"github.com/spf13/viper"
 )
 
-func CreateFiberApp() *fiber.App {
+func CreateFiberApp(myLibrary *library.Library) *fiber.App {
 	app := fiber.New()
 
-	// Or extend your config for customization
+	// Inject shared library connection pool into request context
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals("library", myLibrary)
+		return c.Next()
+	})
+
+	// CORS configuration
+	corsOrigins := viper.GetString("web.cors_origins")
+	if corsOrigins == "" {
+		corsOrigins = "http://localhost:5173, http://localhost:9000"
+	}
+
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "http://localhost:9000",
-		AllowHeaders: "Origin, Content-Type, Accept",
+		AllowOrigins: corsOrigins,
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
 	// Or extend your config for customization
@@ -36,6 +49,7 @@ func CreateFiberApp() *fiber.App {
 	}))
 
 	SetupRoutes(app)
+	SetupSPA(app)
 
 	return app
 }

@@ -105,6 +105,11 @@ Examples:
 		close(outChan)
 		wg.Wait()
 
+		// Persist run history
+		if err := myLibrary.SaveRunHistory(ctx, summary); err != nil {
+			log.Error().Err(err).Msg("failed to save run history")
+		}
+
 		if summary.Status == data.RunSuccess {
 			subDataset, dsOk := prov.Datasets()[sub.Dataset]
 			if dsOk && len(subDataset.PostFetch) > 0 {

@@ -307,9 +307,13 @@ created_by FROM subscriptions`)
 			sub.DataTablesMap[dataType] = sub.DataTables[idx]
 		}
 
+		if sub.Schedule == "" {
+			continue
+		}
+
 		job, err := scheduler.NewJob(gocron.CronJob(sub.Schedule, false), gocron.NewTask(func() {}))
 		if err != nil {
-			log.Warn().Err(err).Msg("could not create cron job")
+			log.Warn().Err(err).Str("schedule", sub.Schedule).Str("subscription", sub.Name).Msg("could not create cron job")
 			continue
 		}
 

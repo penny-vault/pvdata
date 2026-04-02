@@ -146,6 +146,11 @@ func (rm *RunManager) RunAll(ctx context.Context) {
 		// read the exit message from exitChan
 		summaryMsg := <-exitChan
 
+		// Persist run history
+		if err := rm.myLibrary.SaveRunHistory(ctx, summaryMsg); err != nil {
+			log.Error().Err(err).Str("subscription", subscription.Name).Msg("failed to save run history")
+		}
+
 		// Run post-fetch hooks
 		if summaryMsg.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
 			for _, hook := range subDataset.PostFetch {

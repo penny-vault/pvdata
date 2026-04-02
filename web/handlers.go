@@ -17,37 +17,302 @@ package web
 import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
 )
 
 type HttpError struct {
 	Code    string `json:"code"`
-	Message string `json:"messsage"`
+	Message string `json:"message"`
 }
 
+// CreateSubscriptionRequest is the JSON body for creating a new subscription.
+type CreateSubscriptionRequest struct {
+	Provider      string            `json:"provider"`
+	Dataset       string            `json:"dataset"`
+	Config        map[string]string `json:"config"`
+	Schedule      string            `json:"schedule"`
+	DataTypes     []string          `json:"data_types"`
+	HealthCheckID string            `json:"health_check_id"`
+}
+
+// UpdateSubscriptionRequest is the JSON body for updating an existing subscription.
+type UpdateSubscriptionRequest struct {
+	Schedule      *string            `json:"schedule"`
+	Config        *map[string]string `json:"config"`
+	HealthCheckID *string            `json:"health_check_id"`
+	Active        *bool              `json:"active"`
+}
+
+// getLibrary retrieves the shared library connection pool from request context.
+func getLibrary(c *fiber.Ctx) *library.Library {
+	return c.Locals("library").(*library.Library)
+}
+
+// GetSubscriptions returns all subscriptions.
 func GetSubscriptions(c *fiber.Ctx) error {
-	ctx := c.UserContext()
+	myLibrary := getLibrary(c)
 
-	myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
+	subscriptions, err := myLibrary.Subscriptions(c.UserContext())
 	if err != nil {
-		log.Fatal().Err(err).Msg("could not load library info")
+		log.Error().Err(err).Msg("could not load subscriptions")
 
-		return c.JSON(HttpError{
-			Code:    "501",
-			Message: "could not load library info",
-		})
-	}
-
-	subscriptions, err := myLibrary.Subscriptions(ctx)
-	if err != nil {
-		log.Fatal().Err(err).Msg("could not load subscriptions")
-
-		return c.JSON(HttpError{
-			Code:    "501",
-			Message: "could not load library info",
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not load subscriptions",
 		})
 	}
 
 	return c.JSON(subscriptions)
+}
+
+// GetSubscription returns a single subscription by ID prefix.
+func GetSubscription(c *fiber.Ctx) error {
+	id := c.Params("id")
+	myLibrary := getLibrary(c)
+
+	sub, err := myLibrary.SubscriptionFromID(c.UserContext(), id)
+	if err != nil {
+		log.Error().Err(err).Str("ID", id).Msg("subscription not found")
+
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	return c.JSON(sub)
+}
+
+// CreateSubscription creates a new subscription from JSON body.
+func CreateSubscription(c *fiber.Ctx) error {
+	var req CreateSubscriptionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(HttpError{
+			Code:    "400",
+			Message: "invalid request body",
+		})
+	}
+
+	if req.Provider == "" || req.Dataset == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(HttpError{
+			Code:    "400",
+			Message: "provider and dataset are required",
+		})
+	}
+
+	myLibrary := getLibrary(c)
+
+	sub, err := provider.NewSubscription(req.Provider, req.Dataset, req.Config, req.DataTypes, myLibrary)
+	if err != nil {
+		log.Error().Err(err).Msg("could not create subscription")
+
+		return c.Status(fiber.StatusBadRequest).JSON(HttpError{
+			Code:    "400",
+			Message: err.Error(),
+		})
+	}
+
+	if req.Schedule != "" {
+		sub.Schedule = req.Schedule
+	}
+
+	if req.HealthCheckID != "" {
+		sub.HealthCheckID = req.HealthCheckID
+	}
+
+	if err := sub.Save(c.UserContext()); err != nil {
+		log.Error().Err(err).Msg("could not save subscription")
+
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not save subscription",
+		})
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(sub)
+}
+
+// UpdateSubscription updates fields on an existing subscription.
+func UpdateSubscription(c *fiber.Ctx) error {
+	id := c.Params("id")
+
+	var req UpdateSubscriptionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(HttpError{
+			Code:    "400",
+			Message: "invalid request body",
+		})
+	}
+
+	myLibrary := getLibrary(c)
+	ctx := c.UserContext()
+
+	sub, err := myLibrary.SubscriptionFromID(ctx, id)
+	if err != nil {
+		log.Error().Err(err).Str("ID", id).Msg("subscription not found")
+
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not acquire database connection",
+		})
+	}
+	defer conn.Release()
+
+	if req.Schedule != nil {
+		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET schedule=$1 WHERE id=$2", *req.Schedule, sub.ID); err != nil {
+			log.Error().Err(err).Msg("could not update schedule")
+
+			return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+				Code:    "500",
+				Message: "could not update subscription",
+			})
+		}
+
+		sub.Schedule = *req.Schedule
+	}
+
+	if req.Config != nil {
+		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET config=$1 WHERE id=$2", *req.Config, sub.ID); err != nil {
+			log.Error().Err(err).Msg("could not update config")
+
+			return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+				Code:    "500",
+				Message: "could not update subscription",
+			})
+		}
+
+		sub.Config = *req.Config
+	}
+
+	if req.HealthCheckID != nil {
+		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET health_check_id=$1 WHERE id=$2", *req.HealthCheckID, sub.ID); err != nil {
+			log.Error().Err(err).Msg("could not update health_check_id")
+
+			return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+				Code:    "500",
+				Message: "could not update subscription",
+			})
+		}
+
+		sub.HealthCheckID = *req.HealthCheckID
+	}
+
+	if req.Active != nil {
+		if *req.Active {
+			if err := sub.Activate(ctx); err != nil {
+				log.Error().Err(err).Msg("could not activate subscription")
+
+				return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+					Code:    "500",
+					Message: "could not activate subscription",
+				})
+			}
+		} else {
+			if err := sub.Deactivate(ctx); err != nil {
+				log.Error().Err(err).Msg("could not deactivate subscription")
+
+				return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+					Code:    "500",
+					Message: "could not deactivate subscription",
+				})
+			}
+		}
+
+		sub.Active = *req.Active
+	}
+
+	return c.JSON(sub)
+}
+
+// DeleteSubscription deletes a subscription by ID.
+func DeleteSubscription(c *fiber.Ctx) error {
+	id := c.Params("id")
+	myLibrary := getLibrary(c)
+	ctx := c.UserContext()
+
+	sub, err := myLibrary.SubscriptionFromID(ctx, id)
+	if err != nil {
+		log.Error().Err(err).Str("ID", id).Msg("subscription not found")
+
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	if err := sub.Delete(ctx); err != nil {
+		log.Error().Err(err).Msg("could not delete subscription")
+
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not delete subscription",
+		})
+	}
+
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// ActivateSubscription activates a subscription by ID.
+func ActivateSubscription(c *fiber.Ctx) error {
+	id := c.Params("id")
+	myLibrary := getLibrary(c)
+	ctx := c.UserContext()
+
+	sub, err := myLibrary.SubscriptionFromID(ctx, id)
+	if err != nil {
+		log.Error().Err(err).Str("ID", id).Msg("subscription not found")
+
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	if err := sub.Activate(ctx); err != nil {
+		log.Error().Err(err).Msg("could not activate subscription")
+
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not activate subscription",
+		})
+	}
+
+	return c.JSON(fiber.Map{"status": "activated"})
+}
+
+// DeactivateSubscription deactivates a subscription by ID.
+func DeactivateSubscription(c *fiber.Ctx) error {
+	id := c.Params("id")
+	myLibrary := getLibrary(c)
+	ctx := c.UserContext()
+
+	sub, err := myLibrary.SubscriptionFromID(ctx, id)
+	if err != nil {
+		log.Error().Err(err).Str("ID", id).Msg("subscription not found")
+
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	if err := sub.Deactivate(ctx); err != nil {
+		log.Error().Err(err).Msg("could not deactivate subscription")
+
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not deactivate subscription",
+		})
+	}
+
+	return c.JSON(fiber.Map{"status": "deactivated"})
 }
