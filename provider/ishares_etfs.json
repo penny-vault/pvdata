@@ -3,1722 +3,1921 @@
     "ticker": "AAXJ",
     "productId": "239601",
     "slug": "ishares-msci-all-country-asia-ex-japan-etf",
-    "indexName": "msci-all-country-asia-ex-japan"
+    "indexName": "MSCI AC Asia ex Japan Index (Net)",
+    "inceptionDate": "2008-08-13",
+    "bloombergTicker": "NDUECAXJ"
   },
   {
     "ticker": "ACWI",
     "productId": "239600",
     "slug": "ishares-msci-acwi-etf",
-    "indexName": "msci-acwi"
+    "indexName": "MSCI ACWI Index (Net)",
+    "inceptionDate": "2008-03-26",
+    "bloombergTicker": "NDUEACWF"
   },
   {
     "ticker": "ACWV",
     "productId": "239605",
     "slug": "ishares-msci-all-country-world-minimum-volatility-etf",
-    "indexName": "msci-all-country-world-minimum-volatility"
+    "indexName": "MSCI All Country World Minimum Volatility Index (Net)",
+    "inceptionDate": "2011-10-18",
+    "bloombergTicker": "M00IWD$O"
   },
   {
     "ticker": "ACWX",
     "productId": "239594",
     "slug": "ishares-msci-acwi-ex-us-etf",
-    "indexName": "msci-acwi-ex-us"
+    "indexName": "MSCI ACWI ex-US Index (Net)",
+    "inceptionDate": "2008-03-26",
+    "bloombergTicker": "NDUEACWZ"
   },
   {
     "ticker": "AIA",
     "productId": "239730",
     "slug": "ishares-asia-50-etf",
-    "indexName": "asia-50"
+    "indexName": "S&P Asia 50 Capped Index (Net)",
+    "inceptionDate": "2007-11-13",
+    "bloombergTicker": "SPASACUN"
   },
   {
     "ticker": "AQLT",
     "productId": "340396",
     "slug": "ishares-msci-global-quality-factor-etf",
-    "indexName": "msci-global-quality-factor"
+    "indexName": "MSCI ACWI Quality Index (Net)",
+    "inceptionDate": "2024-12-11",
+    "bloombergTicker": "M1WDQU"
   },
   {
     "ticker": "ARTY",
     "productId": "297905",
     "slug": "ishares-future-ai-tech-etf",
-    "indexName": "future-ai-tech"
-  },
-  {
-    "ticker": "BAI",
-    "productId": "339081",
-    "slug": "ishares-a-i-innovation-and-tech-active-etf",
-    "indexName": "a-i-innovation-and-tech-active"
-  },
-  {
-    "ticker": "BALI",
-    "productId": "333207",
-    "slug": "ishares-u-s-large-cap-premium-income-active-etf",
-    "indexName": "u-s-large-cap-premium-income-active"
-  },
-  {
-    "ticker": "BALQ",
-    "productId": "346870",
-    "slug": "ishares-nasdaq-premium-income-active-etf",
-    "indexName": "nasdaq-premium-income-active"
-  },
-  {
-    "ticker": "BDVL",
-    "productId": "345327",
-    "slug": "ishares-disciplined-volatility-equity-active-etf",
-    "indexName": "disciplined-volatility-equity-active"
-  },
-  {
-    "ticker": "BDYN",
-    "productId": "345325",
-    "slug": "ishares-dynamic-equity-active-etf",
-    "indexName": "dynamic-equity-active"
-  },
-  {
-    "ticker": "BELT",
-    "productId": "337476",
-    "slug": "ishares-u-s-select-equity-active-etf",
-    "indexName": "u-s-select-equity-active"
-  },
-  {
-    "ticker": "BGRO",
-    "productId": "337538",
-    "slug": "ishares-large-cap-growth-active-etf",
-    "indexName": "large-cap-growth-active"
-  },
-  {
-    "ticker": "BIDD",
-    "productId": "338863",
-    "slug": "ishares-international-dividend-active-etf",
-    "indexName": "international-dividend-active"
-  },
-  {
-    "ticker": "BILT",
-    "productId": "345073",
-    "slug": "ishares-infrastructure-active-etf",
-    "indexName": "infrastructure-active"
+    "indexName": "Morningstar Global Artificial Intelligence Select Index (Net)",
+    "inceptionDate": "2018-06-26",
+    "bloombergTicker": "MSGAISNU"
   },
   {
     "ticker": "BKF",
     "productId": "239614",
     "slug": "ishares-msci-bric-etf",
-    "indexName": "msci-bric"
-  },
-  {
-    "ticker": "BLCR",
-    "productId": "333889",
-    "slug": "ishares-large-cap-core-active-etf",
-    "indexName": "large-cap-core-active"
-  },
-  {
-    "ticker": "BLCV",
-    "productId": "331795",
-    "slug": "ishares-large-cap-value-active-etf",
-    "indexName": "large-cap-value-active"
-  },
-  {
-    "ticker": "BMED",
-    "productId": "316007",
-    "slug": "ishares-health-innovation-active-etf",
-    "indexName": "health-innovation-active"
-  },
-  {
-    "ticker": "BPAY",
-    "productId": "329128",
-    "slug": "ishares-fintech-active-etf",
-    "indexName": "fintech-active"
+    "indexName": "MSCI BIC Index (USD) (Net)",
+    "inceptionDate": "2007-11-12",
+    "bloombergTicker": "NDUEBRIC"
   },
   {
     "ticker": "CNYA",
     "productId": "273318",
     "slug": "ishares-msci-china-a-etf",
-    "indexName": "msci-china-a"
+    "indexName": "MSCI China A Inclusion Index (Net)",
+    "inceptionDate": "2016-06-13",
+    "bloombergTicker": "M1CNA"
   },
   {
     "ticker": "CORO",
     "productId": "340366",
     "slug": "ishares-international-country-rotation-active-etf",
-    "indexName": "international-country-rotation-active"
+    "indexName": "MSCI ACWI ex-US Index (Net)",
+    "inceptionDate": "2024-12-03"
   },
   {
     "ticker": "CRBN",
     "productId": "271054",
     "slug": "ishares-msci-acwi-low-carbon-target-etf",
-    "indexName": "msci-acwi-low-carbon-target"
+    "indexName": "MSCI ACWI Low Carbon Target Index (Net)",
+    "inceptionDate": "2014-12-08",
+    "bloombergTicker": "M1WDLCT"
   },
   {
     "ticker": "DGRO",
     "productId": "264623",
     "slug": "ishares-core-dividend-growth-etf",
-    "indexName": "us-dividend-growth"
+    "indexName": "Morningstar US Dividend Growth Index",
+    "inceptionDate": "2014-06-10",
+    "bloombergTicker": "MSDIVGT"
   },
   {
     "ticker": "DIVB",
     "productId": "291387",
     "slug": "ishares-core-dividend-etf",
-    "indexName": "us-core-dividend"
-  },
-  {
-    "ticker": "DMAX",
-    "productId": "340392",
-    "slug": "ishares-large-cap-max-buffer-dec-etf",
-    "indexName": "large-cap-max-buffer-dec"
+    "indexName": "Morningstar US Dividend and Buyback Index",
+    "inceptionDate": "2017-11-07",
+    "bloombergTicker": "MSDIBUGU"
   },
   {
     "ticker": "DMXF",
     "productId": "314362",
     "slug": "ishares-esg-advanced-msci-eafe-etf",
-    "indexName": "esg-advanced-msci-eafe"
+    "indexName": "MSCI EAFE Choice ESG Screened Index (USD) (Net)",
+    "inceptionDate": "2020-06-16",
+    "bloombergTicker": "NU729303"
   },
   {
     "ticker": "DSI",
     "productId": "239667",
     "slug": "ishares-msci-kld-400-social-etf",
-    "indexName": "msci-kld-400-social"
+    "indexName": "MSCI KLD 400 Social Index",
+    "inceptionDate": "2006-11-14",
+    "bloombergTicker": "TKLD400U"
   },
   {
     "ticker": "DVY",
     "productId": "239500",
     "slug": "ishares-select-dividend-etf",
-    "indexName": "us-select-dividend"
+    "indexName": "Dow Jones U.S. Select Dividend IndexSM",
+    "inceptionDate": "2003-11-03",
+    "bloombergTicker": "DJDVY"
   },
   {
     "ticker": "DVYA",
     "productId": "239443",
     "slug": "ishares-asiapacific-dividend-etf",
-    "indexName": "asia-pacific-dividend"
+    "indexName": "Dow Jones Asia/Pacific Select Dividend 50 Index (Net)",
+    "inceptionDate": "2012-02-23",
+    "bloombergTicker": "DJAPSDT"
   },
   {
     "ticker": "DVYE",
     "productId": "239526",
     "slug": "ishares-emerging-markets-dividend-etf",
-    "indexName": "emerging-markets-dividend"
+    "indexName": "Dow Jones Emerging Markets Select Dividend Index (Net)",
+    "inceptionDate": "2012-02-23",
+    "bloombergTicker": "DJEMDIVR"
   },
   {
     "ticker": "DYNF",
     "productId": "307283",
     "slug": "ishares-u-s-equity-factor-rotation-active-etf",
-    "indexName": "u-s-equity-factor-rotation-active"
+    "indexName": "MSCI USA Index",
+    "inceptionDate": "2019-03-19"
   },
   {
     "ticker": "ECH",
     "productId": "239618",
     "slug": "ishares-msci-chile-capped-etf",
-    "indexName": "msci-chile-capped"
+    "indexName": "MSCI Chile IMI 25/50 Index (Net)",
+    "inceptionDate": "2007-11-12",
+    "bloombergTicker": "M1CL5IM"
   },
   {
     "ticker": "ECNS",
     "productId": "239620",
     "slug": "ishares-msci-china-smallcap-etf",
-    "indexName": "msci-china-smallcap"
+    "indexName": "MSCI China Small Cap Index (Net)",
+    "inceptionDate": "2010-09-28",
+    "bloombergTicker": "MSLUCHNN"
   },
   {
     "ticker": "EDEN",
     "productId": "239621",
     "slug": "ishares-msci-denmark-capped-etf",
-    "indexName": "msci-denmark-capped"
+    "indexName": "MSCI Denmark IMI 25/50 Index (Net)",
+    "inceptionDate": "2012-01-25",
+    "bloombergTicker": "M1DK5IM"
   },
   {
     "ticker": "EEM",
     "productId": "239637",
     "slug": "ishares-msci-emerging-markets-etf",
-    "indexName": "msci-emerging-full"
+    "indexName": "MSCI Emerging Markets Index (Net)",
+    "inceptionDate": "2003-04-07",
+    "bloombergTicker": "NDUEEGF"
   },
   {
     "ticker": "EEMA",
     "productId": "239629",
     "slug": "ishares-msci-emerging-markets-asia-etf",
-    "indexName": "msci-emerging-markets-asia"
+    "indexName": "MSCI EM Asia Custom Capped Index (Net)",
+    "inceptionDate": "2012-02-08",
+    "bloombergTicker": "NU717917"
   },
   {
     "ticker": "EEMS",
     "productId": "239642",
     "slug": "ishares-msci-emerging-markets-smallcap-etf",
-    "indexName": "msci-emerging-markets-smallcap"
+    "indexName": "MSCI Emerging Markets Small Cap Index (Net)",
+    "inceptionDate": "2011-08-16",
+    "bloombergTicker": "MSLUEMRN"
   },
   {
     "ticker": "EEMV",
     "productId": "239641",
     "slug": "ishares-msci-emerging-markets-minimum-volatility-etf",
-    "indexName": "msci-emerging-markets-minimum-volatility"
+    "indexName": "MSCI Emerging Markets Minimum Volatility Index (Net)",
+    "inceptionDate": "2011-10-18",
+    "bloombergTicker": "M00IEF$O"
   },
   {
     "ticker": "EFA",
     "productId": "239623",
     "slug": "ishares-msci-eafe-etf",
-    "indexName": "msci-eafe-full"
+    "indexName": "MSCI EAFE Index (Net)",
+    "inceptionDate": "2001-08-14",
+    "bloombergTicker": "NDDUEFAE"
   },
   {
     "ticker": "EFAV",
     "productId": "239626",
     "slug": "ishares-msci-eafe-minimum-volatility-etf",
-    "indexName": "msci-eafe-minimum-volatility"
+    "indexName": "MSCI EAFE Minimum Volatility (USD) Index (Net)",
+    "inceptionDate": "2011-10-18",
+    "bloombergTicker": "M00IEA$O"
   },
   {
     "ticker": "EFG",
     "productId": "239622",
     "slug": "ishares-msci-eafe-growth-etf",
-    "indexName": "msci-eafe-growth"
-  },
-  {
-    "ticker": "EFNL",
-    "productId": "239647",
-    "slug": "ishares-msci-finland-capped-etf",
-    "indexName": "msci-finland-capped"
-  },
-  {
-    "ticker": "EFRA",
-    "productId": "330188",
-    "slug": "ishares-environmental-infrastructure-and-industrials-etf",
-    "indexName": "environmental-infrastructure-and-industrials"
+    "indexName": "MSCI EAFE Growth Index (Net)",
+    "inceptionDate": "2005-08-01",
+    "bloombergTicker": "NDUGEAFF"
   },
   {
     "ticker": "EFV",
     "productId": "239628",
     "slug": "ishares-msci-eafe-value-etf",
-    "indexName": "msci-eafe-value"
+    "indexName": "MSCI EAFE Value Index (Net)",
+    "inceptionDate": "2005-08-01",
+    "bloombergTicker": "NDUVEAFF"
   },
   {
     "ticker": "EGUS",
     "productId": "330808",
     "slug": "ishares-esg-aware-msci-usa-growth-etf",
-    "indexName": "esg-aware-msci-usa-growth"
+    "indexName": "MSCI USA Growth Extended ESG Focus Index (USD)",
+    "inceptionDate": "2023-01-31",
+    "bloombergTicker": "GU750439"
   },
   {
     "ticker": "EIDO",
     "productId": "239661",
     "slug": "ishares-msci-indonesia-etf",
-    "indexName": "msci-indonesia"
-  },
-  {
-    "ticker": "EIRL",
-    "productId": "239662",
-    "slug": "ishares-msci-ireland-capped-etf",
-    "indexName": "msci-ireland-capped"
+    "indexName": "MSCI Indonesia IMI 25/50 Index (USD) (Net)",
+    "inceptionDate": "2010-05-05",
+    "bloombergTicker": "NU724020"
   },
   {
     "ticker": "EIS",
     "productId": "239663",
     "slug": "ishares-msci-israel-capped-etf",
-    "indexName": "msci-israel-capped"
+    "indexName": "MSCI Israel Capped Investable Market Index (Net)",
+    "inceptionDate": "2008-03-26",
+    "bloombergTicker": "MISCNU"
   },
   {
     "ticker": "EMGF",
     "productId": "272820",
     "slug": "ishares-msci-emerging-multi-factor-etf",
-    "indexName": "msci-emerging-multi-factor"
+    "indexName": "STOXX Emerging Markets Equity Factor Index (USD) (Net)",
+    "inceptionDate": "2015-12-08",
+    "bloombergTicker": "EMGFUN"
   },
   {
     "ticker": "EMIF",
     "productId": "239735",
     "slug": "ishares-emerging-markets-infrastructure-etf",
-    "indexName": "emerging-markets-infrastructure"
+    "indexName": "S&P Emerging Plus Infrastructure NET Index in USD",
+    "inceptionDate": "2009-06-16",
+    "bloombergTicker": "SPGEIFDN"
   },
   {
     "ticker": "EMXC",
     "productId": "288504",
     "slug": "ishares-msci-emerging-markets-ex-china-etf",
-    "indexName": "msci-emerging-markets-ex-china"
+    "indexName": "MSCI Emerging Markets ex China Index (Net)",
+    "inceptionDate": "2017-07-18",
+    "bloombergTicker": "M1CXBRV"
   },
   {
     "ticker": "EMXF",
     "productId": "316020",
     "slug": "ishares-esg-advanced-msci-em-etf",
-    "indexName": "esg-advanced-msci-em"
-  },
-  {
-    "ticker": "ENHI",
-    "productId": "349384",
-    "slug": "ishares-enhanced-international-active-etf",
-    "indexName": "enhanced-international-active"
-  },
-  {
-    "ticker": "ENHU",
-    "productId": "346694",
-    "slug": "ishares-enhanced-large-cap-core-active-etf",
-    "indexName": "enhanced-large-cap-core-active"
+    "indexName": "MSCI Emerging Markets Choice ESG Screened 5% Issuer Capped Index (USD) (Net)",
+    "inceptionDate": "2020-10-06",
+    "bloombergTicker": "NU728366"
   },
   {
     "ticker": "ENOR",
     "productId": "239673",
     "slug": "ishares-msci-norway-capped-etf",
-    "indexName": "msci-norway-capped"
-  },
-  {
-    "ticker": "ENZL",
-    "productId": "239672",
-    "slug": "ishares-msci-new-zealand-capped-etf",
-    "indexName": "msci-new-zealand-capped"
+    "indexName": "MSCI Norway IMI 25/50 Index (Net)",
+    "inceptionDate": "2012-01-23",
+    "bloombergTicker": "M1NO5IM"
   },
   {
     "ticker": "EPHE",
     "productId": "239675",
     "slug": "ishares-msci-philippines-etf",
-    "indexName": "msci-philippines"
-  },
-  {
-    "ticker": "EPOL",
-    "productId": "239676",
-    "slug": "ishares-msci-poland-capped-etf",
-    "indexName": "msci-poland-capped"
+    "indexName": "MSCI Philippines IMI 25/50 Index (USD) (Net)",
+    "inceptionDate": "2010-09-28",
+    "bloombergTicker": "NU710465"
   },
   {
     "ticker": "EPP",
     "productId": "239674",
     "slug": "ishares-msci-pacific-ex-japan-etf",
-    "indexName": "msci-pacific-ex-japan"
+    "indexName": "MSCI Pacific ex-Japan Index (Net)",
+    "inceptionDate": "2001-10-25",
+    "bloombergTicker": "NDDUPFXJ"
   },
   {
     "ticker": "EPU",
     "productId": "239606",
     "slug": "ishares-msci-all-peru-capped-etf",
-    "indexName": "msci-all-peru-capped"
+    "indexName": "MSCI All Peru Capped Index (Net)",
+    "inceptionDate": "2009-06-19",
+    "bloombergTicker": "M1PECAPD"
   },
   {
     "ticker": "EQLT",
     "productId": "338701",
     "slug": "ishares-msci-emerging-markets-quality-factor-etf",
-    "indexName": "msci-emerging-markets-quality-factor"
+    "indexName": "MSCI Emerging Markets Quality Factor Select Index (Net)",
+    "inceptionDate": "2024-09-04",
+    "bloombergTicker": "NU754346"
   },
   {
     "ticker": "ERET",
     "productId": "329687",
     "slug": "ishares-environmentally-aware-real-estate-etf",
-    "indexName": "environmentally-aware-real-estate"
+    "indexName": "FTSE EPRA Nareit Developed Green Target Index (USD) (Net)",
+    "inceptionDate": "2022-11-15",
+    "bloombergTicker": "FENDGT"
   },
   {
     "ticker": "ESGD",
     "productId": "283778",
     "slug": "ishares-esg-aware-msci-eafe-etf",
-    "indexName": "esg-aware-msci-eafe"
+    "indexName": "MSCI EAFE Extended ESG Focus Index (Net)",
+    "inceptionDate": "2016-06-28",
+    "bloombergTicker": "NU719472"
   },
   {
     "ticker": "ESGE",
     "productId": "283777",
     "slug": "ishares-esg-aware-msci-em-etf",
-    "indexName": "esg-aware-msci-em"
+    "indexName": "MSCI Emerging Markets ESG Focus Index (Net)",
+    "inceptionDate": "2016-06-28",
+    "bloombergTicker": "NU719473"
   },
   {
     "ticker": "ESGU",
     "productId": "286007",
     "slug": "ishares-esg-aware-msci-usa-etf",
-    "indexName": "esg-aware-msci-usa"
+    "indexName": "MSCI USA Extended ESG Focus Index",
+    "inceptionDate": "2016-12-01",
+    "bloombergTicker": "GU719471"
   },
   {
     "ticker": "ESML",
     "productId": "296644",
     "slug": "ishares-esg-aware-msci-usa-small-cap-etf",
-    "indexName": "esg-aware-msci-usa-small-cap"
+    "indexName": "MSCI USA Small Cap Extended ESG Focus Index",
+    "inceptionDate": "2018-04-10",
+    "bloombergTicker": "GU716714"
   },
   {
     "ticker": "ESMV",
     "productId": "321324",
     "slug": "ishares-esg-optimized-msci-usa-min-vol-factor-etf",
-    "indexName": "esg-msci-usa-min-vol"
+    "indexName": "MSCI USA Minimum Volatility Extended ESG Reduced Carbon Target Index (USD)",
+    "inceptionDate": "2021-11-02",
+    "bloombergTicker": "GU738669"
   },
   {
     "ticker": "ETEC",
     "productId": "331244",
     "slug": "ishares-breakthrough-environmental-solutions-etf",
-    "indexName": "breakthrough-environmental-solutions"
+    "indexName": "Morningstar Global Emerging Green Technologies Select Index (USD) (Net)",
+    "inceptionDate": "2023-03-28",
+    "bloombergTicker": "MSEGTSNU"
   },
   {
     "ticker": "EUFN",
     "productId": "239645",
     "slug": "ishares-msci-europe-financials-etf",
-    "indexName": "msci-europe-financials"
+    "indexName": "MSCI Europe Financials Index (Net)",
+    "inceptionDate": "2010-01-20",
+    "bloombergTicker": "NDRUFNCL"
   },
   {
     "ticker": "EUSA",
     "productId": "239693",
     "slug": "ishares-msci-usa-etf",
-    "indexName": "msci-usa-full"
+    "indexName": "MSCI USA Equal Weighted Index",
+    "inceptionDate": "2010-05-05",
+    "bloombergTicker": "M2USEW"
   },
   {
     "ticker": "EVLU",
     "productId": "338704",
     "slug": "ishares-msci-emerging-markets-value-factor-etf",
-    "indexName": "msci-emerging-markets-value-factor"
+    "indexName": "MSCI Emerging Markets Value Factor Select Index (Net)",
+    "inceptionDate": "2024-09-04",
+    "bloombergTicker": "NU754345"
   },
   {
     "ticker": "EVUS",
     "productId": "330809",
     "slug": "ishares-esg-aware-msci-usa-value-etf",
-    "indexName": "esg-aware-msci-usa-value"
+    "indexName": "MSCI USA Value Extended ESG Focus Index (USD)",
+    "inceptionDate": "2023-01-31",
+    "bloombergTicker": "GU750437"
   },
   {
     "ticker": "EWA",
     "productId": "239607",
     "slug": "ishares-msci-australia-etf",
-    "indexName": "msci-australia"
+    "indexName": "MSCI Australia Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "NDDUAS"
   },
   {
     "ticker": "EWC",
     "productId": "239615",
     "slug": "ishares-msci-canada-etf",
-    "indexName": "msci-canada"
+    "indexName": "MSCI Canada Custom Capped Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1CXBLK"
   },
   {
     "ticker": "EWD",
     "productId": "239684",
     "slug": "ishares-msci-sweden-etf",
-    "indexName": "msci-sweden"
+    "indexName": "MSCI Sweden 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1CXBISA"
   },
   {
     "ticker": "EWG",
     "productId": "239650",
     "slug": "ishares-msci-germany-etf",
-    "indexName": "msci-germany"
+    "indexName": "MSCI Germany Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "NDDUGR"
   },
   {
     "ticker": "EWH",
     "productId": "239657",
     "slug": "ishares-msci-hong-kong-etf",
-    "indexName": "msci-hong-kong"
+    "indexName": "MSCI Hong Kong 25-50 Index (USD) (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "NU730026"
   },
   {
     "ticker": "EWI",
     "productId": "239664",
     "slug": "ishares-msci-italy-capped-etf",
-    "indexName": "msci-italy-capped"
+    "indexName": "MSCI Italy 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1IT2550"
   },
   {
     "ticker": "EWJ",
     "productId": "239665",
     "slug": "ishares-msci-japan-etf",
-    "indexName": "msci-japan"
+    "indexName": "MSCI Japan Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "NDDUJN"
   },
   {
     "ticker": "EWJV",
     "productId": "307263",
     "slug": "ishares-msci-japan-value-etf",
-    "indexName": "msci-japan-value"
+    "indexName": "MSCI Japan Value Index (USD) (Net)",
+    "inceptionDate": "2019-03-05",
+    "bloombergTicker": "M1JP000V"
   },
   {
     "ticker": "EWK",
     "productId": "239610",
     "slug": "ishares-msci-belgium-capped-etf",
-    "indexName": "msci-belgium-capped"
+    "indexName": "MSCI Belgium IMI 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1BE5IM"
   },
   {
     "ticker": "EWL",
     "productId": "239685",
     "slug": "ishares-msci-switzerland-capped-etf",
-    "indexName": "msci-switzerland-capped"
+    "indexName": "MSCI Switzerland 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1CH2550"
   },
   {
     "ticker": "EWM",
     "productId": "239669",
     "slug": "ishares-msci-malaysia-etf",
-    "indexName": "msci-malaysia"
+    "indexName": "MSCI Malaysia Index",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "NDDUMAF"
   },
   {
     "ticker": "EWN",
     "productId": "239671",
     "slug": "ishares-msci-netherlands-etf",
-    "indexName": "msci-netherlands"
+    "indexName": "MSCI Netherlands IMI 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1CXBAK"
   },
   {
     "ticker": "EWO",
     "productId": "239609",
     "slug": "ishares-msci-austria-capped-etf",
-    "indexName": "msci-austria-capped"
+    "indexName": "MSCI Austria IMI 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1AT5IM"
   },
   {
     "ticker": "EWP",
     "productId": "239683",
     "slug": "ishares-msci-spain-capped-etf",
-    "indexName": "msci-spain-capped"
-  },
-  {
-    "ticker": "EWQ",
-    "productId": "239648",
-    "slug": "ishares-msci-france-etf",
-    "indexName": "msci-france"
+    "indexName": "MSCI Spain 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1ES2550"
   },
   {
     "ticker": "EWS",
     "productId": "239678",
     "slug": "ishares-msci-singapore-capped-etf",
-    "indexName": "msci-singapore-capped"
+    "indexName": "MSCI Singapore 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1CXBISC"
   },
   {
     "ticker": "EWT",
     "productId": "239686",
     "slug": "ishares-msci-taiwan-etf",
-    "indexName": "msci-taiwan"
+    "indexName": "MSCI Taiwan 25/50 Index (Net)",
+    "inceptionDate": "2000-06-20",
+    "bloombergTicker": "M1CXBISD"
   },
   {
     "ticker": "EWU",
     "productId": "239690",
     "slug": "ishares-msci-united-kingdom-etf",
-    "indexName": "msci-united-kingdom"
+    "indexName": "MSCI United Kingdom Index (Net)",
+    "inceptionDate": "1996-03-12"
   },
   {
     "ticker": "EWUS",
     "productId": "239691",
     "slug": "ishares-msci-united-kingdom-smallcap-etf",
-    "indexName": "msci-united-kingdom-smallcap"
+    "indexName": "MSCI United Kingdom Small Cap Index (Net)",
+    "inceptionDate": "2012-01-25",
+    "bloombergTicker": "NCUDUK"
   },
   {
     "ticker": "EWW",
     "productId": "239670",
     "slug": "ishares-msci-mexico-capped-etf",
-    "indexName": "msci-mexico-capped"
+    "indexName": "MSCI Mexico IMI 25/50 Index (Net)",
+    "inceptionDate": "1996-03-12",
+    "bloombergTicker": "M1MX5IM"
   },
   {
     "ticker": "EWY",
     "productId": "239681",
     "slug": "ishares-msci-south-korea-capped-etf",
-    "indexName": "msci-south-korea-capped"
+    "indexName": "MSCI Korea 25/50 Index (Net)",
+    "inceptionDate": "2000-05-09",
+    "bloombergTicker": "M1KR2550"
   },
   {
     "ticker": "EWZ",
     "productId": "239612",
     "slug": "ishares-msci-brazil-capped-etf",
-    "indexName": "msci-brazil-capped"
+    "indexName": "MSCI Brazil 25/50 Index (Net)",
+    "inceptionDate": "2000-07-10",
+    "bloombergTicker": "M1BR2550"
   },
   {
     "ticker": "EWZS",
     "productId": "239613",
     "slug": "ishares-msci-brazil-smallcap-etf",
-    "indexName": "msci-brazil-smallcap"
-  },
-  {
-    "ticker": "EXI",
-    "productId": "239745",
-    "slug": "ishares-global-industrials-etf",
-    "indexName": "global-industrials"
+    "indexName": "MSCI Brazil Small Cap Index (Net)",
+    "inceptionDate": "2010-09-28",
+    "bloombergTicker": "MSLUBRZN"
   },
   {
     "ticker": "EZA",
     "productId": "239680",
     "slug": "ishares-msci-south-africa-etf",
-    "indexName": "msci-south-africa"
+    "indexName": "MSCI South Africa 25/50 Index (Net)",
+    "inceptionDate": "2003-02-03",
+    "bloombergTicker": "M1CXBAC"
   },
   {
     "ticker": "EZU",
     "productId": "239644",
     "slug": "ishares-msci-emu-etf",
-    "indexName": "msci-emu"
+    "indexName": "MSCI EMU Index (Net)",
+    "inceptionDate": "2000-07-25",
+    "bloombergTicker": "NDDUEMU"
   },
   {
     "ticker": "FXI",
     "productId": "239536",
     "slug": "ishares-china-largecap-etf",
-    "indexName": "china-largecap"
+    "indexName": "FTSE China 50 Index (Net)",
+    "inceptionDate": "2004-10-05",
+    "bloombergTicker": "TXIN0UNU"
   },
   {
     "ticker": "GARP",
     "productId": "312212",
     "slug": "ishares-msci-usa-quality-garp-etf",
-    "indexName": "msci-usa-quality-garp"
+    "indexName": "MSCI USA Quality GARP Select Index",
+    "inceptionDate": "2020-01-14",
+    "bloombergTicker": "GU756664"
   },
   {
     "ticker": "GLOF",
     "productId": "272821",
     "slug": "ishares-msci-global-multi-factor-etf",
-    "indexName": "msci-global-multi-factor"
+    "indexName": "STOXX Global Equity Factor Index (USD) (Net)",
+    "inceptionDate": "2015-04-28",
+    "bloombergTicker": "GLOFUN"
   },
   {
     "ticker": "HAWX",
     "productId": "273768",
     "slug": "ishares-currency-hedged-msci-acwi-ex-us-etf",
-    "indexName": "currency-hedged-msci-acwi-ex-us"
+    "indexName": "MSCI ACWI ex USA 100% Hedged to USD Index (Net)",
+    "inceptionDate": "2015-06-29",
+    "bloombergTicker": "M1WDUHED"
   },
   {
     "ticker": "HDV",
     "productId": "239563",
     "slug": "ishares-high-dividend-etf",
-    "indexName": "us-high-dividend"
+    "indexName": "Morningstar Dividend Yield Focus Index USD",
+    "inceptionDate": "2011-03-29",
+    "bloombergTicker": "MDYFT"
   },
   {
     "ticker": "HEEM",
     "productId": "268704",
     "slug": "ishares-currency-hedged-msci-emerging-markets",
-    "indexName": "currency-hedged-msci-emerging-markets"
+    "indexName": "MSCI Emerging Markets 100% USD Hedged Index (Net)",
+    "inceptionDate": "2014-09-23",
+    "bloombergTicker": "M1EFHUS"
   },
   {
     "ticker": "HEFA",
     "productId": "259622",
     "slug": "ishares-currency-hedged-msci-eafe-etf",
-    "indexName": "currency-hedged-msci-eafe"
+    "indexName": "MSCI EAFE Index (Net)",
+    "inceptionDate": "2014-01-31",
+    "bloombergTicker": "M0EFHUSD"
   },
   {
     "ticker": "HEWJ",
     "productId": "259624",
     "slug": "ishares-currency-hedged-msci-japan-etf",
-    "indexName": "currency-hedged-msci-japan"
+    "indexName": "MSCI Japan Index (Net)",
+    "inceptionDate": "2014-01-31",
+    "bloombergTicker": "M0JPHUSD"
   },
   {
     "ticker": "HEZU",
     "productId": "268708",
     "slug": "ishares-currency-hedged-msci-emu-etf",
-    "indexName": "currency-hedged-msci-emu"
+    "indexName": "MSCI EMU 100% USD Hedged Index (Net)",
+    "inceptionDate": "2014-07-09",
+    "bloombergTicker": "M0EMHUSR"
   },
   {
     "ticker": "HSCZ",
     "productId": "273771",
     "slug": "ishares-currency-hedged-msci-eafe-small-cap-etf",
-    "indexName": "currency-hedged-msci-eafe-small-cap"
+    "indexName": "MSCI EAFE Small Cap Index (Net)",
+    "inceptionDate": "2015-06-29",
+    "bloombergTicker": "MXEASCH"
   },
   {
     "ticker": "IAI",
     "productId": "239504",
     "slug": "ishares-us-brokerdealers-etf",
-    "indexName": "us-brokerdealers"
+    "indexName": "Dow Jones U.S. Select Investment Services Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSINVT"
   },
   {
     "ticker": "IAK",
     "productId": "239515",
     "slug": "ishares-us-insurance-etf",
-    "indexName": "us-insurance"
+    "indexName": "Dow Jones U.S. Select Insurance Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSINST"
   },
   {
     "ticker": "IAT",
     "productId": "239521",
     "slug": "ishares-us-regional-banks-etf",
-    "indexName": "us-regional-banks"
+    "indexName": "Dow Jones U.S. Select Regional Banks Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSRBKT"
   },
   {
     "ticker": "IBB",
     "productId": "239699",
     "slug": "ishares-biotechnology-etf",
-    "indexName": "biotechnology"
+    "indexName": "NYSE Biotechnology Index",
+    "inceptionDate": "2001-02-05",
+    "bloombergTicker": "ICEBIOT"
   },
   {
     "ticker": "IBLC",
     "productId": "326614",
     "slug": "ishares-blockchain-and-tech-etf",
-    "indexName": "blockchain-and-tech"
+    "indexName": "NYSE FactSet Global Blockchain Technologies Index (USD) (Net)",
+    "inceptionDate": "2022-04-25",
+    "bloombergTicker": "NYFSBLCN"
   },
   {
     "ticker": "IBRN",
     "productId": "329137",
     "slug": "ishares-neuroscience-and-healthcare-etf",
-    "indexName": "neuroscience-and-healthcare"
+    "indexName": "NYSE FactSet Global Neuro Biopharma and MedTech Index (USD) (Net)",
+    "inceptionDate": "2022-08-24",
+    "bloombergTicker": "NYFSNBMN"
   },
   {
     "ticker": "ICF",
     "productId": "239482",
     "slug": "ishares-cohen-steers-reit-etf",
-    "indexName": "cohen-steers-reit"
+    "indexName": "Cohen & Steers Realty Majors Index",
+    "inceptionDate": "2001-01-29",
+    "bloombergTicker": "RMP"
   },
   {
     "ticker": "ICLN",
     "productId": "239738",
     "slug": "ishares-global-clean-energy-etf",
-    "indexName": "global-clean-energy"
-  },
-  {
-    "ticker": "IDEF",
-    "productId": "343529",
-    "slug": "ishares-defense-industrials-active-etf",
-    "indexName": "defense-industrials-active"
+    "indexName": "S&P Global Clean Energy Transition Index in USD (Net)",
+    "inceptionDate": "2008-06-24",
+    "bloombergTicker": "SPGTCLNT"
   },
   {
     "ticker": "IDEV",
     "productId": "286762",
     "slug": "ishares-core-msci-international-developed-markets-etf",
-    "indexName": "msci-intl-developed"
+    "indexName": "MSCI WORLD ex USA IMI Index (Net)",
+    "inceptionDate": "2017-03-21",
+    "bloombergTicker": "M1CXBRU"
   },
   {
     "ticker": "IDGT",
     "productId": "239770",
     "slug": "ishares-north-american-techmultimedia-networking-etf",
-    "indexName": "north-american-techmultimedia-networking"
+    "indexName": "S&P Data Center, Tower REIT and Communications Equipment Index",
+    "inceptionDate": "2001-07-10",
+    "bloombergTicker": "SPDIGIUT"
   },
   {
     "ticker": "IDNA",
     "productId": "308878",
     "slug": "ishares-genomics-immunology-and-healthcare-etf",
-    "indexName": "genomics-immunology-and-healthcare"
+    "indexName": "NYSE FactSet Global Genomics and Immuno Biopharma Index (USD) (Net)",
+    "inceptionDate": "2019-06-11",
+    "bloombergTicker": "NYFSGIBN"
   },
   {
     "ticker": "IDRV",
     "productId": "307332",
     "slug": "ishares-self-driving-ev-and-tech-etf",
-    "indexName": "self-driving-ev-and-tech"
+    "indexName": "NYSE FactSet Global Autonomous Driving and Electric Vehicle Index (USD) (Net)",
+    "inceptionDate": "2019-04-16",
+    "bloombergTicker": "NYFSAEVN"
   },
   {
     "ticker": "IDU",
     "productId": "239524",
     "slug": "ishares-us-utilities-etf",
-    "indexName": "us-utilities"
+    "indexName": "Russell 1000 Utilities RIC 22.5/45 Capped Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "RIDUCTR"
   },
   {
     "ticker": "IDV",
     "productId": "239499",
     "slug": "ishares-international-select-dividend-etf",
-    "indexName": "intl-select-dividend"
-  },
-  {
-    "ticker": "IDYN",
-    "productId": "345128",
-    "slug": "ishares-international-equity-factor-rotation-active-etf",
-    "indexName": "international-equity-factor-rotation-active"
-  },
-  {
-    "ticker": "IEDI",
-    "productId": "292414",
-    "slug": "ishares-u-s-consumer-focused-etf",
-    "indexName": "u-s-consumer-focused"
+    "indexName": "Dow Jones EPAC Select Dividend Index (Net)",
+    "inceptionDate": "2007-06-11",
+    "bloombergTicker": "DJEPCSDT"
   },
   {
     "ticker": "IEFA",
     "productId": "244049",
     "slug": "ishares-core-msci-eafe-etf",
-    "indexName": "msci-eafe"
+    "indexName": "MSCI EAFE IMI Index (Net)",
+    "inceptionDate": "2012-10-18"
   },
   {
     "ticker": "IEMG",
     "productId": "244050",
     "slug": "ishares-core-msci-emerging-markets-etf",
-    "indexName": "msci-emerging"
+    "indexName": "MSCI Emerging Markets Investable Market Index (USD) (Net)",
+    "inceptionDate": "2012-10-18",
+    "bloombergTicker": "MIMUEMRN"
   },
   {
     "ticker": "IEO",
     "productId": "239517",
     "slug": "ishares-us-oil-gas-exploration-production-etf",
-    "indexName": "us-oil-gas-exploration-production"
-  },
-  {
-    "ticker": "IETC",
-    "productId": "292425",
-    "slug": "ishares-u-s-tech-independence-focused-etf",
-    "indexName": "u-s-tech-independence-focused"
+    "indexName": "Dow Jones U.S. Select Oil Exploration & Production Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSOEPT"
   },
   {
     "ticker": "IEUR",
     "productId": "264617",
     "slug": "ishares-core-msci-europe-etf",
-    "indexName": "msci-europe"
+    "indexName": "MSCI Europe Investable Market Index (Net)",
+    "inceptionDate": "2014-06-10",
+    "bloombergTicker": "MIMUEURN"
   },
   {
     "ticker": "IEUS",
     "productId": "239537",
     "slug": "ishares-developed-smallcap-ex-north-america-etf",
-    "indexName": "developed-smallcap-ex-north-america"
+    "indexName": "MSCI Europe Small Cap Index (Net)",
+    "inceptionDate": "2007-11-12",
+    "bloombergTicker": "M1EUSC"
   },
   {
     "ticker": "IEV",
     "productId": "239736",
     "slug": "ishares-europe-etf",
-    "indexName": "europe"
+    "indexName": "S&P Europe 350 Index (Net)",
+    "inceptionDate": "2000-07-25",
+    "bloombergTicker": "SP350NW"
   },
   {
     "ticker": "IEZ",
     "productId": "239518",
     "slug": "ishares-us-oil-equipment-services-etf",
-    "indexName": "us-oil-equipment-services"
+    "indexName": "Dow Jones U.S. Select Oil Equipment & Services Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSOEST"
   },
   {
     "ticker": "IFGL",
     "productId": "239540",
     "slug": "ishares-international-developed-real-estate-etf",
-    "indexName": "international-developed-real-estate"
+    "indexName": "FTSE EPRA Nareit Developed ex-U.S. Index (Net)",
+    "inceptionDate": "2007-11-12",
+    "bloombergTicker": "TRGXUU"
   },
   {
     "ticker": "IFRA",
     "productId": "294315",
     "slug": "ishares-u-s-infrastructure-etf",
-    "indexName": "u-s-infrastructure"
+    "indexName": "NYSE FactSet U.S. Infrastructure Index (TR)",
+    "inceptionDate": "2018-04-03",
+    "bloombergTicker": "NYFSINFT"
   },
   {
     "ticker": "IGE",
     "productId": "239768",
     "slug": "ishares-north-american-natural-resources-etf",
-    "indexName": "north-american-natural-resources"
+    "indexName": "S&P North American Natural Resources Sector Index(TM)",
+    "inceptionDate": "2001-10-22",
+    "bloombergTicker": "SPGINRTR"
   },
   {
     "ticker": "IGF",
     "productId": "239746",
     "slug": "ishares-global-infrastructure-etf",
-    "indexName": "global-infrastructure"
+    "indexName": "S&P Global Infrastructure Index (Net)",
+    "inceptionDate": "2007-12-10",
+    "bloombergTicker": "SPGTINNT"
   },
   {
     "ticker": "IGM",
     "productId": "239769",
     "slug": "ishares-north-american-tech-etf",
-    "indexName": "north-american-tech"
+    "indexName": "S&P North American Expanded Technology Sector Index",
+    "inceptionDate": "2001-03-13",
+    "bloombergTicker": "SPNATEUT"
   },
   {
     "ticker": "IGRO",
     "productId": "283737",
     "slug": "ishares-international-dividend-growth-etf",
-    "indexName": "intl-dividend-growth"
+    "indexName": "Morningstar Global ex-US Dividend Growth Index (Net)",
+    "inceptionDate": "2016-05-17",
+    "bloombergTicker": "MSDIDGNU"
   },
   {
     "ticker": "IGV",
     "productId": "239771",
     "slug": "ishares-north-american-techsoftware-etf",
-    "indexName": "north-american-techsoftware"
+    "indexName": "S&P North American Expanded Technology Software Index",
+    "inceptionDate": "2001-07-10",
+    "bloombergTicker": "SPNASEUT"
   },
   {
     "ticker": "IHAK",
     "productId": "307352",
     "slug": "ishares-cybersecurity-and-tech-etf",
-    "indexName": "cybersecurity-and-tech"
+    "indexName": "NYSE FactSet Global Cyber Security Index (USD) (Net)",
+    "inceptionDate": "2019-06-11",
+    "bloombergTicker": "NYFSSECN"
   },
   {
     "ticker": "IHE",
     "productId": "239519",
     "slug": "ishares-us-pharmaceuticals-etf",
-    "indexName": "us-pharmaceuticals"
+    "indexName": "Dow Jones U.S. Select Pharmaceuticals Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSPHMT"
   },
   {
     "ticker": "IHF",
     "productId": "239510",
     "slug": "ishares-us-healthcare-providers-etf",
-    "indexName": "us-healthcare-providers"
+    "indexName": "Dow Jones U.S. Select Healthcare Providers Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSHCPT"
   },
   {
     "ticker": "IHI",
     "productId": "239516",
     "slug": "ishares-us-medical-devices-etf",
-    "indexName": "us-medical-devices"
+    "indexName": "Dow Jones U.S. Select Medical Equipment Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSMDQT"
   },
   {
     "ticker": "IJH",
     "productId": "239763",
     "slug": "ishares-core-sp-midcap-etf",
-    "indexName": "sp-mid-cap-400"
+    "indexName": "S&P MidCap 400 Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "SPTRMDCP"
   },
   {
     "ticker": "IJJ",
     "productId": "239764",
     "slug": "ishares-sp-midcap-400-value-etf",
-    "indexName": "sp-mid-cap-400-value"
+    "indexName": "S&P MidCap 400(R) Value Index",
+    "inceptionDate": "2000-07-24",
+    "bloombergTicker": "SPTRMV"
   },
   {
     "ticker": "IJK",
     "productId": "239762",
     "slug": "ishares-sp-midcap-400-growth-etf",
-    "indexName": "sp-mid-cap-400-growth"
+    "indexName": "S&P MidCap 400(R) Growth Index",
+    "inceptionDate": "2000-07-24",
+    "bloombergTicker": "SPTRMG"
   },
   {
     "ticker": "IJR",
     "productId": "239774",
     "slug": "ishares-core-sp-smallcap-etf",
-    "indexName": "sp-small-cap-600"
+    "indexName": "S&P SmallCap 600 Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "SPTRSMCP"
   },
   {
     "ticker": "IJS",
     "productId": "239775",
     "slug": "ishares-sp-smallcap-600-value-etf",
-    "indexName": "sp-small-cap-600-value"
+    "indexName": "S&P SmallCap 600(R) Value Index",
+    "inceptionDate": "2000-07-24",
+    "bloombergTicker": "SPTRSV"
   },
   {
     "ticker": "IJT",
     "productId": "239773",
     "slug": "ishares-sp-smallcap-600-growth-etf",
-    "indexName": "sp-small-cap-600-growth"
+    "indexName": "S&P SmallCap 600(R) Growth Index",
+    "inceptionDate": "2000-07-24",
+    "bloombergTicker": "SPTRSG"
   },
   {
     "ticker": "ILCB",
     "productId": "239579",
     "slug": "ishares-morningstar-largecap-etf",
-    "indexName": "morningstar-largecap"
+    "indexName": "Morningstar US Large-Mid Cap Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MSEGLMCA"
   },
   {
     "ticker": "ILCG",
     "productId": "239580",
     "slug": "ishares-morningstar-largecap-growth-etf",
-    "indexName": "morningstar-largecap-growth"
+    "indexName": "Morningstar US Large-Mid Cap Broad Growth Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MULMBGGU"
   },
   {
     "ticker": "ILCV",
     "productId": "239581",
     "slug": "ishares-morningstar-largecap-value-etf",
-    "indexName": "morningstar-largecap-value"
+    "indexName": "Morningstar US Large-Mid Cap Broad Value Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MULMBVGU"
   },
   {
     "ticker": "ILF",
     "productId": "239761",
     "slug": "ishares-latin-america-40-etf",
-    "indexName": "latin-america-40"
+    "indexName": "S&P Latin America 40 Index (Net)",
+    "inceptionDate": "2001-10-25",
+    "bloombergTicker": "SPLACNW"
   },
   {
     "ticker": "IMCB",
     "productId": "239582",
     "slug": "ishares-morningstar-midcap-etf",
-    "indexName": "morningstar-midcap"
+    "indexName": "Morningstar US Mid Cap Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MMCPT"
   },
   {
     "ticker": "IMCG",
     "productId": "239583",
     "slug": "ishares-morningstar-midcap-growth-etf",
-    "indexName": "morningstar-midcap-growth"
+    "indexName": "Morningstar US Mid Cap Broad Growth Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MUMCBGGU"
   },
   {
     "ticker": "IMCV",
     "productId": "239584",
     "slug": "ishares-morningstar-midcap-value-etf",
-    "indexName": "morningstar-midcap-value"
+    "indexName": "Morningstar US Mid Cap Broad Value Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MUMCBVGU"
   },
   {
     "ticker": "IMTM",
     "productId": "271538",
     "slug": "ishares-msci-international-developed-momentum-factor-etf",
-    "indexName": "msci-international-developed-momentum-factor"
+    "indexName": "MSCI World ex USA Momentum Index (Net)",
+    "inceptionDate": "2015-01-13",
+    "bloombergTicker": "M1WOUMO"
   },
   {
     "ticker": "INDA",
     "productId": "239659",
     "slug": "ishares-msci-india-etf",
-    "indexName": "msci-india"
+    "indexName": "MSCI India Index (Net)",
+    "inceptionDate": "2012-02-02",
+    "bloombergTicker": "NDEUSIA"
   },
   {
     "ticker": "INDY",
     "productId": "239758",
     "slug": "ishares-india-50-etf",
-    "indexName": "india-50"
+    "indexName": "Nifty 50 Index",
+    "inceptionDate": "2009-11-18",
+    "bloombergTicker": "BXTRNIF$"
   },
   {
     "ticker": "INRO",
     "productId": "336430",
     "slug": "ishares-u-s-industry-rotation-active-etf",
-    "indexName": "u-s-industry-rotation-active"
+    "indexName": "MSCI USA Index",
+    "inceptionDate": "2024-03-26"
   },
   {
     "ticker": "INTF",
     "productId": "272822",
     "slug": "ishares-msci-international-multi-factor-etf",
-    "indexName": "msci-international-multi-factor"
+    "indexName": "STOXX International Equity Factor Index (USD) (Net)",
+    "inceptionDate": "2015-04-28",
+    "bloombergTicker": "INTFUN"
   },
   {
     "ticker": "IOO",
     "productId": "239737",
     "slug": "ishares-global-100-etf",
-    "indexName": "global-100"
+    "indexName": "S&P Global 100 Index (Net)",
+    "inceptionDate": "2000-12-05",
+    "bloombergTicker": "SP100NW"
   },
   {
     "ticker": "IPAC",
     "productId": "264619",
     "slug": "ishares-core-msci-pacific-etf",
-    "indexName": "msci-pacific"
+    "indexName": "MSCI Pacific Investable Market Index (Net)",
+    "inceptionDate": "2014-06-10",
+    "bloombergTicker": "M1PCIME"
   },
   {
     "ticker": "IQLT",
     "productId": "271540",
     "slug": "ishares-msci-international-developed-quality-factor-etf",
-    "indexName": "msci-international-developed-quality-factor"
+    "indexName": "MSCI World ex USA Sector Neutral Quality Index (Net)",
+    "inceptionDate": "2015-01-13",
+    "bloombergTicker": "M1WOUNQ"
   },
   {
     "ticker": "ISCB",
     "productId": "239586",
     "slug": "ishares-morningstar-smallcap-etf",
-    "indexName": "morningstar-smallcap"
+    "indexName": "Morningstar US Small Cap Extended Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MUSSCEGU"
   },
   {
     "ticker": "ISCF",
     "productId": "272823",
     "slug": "ishares-msci-international-small-cap-multi-factor-etf",
-    "indexName": "msci-international-small-cap-multi-factor"
+    "indexName": "STOXX International Small-Cap Equity Factor Index (USD) (Net)",
+    "inceptionDate": "2015-04-28",
+    "bloombergTicker": "ISCFUN"
   },
   {
     "ticker": "ISCG",
     "productId": "239587",
     "slug": "ishares-morningstar-smallcap-growth-etf",
-    "indexName": "morningstar-smallcap-growth"
+    "indexName": "Morningstar US Small Cap Broad Growth Extended Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MUSBGEGU"
   },
   {
     "ticker": "ISCV",
     "productId": "239588",
     "slug": "ishares-morningstar-smallcap-value-etf",
-    "indexName": "morningstar-smallcap-value"
+    "indexName": "Morningstar US Small Cap Broad Value Extended Index (USD)",
+    "inceptionDate": "2004-06-28",
+    "bloombergTicker": "MSSBVEGU"
   },
   {
     "ticker": "ISVL",
     "productId": "317548",
     "slug": "ishares-international-developed-small-cap-value-factor-etf",
-    "indexName": "international-developed-small-cap-value-factor"
+    "indexName": "FTSE Developed ex US ex Korea Small Cap Focused Value Index (USD) (Net)",
+    "inceptionDate": "2021-03-23",
+    "bloombergTicker": "ISVLNT"
   },
   {
     "ticker": "ITA",
     "productId": "239502",
     "slug": "ishares-us-aerospace-defense-etf",
-    "indexName": "us-aerospace-defense"
+    "indexName": "Dow Jones U.S. Select Aerospace & Defense Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSASDT"
   },
   {
     "ticker": "ITB",
     "productId": "239512",
     "slug": "ishares-us-home-construction-etf",
-    "indexName": "us-home-construction"
+    "indexName": "Dow Jones U.S. Select Home Construction Index",
+    "inceptionDate": "2006-05-01",
+    "bloombergTicker": "DJSHMBT"
   },
   {
     "ticker": "ITOT",
     "productId": "239724",
     "slug": "ishares-core-sp-total-us-stock-market-etf",
-    "indexName": "sp-total-us"
+    "indexName": "S&P Total Market Index (TMI)",
+    "inceptionDate": "2004-01-20",
+    "bloombergTicker": "SPTRTMI"
   },
   {
     "ticker": "IUSG",
     "productId": "239713",
     "slug": "ishares-core-sp-us-growth-etf",
-    "indexName": "sp-us-growth"
+    "indexName": "S&P 900 Growth Index",
+    "inceptionDate": "2000-07-24"
   },
   {
     "ticker": "IUSV",
     "productId": "239715",
     "slug": "ishares-core-sp-us-value-etf",
-    "indexName": "sp-us-value"
+    "indexName": "S&P 900 Value Index",
+    "inceptionDate": "2000-07-24",
+    "bloombergTicker": "SPTRNV"
   },
   {
     "ticker": "IVE",
     "productId": "239728",
     "slug": "ishares-sp-500-value-etf",
-    "indexName": "sp500-value"
+    "indexName": "S&P 500(R) Value Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "SPTRSVX"
   },
   {
     "ticker": "IVLU",
     "productId": "275382",
     "slug": "ishares-msci-international-developed-value-factor-etf",
-    "indexName": "msci-international-developed-value-factor"
+    "indexName": "MSCI World ex USA Enhanced Value Index (Net)",
+    "inceptionDate": "2015-06-16",
+    "bloombergTicker": "M1WOUEV"
   },
   {
     "ticker": "IVV",
     "productId": "239726",
     "slug": "ishares-core-sp-500-etf",
-    "indexName": "sp500"
-  },
-  {
-    "ticker": "IVVB",
-    "productId": "332307",
-    "slug": "ishares-large-cap-deep-quarterly-laddered-etf",
-    "indexName": "large-cap-deep-quarterly-laddered"
-  },
-  {
-    "ticker": "IVVM",
-    "productId": "332306",
-    "slug": "ishares-large-cap-moderate-quarterly-laddered-etf",
-    "indexName": "large-cap-moderate-quarterly-laddered"
+    "indexName": "S&P 500 Index (USD)",
+    "inceptionDate": "2000-05-15",
+    "bloombergTicker": "SPTR"
   },
   {
     "ticker": "IVVW",
     "productId": "336267",
     "slug": "ishares-s-p-500-buywrite-etf",
-    "indexName": "sp-500-buywrite"
+    "indexName": "Cboe S&P 500 Enhanced 1% OTM BuyWrite Index",
+    "inceptionDate": "2024-03-14",
+    "bloombergTicker": "BXVBW"
   },
   {
     "ticker": "IVW",
     "productId": "239725",
     "slug": "ishares-sp-500-growth-etf",
-    "indexName": "sp500-growth"
+    "indexName": "S&P 500(R) Growth Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "SPTRSGX"
   },
   {
     "ticker": "IWB",
     "productId": "239707",
     "slug": "ishares-russell-1000-etf",
-    "indexName": "russell-1000"
+    "indexName": "Russell 1000 Index",
+    "inceptionDate": "2000-05-15",
+    "bloombergTicker": "RU10INTR"
   },
   {
     "ticker": "IWC",
     "productId": "239716",
     "slug": "ishares-microcap-etf",
-    "indexName": "russell-microcap"
+    "indexName": "Russell Microcap Index",
+    "inceptionDate": "2005-08-12",
+    "bloombergTicker": "RUMRINTR"
   },
   {
     "ticker": "IWD",
     "productId": "239708",
     "slug": "ishares-russell-1000-value-etf",
-    "indexName": "russell-1000-value"
+    "indexName": "Russell 1000 Value Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "RU10VATR"
   },
   {
     "ticker": "IWF",
     "productId": "239706",
     "slug": "ishares-russell-1000-growth-etf",
-    "indexName": "russell-1000-growth"
+    "indexName": "Russell 1000 Growth Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "RU10GRTR"
   },
   {
     "ticker": "IWL",
     "productId": "239721",
     "slug": "ishares-russell-top-200-etf",
-    "indexName": "russell-top-200"
+    "indexName": "Russell Top 200 Index",
+    "inceptionDate": "2009-09-22",
+    "bloombergTicker": "RUTPINTR"
   },
   {
     "ticker": "IWM",
     "productId": "239710",
     "slug": "ishares-russell-2000-etf",
-    "indexName": "russell-2000"
+    "indexName": "Russell 2000 Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "RU20INTR"
   },
   {
     "ticker": "IWMW",
     "productId": "336263",
     "slug": "ishares-russell-2000-buywrite-etf",
-    "indexName": "russell-2000-buywrite"
+    "indexName": "Cboe FTSE Russell IWM 2% OTM BuyWrite Index",
+    "inceptionDate": "2024-03-14",
+    "bloombergTicker": "BXWBW"
   },
   {
     "ticker": "IWN",
     "productId": "239712",
     "slug": "ishares-russell-2000-value-etf",
-    "indexName": "russell-2000-value"
+    "indexName": "Russell 2000 Value Index",
+    "inceptionDate": "2000-07-24",
+    "bloombergTicker": "RU20VATR"
   },
   {
     "ticker": "IWO",
     "productId": "239709",
     "slug": "ishares-russell-2000-growth-etf",
-    "indexName": "russell-2000-growth"
+    "indexName": "Russell 2000 Growth Index",
+    "inceptionDate": "2000-07-24",
+    "bloombergTicker": "RU20GRTR"
   },
   {
     "ticker": "IWP",
     "productId": "239717",
     "slug": "ishares-russell-midcap-growth-etf",
-    "indexName": "russell-mid-cap-growth"
+    "indexName": "Russell MidCap Growth Index",
+    "inceptionDate": "2001-07-17",
+    "bloombergTicker": "RUMCGRTR"
   },
   {
     "ticker": "IWR",
     "productId": "239718",
     "slug": "ishares-russell-midcap-etf",
-    "indexName": "russell-mid-cap"
+    "indexName": "Russell MidCap Index",
+    "inceptionDate": "2001-07-17",
+    "bloombergTicker": "RUMCINTR"
   },
   {
     "ticker": "IWS",
     "productId": "239719",
     "slug": "ishares-russell-midcap-value-etf",
-    "indexName": "russell-mid-cap-value"
+    "indexName": "Russell MidCap Value Index",
+    "inceptionDate": "2001-07-17",
+    "bloombergTicker": "RUMCVATR"
   },
   {
     "ticker": "IWV",
     "productId": "239714",
     "slug": "ishares-russell-3000-etf",
-    "indexName": "russell-3000"
+    "indexName": "Russell 3000 Index",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "RU30INTR"
   },
   {
     "ticker": "IWX",
     "productId": "239722",
     "slug": "ishares-russell-top-200-value-etf",
-    "indexName": "russell-top-200-value"
+    "indexName": "Russell Top 200 Value Index",
+    "inceptionDate": "2009-09-22",
+    "bloombergTicker": "RUTPVATR"
   },
   {
     "ticker": "IWY",
     "productId": "239720",
     "slug": "ishares-russell-top-200-growth-etf",
-    "indexName": "russell-top-200-growth"
+    "indexName": "Russell Top 200 Growth Index",
+    "inceptionDate": "2009-09-22",
+    "bloombergTicker": "RUTPGRTR"
   },
   {
     "ticker": "IXC",
     "productId": "239741",
     "slug": "ishares-global-energy-etf",
-    "indexName": "global-energy"
-  },
-  {
-    "ticker": "IXG",
-    "productId": "239742",
-    "slug": "ishares-global-financials-etf",
-    "indexName": "global-financials"
-  },
-  {
-    "ticker": "IXJ",
-    "productId": "239744",
-    "slug": "ishares-global-healthcare-etf",
-    "indexName": "global-healthcare"
+    "indexName": "S&P Global 1200 Energy 4.5/22.5/45 Capped Index (Net)",
+    "inceptionDate": "2001-11-12",
+    "bloombergTicker": "SPGENCUN"
   },
   {
     "ticker": "IXN",
     "productId": "239750",
     "slug": "ishares-global-tech-etf",
-    "indexName": "global-tech"
+    "indexName": "S&P Global 1200 Information Technology 4.5/22.5/45 Capped Index (Net)",
+    "inceptionDate": "2001-11-12",
+    "bloombergTicker": "SPGITCUN"
   },
   {
     "ticker": "IXP",
     "productId": "239751",
     "slug": "ishares-global-telecom-etf",
-    "indexName": "global-telecom"
+    "indexName": "S&P Global 1200 Communication Services 4.5/22.5/45 Capped Index (USD) (Net)",
+    "inceptionDate": "2001-11-12",
+    "bloombergTicker": "SPGCSRUN"
   },
   {
     "ticker": "IXUS",
     "productId": "244048",
     "slug": "ishares-core-msci-total-international-stock-etf",
-    "indexName": "msci-total-intl"
+    "indexName": "MSCI ACWI ex USA IMI Index (Net)",
+    "inceptionDate": "2012-10-18",
+    "bloombergTicker": "M1WDUIM"
   },
   {
     "ticker": "IYC",
     "productId": "239506",
     "slug": "ishares-us-consumer-discretionary-etf",
-    "indexName": "us-consumer-discretionary"
+    "indexName": "Russell 1000 Consumer Disc 40 Act 15/22.5 Daily Capped Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "RIYCCTR"
   },
   {
     "ticker": "IYE",
     "productId": "239507",
     "slug": "ishares-us-energy-etf",
-    "indexName": "us-energy"
+    "indexName": "Russell 1000 Energy RIC 22.5/45 Capped Gross Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "RIYECTR"
   },
   {
     "ticker": "IYF",
     "productId": "239508",
     "slug": "ishares-us-financials-etf",
-    "indexName": "us-financials"
+    "indexName": "Russell 1000 Financials 40 Act 15/22.5 Daily Capped Index (USD)",
+    "inceptionDate": "2000-05-22",
+    "bloombergTicker": "RIYFCTR"
   },
   {
     "ticker": "IYG",
     "productId": "239509",
     "slug": "ishares-us-financial-services-etf",
-    "indexName": "us-financial-services"
+    "indexName": "Dow Jones U.S. Financial Services Index",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "DJUSFVT"
   },
   {
     "ticker": "IYH",
     "productId": "239511",
     "slug": "ishares-us-healthcare-etf",
-    "indexName": "us-healthcare"
+    "indexName": "Russell 1000 Health Care RIC 22.5/45 Capped Gross Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "RIYHCTR"
   },
   {
     "ticker": "IYJ",
     "productId": "239514",
     "slug": "ishares-us-industrials-etf",
-    "indexName": "us-industrials"
+    "indexName": "Russell 1000 Industrials 40 Act 15/22.5 Daily Capped Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "RIYJCTR"
   },
   {
     "ticker": "IYK",
     "productId": "239505",
     "slug": "ishares-us-consumer-staples-etf",
-    "indexName": "us-consumer-staples"
+    "indexName": "Russell 1000 Consumer Staples RIC 22.5/45 Capped Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "RIYKCTR"
   },
   {
     "ticker": "IYM",
     "productId": "239503",
     "slug": "ishares-us-basic-materials-etf",
-    "indexName": "us-basic-materials"
+    "indexName": "Russell 1000 Basic Materials RIC 22.5/45 Capped Gross Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "RIYMCTR"
   },
   {
     "ticker": "IYR",
     "productId": "239520",
     "slug": "ishares-us-real-estate-etf",
-    "indexName": "us-real-estate"
+    "indexName": "Dow Jones U.S. Real Estate Capped Index (USD)",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "DJUSRCUT"
   },
   {
     "ticker": "IYT",
     "productId": "239501",
     "slug": "ishares-transportation-average-etf",
-    "indexName": "transportation-average"
+    "indexName": "S&P Transportation Select Industry FMC Capped Index (USD)",
+    "inceptionDate": "2003-10-06",
+    "bloombergTicker": "SPTSCUT"
   },
   {
     "ticker": "IYW",
     "productId": "239522",
     "slug": "ishares-us-technology-etf",
-    "indexName": "us-technology"
+    "indexName": "Russell 1000 Technology RIC 22.5/45 Capped Index (USD)",
+    "inceptionDate": "2000-05-15",
+    "bloombergTicker": "RIYWCTR"
   },
   {
     "ticker": "IYY",
     "productId": "239513",
     "slug": "ishares-dow-jones-us-etf",
-    "indexName": "dow-jones-us"
+    "indexName": "Dow Jones U.S. Index",
+    "inceptionDate": "2000-06-12",
+    "bloombergTicker": "DJUST"
   },
   {
     "ticker": "JPXN",
     "productId": "239831",
     "slug": "ishares-japan-largecap-etf",
-    "indexName": "japan-largecap"
+    "indexName": "JPX-Nikkei Index 400 (Net)",
+    "inceptionDate": "2001-10-23",
+    "bloombergTicker": "JPNKNTR"
   },
   {
     "ticker": "JXI",
     "productId": "239753",
     "slug": "ishares-global-utilities-etf",
-    "indexName": "global-utilities"
+    "indexName": "S&P Global 1200 Utilities (Sector) Capped Index (USD) (Net)",
+    "inceptionDate": "2006-09-12",
+    "bloombergTicker": "SPG55CUN"
   },
   {
     "ticker": "KSA",
     "productId": "271542",
     "slug": "ishares-msci-saudi-arabia-capped-etf",
-    "indexName": "msci-saudi-arabia-capped"
+    "indexName": "MSCI Saudi Arabia IMI 25/50 Index (Net)",
+    "inceptionDate": "2015-09-16",
+    "bloombergTicker": "M1SA5IM"
   },
   {
     "ticker": "KWT",
     "productId": "312763",
     "slug": "ishares-msci-kuwait-etf",
-    "indexName": "msci-kuwait"
+    "indexName": "MSCI All Kuwait Select Size Liquidity Capped Index (USD) (Net)",
+    "inceptionDate": "2020-09-01",
+    "bloombergTicker": "NU728940"
   },
   {
     "ticker": "KXI",
     "productId": "239740",
     "slug": "ishares-global-consumer-staples-etf",
-    "indexName": "global-consumer-staples"
-  },
-  {
-    "ticker": "LCTD",
-    "productId": "318216",
-    "slug": "ishares-world-ex-u-s-carbon-transition-readiness-aware-active-etf",
-    "indexName": "world-ex-u-s-carbon-transition-readiness-aware-active"
-  },
-  {
-    "ticker": "LCTU",
-    "productId": "318215",
-    "slug": "ishares-u-s-carbon-transition-readiness-aware-active-etf",
-    "indexName": "u-s-carbon-transition-readiness-aware-active"
+    "indexName": "S&P Global 1200 Consumer Staples Sector Capped Index (USD) (Net)",
+    "inceptionDate": "2006-09-12",
+    "bloombergTicker": "SPG30CUN"
   },
   {
     "ticker": "LDEM",
     "productId": "312222",
     "slug": "ishares-esg-msci-em-leaders-etf",
-    "indexName": "esg-msci-em-leaders"
+    "indexName": "MSCI EM Extended ESG Leaders 5% Issuer Capped Index (USD) (Net)",
+    "inceptionDate": "2020-02-05",
+    "bloombergTicker": "NU728105"
   },
   {
     "ticker": "LRGF",
     "productId": "272824",
     "slug": "ishares-msci-usa-multi-factor-etf",
-    "indexName": "msci-usa-multi-factor"
+    "indexName": "STOXX US Equity Factor Index (USD)",
+    "inceptionDate": "2015-04-28",
+    "bloombergTicker": "LRGFUG"
   },
   {
     "ticker": "MADE",
     "productId": "337989",
     "slug": "ishares-u-s-manufacturing-etf",
-    "indexName": "u-s-manufacturing"
-  },
-  {
-    "ticker": "MAXJ",
-    "productId": "337965",
-    "slug": "ishares-large-cap-max-buffer-jun-etf",
-    "indexName": "large-cap-max-buffer-jun"
+    "indexName": "S&P U.S. Manufacturing Select Index",
+    "inceptionDate": "2024-07-17",
+    "bloombergTicker": "SPUSMSUT"
   },
   {
     "ticker": "MCHI",
     "productId": "239619",
     "slug": "ishares-msci-china-etf",
-    "indexName": "msci-china"
-  },
-  {
-    "ticker": "MMAX",
-    "productId": "341942",
-    "slug": "ishares-large-cap-max-buffer-mar-etf",
-    "indexName": "large-cap-max-buffer-mar"
+    "indexName": "MSCI China Index (Net)",
+    "inceptionDate": "2011-03-29",
+    "bloombergTicker": "NDEUCHF"
   },
   {
     "ticker": "MTUM",
     "productId": "251614",
     "slug": "ishares-msci-usa-momentum-factor-etf",
-    "indexName": "msci-usa-momentum-factor"
-  },
-  {
-    "ticker": "MXI",
-    "productId": "239748",
-    "slug": "ishares-global-materials-etf",
-    "indexName": "global-materials"
+    "indexName": "MSCI USA Momentum SR Variant Index (USD)",
+    "inceptionDate": "2013-04-16",
+    "bloombergTicker": "GU731834"
   },
   {
     "ticker": "OEF",
     "productId": "239723",
     "slug": "ishares-sp-100-etf",
-    "indexName": "sp-100"
+    "indexName": "S&P 100 Index",
+    "inceptionDate": "2000-10-23",
+    "bloombergTicker": "SPTR100"
   },
   {
     "ticker": "PABD",
     "productId": "335054",
     "slug": "ishares-paris-aligned-climate-optimized-msci-world-ex-usa-etf",
-    "indexName": "paris-aligned-msci-world-ex-usa"
+    "indexName": "MSCI World ex USA Climate Paris Aligned Benchmark Extended Select Index (Net)",
+    "inceptionDate": "2024-01-17",
+    "bloombergTicker": "NU754289"
   },
   {
     "ticker": "PABU",
     "productId": "325725",
     "slug": "ishares-paris-aligned-climate-optimized-msci-usa-etf",
-    "indexName": "paris-aligned-msci-usa"
+    "indexName": "MSCI USA Climate Paris Aligned Benchmark Extended Select PAB Index (USD)",
+    "inceptionDate": "2022-02-08",
+    "bloombergTicker": "GU739191"
   },
   {
     "ticker": "PFF",
     "productId": "239826",
     "slug": "ishares-us-preferred-stock-etf",
-    "indexName": "us-preferred-stock"
+    "indexName": "ICE Exchange-Listed Preferred & Hybrid Securities Index (USD)",
+    "inceptionDate": "2007-03-26",
+    "bloombergTicker": "PHGY"
   },
   {
     "ticker": "POWR",
     "productId": "239653",
     "slug": "ishares-msci-global-energy-producers-etf",
-    "indexName": "msci-global-energy-producers"
+    "indexName": "S&P U.S. Power Infrastructure Select Index",
+    "inceptionDate": "2012-01-31"
   },
   {
     "ticker": "QAT",
     "productId": "264273",
     "slug": "ishares-msci-qatar-capped-etf",
-    "indexName": "msci-qatar-capped"
-  },
-  {
-    "ticker": "QNXT",
-    "productId": "339694",
-    "slug": "ishares-nasdaq-100-ex-top-30-etf",
-    "indexName": "nasdaq-100-ex-top-30"
-  },
-  {
-    "ticker": "QTOP",
-    "productId": "339775",
-    "slug": "ishares-nasdaq-top-30-stocks-etf",
-    "indexName": "nasdaq-top-30-stocks"
+    "indexName": "MSCI All Qatar Capped Index",
+    "inceptionDate": "2014-04-29",
+    "bloombergTicker": "M1QLCE"
   },
   {
     "ticker": "QUAL",
     "productId": "256101",
     "slug": "ishares-msci-usa-quality-factor-etf",
-    "indexName": "msci-usa-quality-factor"
+    "indexName": "MSCI USA Sector Neutral Quality Index (USD)",
+    "inceptionDate": "2013-07-16",
+    "bloombergTicker": "M2USSNQ"
   },
   {
     "ticker": "REET",
     "productId": "268752",
     "slug": "ishares-global-reit-etf",
-    "indexName": "global-reit"
+    "indexName": "FTSE EPRA Nareit Global REITS Index (Net)",
+    "inceptionDate": "2014-07-08",
+    "bloombergTicker": "RNXG"
   },
   {
     "ticker": "REZ",
     "productId": "239545",
     "slug": "ishares-residential-real-estate-capped-etf",
-    "indexName": "residential-real-estate-capped"
+    "indexName": "FTSE Nareit All Residential Capped Index",
+    "inceptionDate": "2007-05-01",
+    "bloombergTicker": "TFN17C"
   },
   {
     "ticker": "RXI",
     "productId": "239739",
     "slug": "ishares-global-consumer-discretionary-etf",
-    "indexName": "global-consumer-discretionary"
+    "indexName": "S&P Global 1200 Consumer Discretionary Sector Capped Index (USD) (Net)",
+    "inceptionDate": "2006-09-12",
+    "bloombergTicker": "SPG25CUN"
   },
   {
     "ticker": "SCJ",
     "productId": "239666",
     "slug": "ishares-msci-japan-smallcap-etf",
-    "indexName": "msci-japan-smallcap"
+    "indexName": "MSCI Japan Small Cap Index (Net)",
+    "inceptionDate": "2007-12-20",
+    "bloombergTicker": "NCUAJN"
   },
   {
     "ticker": "SCZ",
     "productId": "239627",
     "slug": "ishares-msci-eafe-smallcap-etf",
-    "indexName": "msci-eafe-smallcap"
+    "indexName": "MSCI EAFE Small Cap Index (Net)",
+    "inceptionDate": "2007-12-10",
+    "bloombergTicker": "NCUDEAFE"
   },
   {
     "ticker": "SDG",
     "productId": "283378",
     "slug": "ishares-msci-global-sustainable-development-goals-etf",
-    "indexName": "msci-global-sustainable-development-goals"
+    "indexName": "MSCI ACWI Sustainable Impact Index (Net)",
+    "inceptionDate": "2016-04-20",
+    "bloombergTicker": "M1CXBLRV"
   },
   {
     "ticker": "SIZE",
     "productId": "251465",
     "slug": "ishares-msci-usa-size-factor-etf",
-    "indexName": "msci-usa-size-factor"
-  },
-  {
-    "ticker": "SMAX",
-    "productId": "339266",
-    "slug": "ishares-large-cap-max-buffer-sep-etf",
-    "indexName": "large-cap-max-buffer-sep"
+    "indexName": "MSCI USA Low Size Index",
+    "inceptionDate": "2013-04-16",
+    "bloombergTicker": "GU722395"
   },
   {
     "ticker": "SMIN",
     "productId": "239660",
     "slug": "ishares-msci-india-smallcap-etf",
-    "indexName": "msci-india-smallcap"
+    "indexName": "MSCI India Small Cap Index (Net)",
+    "inceptionDate": "2012-02-08",
+    "bloombergTicker": "MSLUINDN"
   },
   {
     "ticker": "SMLF",
     "productId": "272825",
     "slug": "ishares-msci-usa-small-cap-multi-factor-etf",
-    "indexName": "msci-usa-small-cap-multi-factor"
+    "indexName": "STOXX U.S. Small-Cap Equity Factor Index (USD)",
+    "inceptionDate": "2015-04-28",
+    "bloombergTicker": "SMLFUG"
   },
   {
     "ticker": "SMMD",
     "productId": "288024",
     "slug": "ishares-russell-2500-etf",
-    "indexName": "russell-2500"
+    "indexName": "Russell 2500 Index",
+    "inceptionDate": "2017-07-06",
+    "bloombergTicker": "RU25INTR"
   },
   {
     "ticker": "SMMV",
     "productId": "284609",
     "slug": "ishares-msci-usa-small-cap-min-vol-factor-etf",
-    "indexName": "msci-usa-small-cap-min-vol-factor"
+    "indexName": "MSCI USA Small Cap Minimum Volatility (USD) Index",
+    "inceptionDate": "2016-09-07",
+    "bloombergTicker": "M2CXBRH"
   },
   {
     "ticker": "SOXX",
     "productId": "239705",
     "slug": "ishares-semiconductor-etf",
-    "indexName": "semiconductor"
-  },
-  {
-    "ticker": "STEN",
-    "productId": "345804",
-    "slug": "ishares-large-cap-10-target-buffer-sep-etf",
-    "indexName": "large-cap-10-target-buffer-sep"
+    "indexName": "NYSE Semiconductor Index",
+    "inceptionDate": "2001-07-10",
+    "bloombergTicker": "ICESEMIT"
   },
   {
     "ticker": "SUSA",
     "productId": "239692",
     "slug": "ishares-msci-usa-esg-select-etf",
-    "indexName": "msci-usa-esg-select"
+    "indexName": "MSCI USA Extended ESG Select Index (USD)",
+    "inceptionDate": "2005-01-24",
+    "bloombergTicker": "GU719470"
   },
   {
     "ticker": "SUSL",
     "productId": "308574",
     "slug": "ishares-esg-msci-usa-leaders-etf",
-    "indexName": "esg-msci-usa-leaders"
+    "indexName": "MSCI USA Extended ESG Leaders Index (USD)",
+    "inceptionDate": "2019-05-07",
+    "bloombergTicker": "GU724001"
   },
   {
     "ticker": "SVAL",
     "productId": "316394",
     "slug": "ishares-us-small-cap-value-factor-etf",
-    "indexName": "us-small-cap-value-factor"
+    "indexName": "Russell 2000 Focused Value Select Index (Total Return) (USD)",
+    "inceptionDate": "2020-10-27",
+    "bloombergTicker": "R2FVSTR"
   },
   {
     "ticker": "TCHI",
     "productId": "325390",
     "slug": "ishares-msci-china-multisector-tech-etf",
-    "indexName": "msci-china-multisector-tech"
+    "indexName": "MSCI China Technology Sub-Industries Select Capped Index (USD) (Net)",
+    "inceptionDate": "2022-01-25",
+    "bloombergTicker": "NU738325"
   },
   {
     "ticker": "TECB",
     "productId": "312046",
     "slug": "ishares-u-s-tech-breakthrough-multisector-etf",
-    "indexName": "u-s-tech-breakthrough-multisector"
-  },
-  {
-    "ticker": "TEK",
-    "productId": "339083",
-    "slug": "ishares-technology-opportunities-active-etf",
-    "indexName": "technology-opportunities-active"
-  },
-  {
-    "ticker": "TEND",
-    "productId": "345785",
-    "slug": "ishares-large-cap-10-target-buffer-dec-etf",
-    "indexName": "large-cap-10-target-buffer-dec"
-  },
-  {
-    "ticker": "TENJ",
-    "productId": "345807",
-    "slug": "ishares-large-cap-10-target-buffer-jun-etf",
-    "indexName": "large-cap-10-target-buffer-jun"
-  },
-  {
-    "ticker": "TENM",
-    "productId": "345811",
-    "slug": "ishares-large-cap-10-target-buffer-mar-etf",
-    "indexName": "large-cap-10-target-buffer-mar"
+    "indexName": "NYSE FactSet U.S. Tech Breakthrough Index (USD)",
+    "inceptionDate": "2020-01-08",
+    "bloombergTicker": "NYFSUTBT"
   },
   {
     "ticker": "TEXN",
     "productId": "344021",
     "slug": "ishares-texas-equity-etf",
-    "indexName": "texas-equity"
+    "indexName": "Russell Texas Equity Index",
+    "inceptionDate": "2025-06-23",
+    "bloombergTicker": "RUSTEXT"
   },
   {
     "ticker": "THD",
     "productId": "239688",
     "slug": "ishares-msci-thailand-capped-etf",
-    "indexName": "msci-thailand-capped"
-  },
-  {
-    "ticker": "THRO",
-    "productId": "325384",
-    "slug": "ishares-u-s-thematic-rotation-active-etf",
-    "indexName": "u-s-thematic-rotation-active"
+    "indexName": "MSCI Thailand IMI 25/50 Index (Net)",
+    "inceptionDate": "2008-03-26",
+    "bloombergTicker": "M1TH5IM"
   },
   {
     "ticker": "TOK",
     "productId": "239668",
     "slug": "ishares-msci-kokusai-etf",
-    "indexName": "msci-kokusai"
+    "indexName": "MSCI Kokusai Index (Net)",
+    "inceptionDate": "2007-12-10",
+    "bloombergTicker": "NDDUKOK"
   },
   {
     "ticker": "TOPC",
     "productId": "342676",
     "slug": "ishares-s-p-500-3-capped-etf",
-    "indexName": "sp-500-3pct-capped"
+    "indexName": "S&P 500 3% Capped Index (USD)",
+    "inceptionDate": "2025-04-15",
+    "bloombergTicker": "SPXCW3UT"
   },
   {
     "ticker": "TOPT",
     "productId": "339779",
     "slug": "ishares-top-20-u-s-stocks-etf",
-    "indexName": "top-20-u-s-stocks"
+    "indexName": "S&P 500 Top 20 Select Index",
+    "inceptionDate": "2024-10-23",
+    "bloombergTicker": "SPXT2SUT"
   },
   {
     "ticker": "TUR",
     "productId": "239689",
     "slug": "ishares-msci-turkey-etf",
-    "indexName": "msci-turkey"
-  },
-  {
-    "ticker": "TWOX",
-    "productId": "340800",
-    "slug": "ishares-large-cap-accelerated-outcome-etf",
-    "indexName": "large-cap-accelerated-outcome"
+    "indexName": "MSCI Turkey IMI 25/50 Index (USD) (Net)",
+    "inceptionDate": "2008-03-26",
+    "bloombergTicker": "NU724019"
   },
   {
     "ticker": "UAE",
     "productId": "264275",
     "slug": "ishares-msci-uae-capped-etf",
-    "indexName": "msci-uae-capped"
+    "indexName": "MSCI All UAE Capped Index",
+    "inceptionDate": "2014-04-29",
+    "bloombergTicker": "M1ALCE"
   },
   {
     "ticker": "URTH",
     "productId": "239696",
     "slug": "ishares-msci-world-etf",
-    "indexName": "msci-world"
+    "indexName": "MSCI World Index (Net)",
+    "inceptionDate": "2012-01-10",
+    "bloombergTicker": "NDDUWI"
   },
   {
     "ticker": "USCL",
     "productId": "332075",
     "slug": "ishares-climate-conscious-transition-msci-usa-etf",
-    "indexName": "climate-msci-usa"
+    "indexName": "MSCI USA Extended Climate Action Index",
+    "inceptionDate": "2023-06-06",
+    "bloombergTicker": "GU752805"
   },
   {
     "ticker": "USMV",
     "productId": "239695",
     "slug": "ishares-msci-usa-minimum-volatility-etf",
-    "indexName": "msci-usa-minimum-volatility"
+    "indexName": "MSCI USA Minimum Volatility (USD) Index (USD)",
+    "inceptionDate": "2011-10-18",
+    "bloombergTicker": "M00IMV$T"
   },
   {
     "ticker": "USRT",
     "productId": "239544",
     "slug": "ishares-real-estate-50-etf",
-    "indexName": "real-estate-50"
+    "indexName": "FTSE Nareit Equity REITs 40 Act Capped Index",
+    "inceptionDate": "2007-05-01",
+    "bloombergTicker": "FNREAC"
   },
   {
     "ticker": "USXF",
     "productId": "314365",
     "slug": "ishares-esg-advanced-msci-usa-etf",
-    "indexName": "esg-advanced-msci-usa"
+    "indexName": "MSCI USA Choice ESG Screened Index (USD)",
+    "inceptionDate": "2020-06-16",
+    "bloombergTicker": "GU729302"
   },
   {
     "ticker": "VEGI",
     "productId": "239652",
     "slug": "ishares-msci-global-agriculture-producers-etf",
-    "indexName": "msci-global-agriculture-producers"
+    "indexName": "MSCI ACWI Select Agriculture Producers Investable Market Index (Net)",
+    "inceptionDate": "2012-01-31",
+    "bloombergTicker": "M1WDSGPI"
   },
   {
     "ticker": "VLUE",
     "productId": "251616",
     "slug": "ishares-msci-usa-value-factor-etf",
-    "indexName": "msci-usa-value-factor"
+    "indexName": "MSCI USA Enhanced Value Index (USD)",
+    "inceptionDate": "2013-04-16",
+    "bloombergTicker": "M2USEV"
   },
   {
     "ticker": "WOOD",
     "productId": "239752",
     "slug": "ishares-global-timber-forestry-etf",
-    "indexName": "global-timber-forestry"
+    "indexName": "S&P Global Timber & Forestry Index (Net)",
+    "inceptionDate": "2008-06-24",
+    "bloombergTicker": "SPGTTFN"
   },
   {
     "ticker": "WSML",
     "productId": "342357",
     "slug": "ishares-msci-world-small-cap-etf",
-    "indexName": "msci-world-small-cap"
+    "indexName": "MSCI World Small Cap Index (Net)",
+    "inceptionDate": "2025-04-01",
+    "bloombergTicker": "NCUDWI"
   },
   {
     "ticker": "XJH",
     "productId": "315914",
     "slug": "ishares-esg-select-screened-s-p-mid-cap-etf",
-    "indexName": "esg-sp-mid-cap"
+    "indexName": "S&P MidCap 400 Sustainability Screened Index (USD)",
+    "inceptionDate": "2020-09-22",
+    "bloombergTicker": "SP4ESUT"
   },
   {
     "ticker": "XJR",
     "productId": "315920",
     "slug": "ishares-esg-select-screened-s-p-small-cap-etf",
-    "indexName": "esg-sp-small-cap"
+    "indexName": "S&P SmallCap 600 Sustainability Screened Index (USD)",
+    "inceptionDate": "2020-09-22",
+    "bloombergTicker": "SP6ESUT"
   },
   {
     "ticker": "XOEF",
     "productId": "344551",
     "slug": "ishares-s-p-500-ex-s-p-100-etf",
-    "indexName": "sp-500-ex-100"
+    "indexName": "S&P 500 EX-S&P 100 SELECT INDEX",
+    "inceptionDate": "2025-07-08",
+    "bloombergTicker": "SP5E1SUT"
   },
   {
     "ticker": "XT",
     "productId": "272532",
     "slug": "ishares-exponential-technologies-etf",
-    "indexName": "exponential-technologies"
+    "indexName": "Morningstar Exponential Technologies Index (Net)",
+    "inceptionDate": "2015-03-19",
+    "bloombergTicker": "MSEXPONU"
   },
   {
     "ticker": "XVV",
     "productId": "315917",
     "slug": "ishares-esg-select-screened-s-p-500-etf",
-    "indexName": "esg-sp-500"
+    "indexName": "S&P 500 Sustainability Screened Index (USD)",
+    "inceptionDate": "2020-09-22",
+    "bloombergTicker": "SP5ESUT"
   }
 ]

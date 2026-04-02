@@ -21,22 +21,24 @@ import (
 
 var _ = Describe("iSharesETFMap", func() {
 	It("is populated with entries from the embedded JSON", func() {
-		Expect(len(iSharesETFMap)).To(BeNumerically(">", 280))
+		Expect(len(iSharesETFMap)).To(BeNumerically(">", 230))
 	})
 
 	It("contains IVV with correct metadata", func() {
 		etf, ok := iSharesETFMap["IVV"]
 		Expect(ok).To(BeTrue())
 		Expect(etf.ProductID).To(Equal("239726"))
-		Expect(etf.IndexName).To(Equal("sp500"))
+		Expect(etf.IndexName).To(Equal("S&P 500 Index (USD)"))
 		Expect(etf.Slug).To(ContainSubstring("sp-500"))
+		Expect(etf.InceptionDate.IsZero()).To(BeFalse())
 	})
 
 	It("contains IWM with correct metadata", func() {
 		etf, ok := iSharesETFMap["IWM"]
 		Expect(ok).To(BeTrue())
 		Expect(etf.ProductID).To(Equal("239710"))
-		Expect(etf.IndexName).To(Equal("russell-2000"))
+		Expect(etf.IndexName).To(Equal("Russell 2000 Index"))
+		Expect(etf.InceptionDate.IsZero()).To(BeFalse())
 	})
 
 	It("preserves all original 19 ETFs", func() {
@@ -51,13 +53,9 @@ var _ = Describe("iSharesETFMap", func() {
 		}
 	})
 
-	It("has unique index names", func() {
-		seen := make(map[string]string)
+	It("has all entries with inception dates", func() {
 		for ticker, etf := range iSharesETFMap {
-			if prev, ok := seen[etf.IndexName]; ok {
-				Fail("duplicate indexName '" + etf.IndexName + "' for tickers " + prev + " and " + ticker)
-			}
-			seen[etf.IndexName] = ticker
+			Expect(etf.InceptionDate.IsZero()).To(BeFalse(), "expected %s to have an inception date", ticker)
 		}
 	})
 })

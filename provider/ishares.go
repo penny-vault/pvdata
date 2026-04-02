@@ -33,9 +33,12 @@ import (
 type IShares struct{}
 
 type iSharesETF struct {
-	ProductID string `json:"productId"`
-	Slug      string `json:"slug"`
-	IndexName string `json:"indexName"`
+	ProductID       string    `json:"productId"`
+	Slug            string    `json:"slug"`
+	IndexName       string    `json:"indexName"`
+	BloombergTicker string    `json:"bloombergTicker"`
+	InceptionDate   time.Time `json:"-"`
+	InceptionStr    string    `json:"inceptionDate"`
 }
 
 //go:embed ishares_etfs.json
@@ -55,6 +58,15 @@ func init() {
 
 	iSharesETFMap = make(map[string]iSharesETF, len(entries))
 	for _, e := range entries {
+		if e.InceptionStr != "" {
+			t, err := time.Parse("2006-01-02", e.InceptionStr)
+			if err != nil {
+				panic("failed to parse inceptionDate for " + e.Ticker + ": " + err.Error())
+			}
+
+			e.InceptionDate = t
+		}
+
 		iSharesETFMap[e.Ticker] = e.iSharesETF
 	}
 }
@@ -212,6 +224,17 @@ func downloadSingleISharesETF(
 	var dates []fetchDate
 
 	startDate := time.Now().Add(-lookback)
+
+	if !etf.InceptionDate.IsZero() && startDate.Before(etf.InceptionDate) {
+		logger.Info().
+			Time("OriginalStart", startDate).
+			Time("InceptionDate", etf.InceptionDate).
+			Str("Ticker", ticker).
+			Msg("clamping lookback start to fund inception date")
+
+		startDate = etf.InceptionDate
+	}
+
 	yesterday := time.Now().AddDate(0, 0, -1).Truncate(24 * time.Hour)
 
 	if startDate.Before(yesterday) {
