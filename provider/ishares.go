@@ -26,6 +26,7 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog"
 )
@@ -306,29 +307,55 @@ func downloadSingleISharesETF(
 			Str("IndexName", etf.IndexName).
 			Msg("parsed iShares holdings")
 
-		// Build current holdings map
-		currentHoldings := make(map[string]indexMember, len(parseResult.Holdings))
-		missingFigi := 0
+		// Collect tickers missing from figiMap and resolve via OpenFIGI
+		var unknownAssets []*data.Asset
 
 		for _, holding := range parseResult.Holdings {
-			figi := figiMap[holding.Ticker]
-			if figi != "" {
-				currentHoldings[holding.Ticker] = indexMember{
-					CompositeFigi: figi,
-					Weight:        holding.Weight,
-				}
-			} else {
-				missingFigi++
+			if figiMap[holding.Ticker] == "" {
+				unknownAssets = append(unknownAssets, &data.Asset{Ticker: holding.Ticker})
 			}
 		}
 
-		if missingFigi > 0 {
-			logger.Warn().
-				Int("MissingFigi", missingFigi).
-				Int("TotalHoldings", len(parseResult.Holdings)).
-				Int("Matched", len(currentHoldings)).
+		if len(unknownAssets) > 0 {
+			logger.Info().
+				Int("Count", len(unknownAssets)).
 				Str("IndexName", etf.IndexName).
-				Msg("holdings dropped due to missing FIGI -- run OpenFIGI enrichment to fix")
+				Msg("resolving unknown tickers via OpenFIGI")
+
+			figi.Enrich(unknownAssets...)
+
+			for _, asset := range unknownAssets {
+				if asset.CompositeFigi != "" {
+					figiMap[asset.Ticker] = asset.CompositeFigi
+				}
+			}
+		}
+
+		// Build current holdings map -- fail this index if any ticker is unresolved
+		currentHoldings := make(map[string]indexMember, len(parseResult.Holdings))
+		var unresolved []string
+
+		for _, holding := range parseResult.Holdings {
+			f := figiMap[holding.Ticker]
+			if f != "" {
+				currentHoldings[holding.Ticker] = indexMember{
+					CompositeFigi: f,
+					Weight:        holding.Weight,
+				}
+			} else {
+				unresolved = append(unresolved, holding.Ticker)
+			}
+		}
+
+		if len(unresolved) > 0 {
+			logger.Error().
+				Int("Unresolved", len(unresolved)).
+				Int("TotalHoldings", len(parseResult.Holdings)).
+				Strs("Tickers", unresolved).
+				Str("IndexName", etf.IndexName).
+				Msg("aborting index update -- holdings have unresolved FIGIs even after OpenFIGI lookup")
+
+			return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(unresolved), etf.IndexName)
 		}
 
 		// Diff against in-memory state
