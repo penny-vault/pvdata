@@ -50,23 +50,27 @@ func NewAuthMiddleware() fiber.Handler {
 	issuer := fmt.Sprintf("https://%s", domain)
 
 	return func(c *fiber.Ctx) error {
+		// Check Authorization header first, then fall back to ?token= query param (for SSE)
+		var tokenString string
+
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(HttpError{
-				Code:    "401",
-				Message: "missing authorization header",
-			})
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				tokenString = parts[1]
+			}
 		}
 
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			return c.Status(fiber.StatusUnauthorized).JSON(HttpError{
-				Code:    "401",
-				Message: "invalid authorization header format",
-			})
+		if tokenString == "" {
+			tokenString = c.Query("token")
 		}
 
-		tokenString := parts[1]
+		if tokenString == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(HttpError{
+				Code:    "401",
+				Message: "missing authorization",
+			})
+		}
 
 		parserOpts := []jwt.ParserOption{
 			jwt.WithValidMethods([]string{"RS256"}),
