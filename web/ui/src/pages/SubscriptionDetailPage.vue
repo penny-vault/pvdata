@@ -49,6 +49,8 @@ const maxRunRecords = 200
 const runLookback = ref('14d')
 const runLogRef = ref<HTMLElement | null>(null)
 const runMenuRef = ref()
+const showCustomLookback = ref(false)
+const customLookbackInput = ref('')
 const runMenuItems = [
   { label: 'Last 1 day', command: () => { runLookback.value = '1d'; triggerRun() } },
   { label: 'Last 7 days', command: () => { runLookback.value = '7d'; triggerRun() } },
@@ -56,6 +58,8 @@ const runMenuItems = [
   { label: 'Last 30 days', command: () => { runLookback.value = '30d'; triggerRun() } },
   { label: 'Last 90 days', command: () => { runLookback.value = '90d'; triggerRun() } },
   { label: 'Last 365 days', command: () => { runLookback.value = '365d'; triggerRun() } },
+  { separator: true },
+  { label: 'Custom...', icon: 'pi pi-pencil', command: () => { customLookbackInput.value = runLookback.value; showCustomLookback.value = true } },
 ]
 const actionsMenuRef = ref()
 const actionsMenuItems = computed(() => {
@@ -276,6 +280,15 @@ onUnmounted(() => {
       </div>
 
       <Message v-if="error" severity="error" :closable="true" style="margin-bottom: 1rem" @close="error = ''">{{ error }}</Message>
+
+      <Dialog v-model:visible="showCustomLookback" header="Custom Lookback" :modal="true" :style="{ width: '20rem' }">
+        <div style="margin-bottom: 0.5rem">Enter lookback period (e.g. 500d):</div>
+        <InputText v-model="customLookbackInput" placeholder="14d" style="width: 100%" @keyup.enter="runLookback = customLookbackInput; showCustomLookback = false; triggerRun()" />
+        <template #footer>
+          <Button label="Cancel" severity="secondary" @click="showCustomLookback = false" />
+          <Button label="Run" icon="pi pi-bolt" :disabled="!customLookbackInput.trim()" @click="runLookback = customLookbackInput; showCustomLookback = false; triggerRun()" />
+        </template>
+      </Dialog>
 
       <Dialog v-model:visible="showDeleteConfirm" header="Delete Subscription" :modal="true" :style="{ width: '30rem' }">
         <p>This will permanently delete <strong>{{ subscription.name || subscription.id }}</strong> and all its data tables. This cannot be undone.</p>
