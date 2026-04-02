@@ -308,6 +308,7 @@ func downloadSingleISharesETF(
 
 		// Build current holdings map
 		currentHoldings := make(map[string]indexMember, len(parseResult.Holdings))
+		missingFigi := 0
 
 		for _, holding := range parseResult.Holdings {
 			figi := figiMap[holding.Ticker]
@@ -316,7 +317,18 @@ func downloadSingleISharesETF(
 					CompositeFigi: figi,
 					Weight:        holding.Weight,
 				}
+			} else {
+				missingFigi++
 			}
+		}
+
+		if missingFigi > 0 {
+			logger.Warn().
+				Int("MissingFigi", missingFigi).
+				Int("TotalHoldings", len(parseResult.Holdings)).
+				Int("Matched", len(currentHoldings)).
+				Str("IndexName", etf.IndexName).
+				Msg("holdings dropped due to missing FIGI -- run OpenFIGI enrichment to fix")
 		}
 
 		// Diff against in-memory state
@@ -357,7 +369,7 @@ func downloadSingleISharesETF(
 			memLastSnapshotDate = eventDate
 
 			logger.Info().
-				Int("NumSnapshots", len(currentHoldings)).
+				Int("NumConstituents", len(currentHoldings)).
 				Str("IndexName", etf.IndexName).
 				Time("SnapshotDate", eventDate).
 				Msg("emitted index snapshots")
