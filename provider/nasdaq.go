@@ -187,22 +187,31 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	logger.Info().Int("NumHoldings", len(holdings)).Msg("parsed NDX-100 holdings")
 
-	// Build current holdings map (ticker -> figi)
-	currentHoldings := make(map[string]string, len(holdings))
+	// Build current holdings map (ticker -> indexMember)
+	currentHoldings := make(map[string]indexMember, len(holdings))
 	for _, holding := range holdings {
 		if figi, ok := figiMap[holding.Ticker]; ok {
-			currentHoldings[holding.Ticker] = figi
+			currentHoldings[holding.Ticker] = indexMember{
+				CompositeFigi: figi,
+				Weight:        holding.Weight,
+			}
 		}
 	}
 
 	// Get previous snapshot and emit changelog
 	table := subscription.DataTablesMap[data.IndexKey]
-	previous := previousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
-	added, removed := diffSnapshots(currentHoldings, previous)
+	prevRaw := previousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
+
+	previous := make(map[string]indexMember, len(prevRaw))
+	for ticker, figi := range prevRaw {
+		previous[ticker] = indexMember{CompositeFigi: figi}
+	}
+
+	added, removed, _ := diffSnapshots(currentHoldings, previous)
 
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
 
-	emitChangelog(added, removed, "ndx100", eventDate, nil, &data.Observation{
+	emitChangelog(added, removed, "ndx100", eventDate, &data.Observation{
 		ObservationDate:  time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,
@@ -211,23 +220,17 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	// Check if a snapshot should be taken
 	lastDate := lastSnapshotDate(ctx, subscription.Library.Pool, table, "ndx100")
-	if shouldTakeSnapshot(lastDate, snapshotFrequency) {
-		// Build a weight map for quick lookup
-		weightMap := make(map[string]float64, len(holdings))
-		for _, holding := range holdings {
-			weightMap[holding.Ticker] = holding.Weight
-		}
-
+	if shouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
 		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
 
-		for ticker, figi := range currentHoldings {
+		for ticker, member := range currentHoldings {
 			out <- &data.Observation{
 				IndexSnapshot: &data.IndexSnapshot{
 					Ticker:        ticker,
-					CompositeFigi: figi,
+					CompositeFigi: member.CompositeFigi,
 					IndexName:     "ndx100",
 					SnapshotDate:  snapshotDate,
-					Weight:        weightMap[ticker],
+					Weight:        member.Weight,
 				},
 				ObservationDate:  time.Now(),
 				SubscriptionID:   subscription.ID,

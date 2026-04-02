@@ -40,9 +40,9 @@ var _ = Describe("ComputeAdjustedClose", func() {
 		// After row 1: adjustFactor = 1.0 * (1 + 2/102) = 1.01961
 		// Row 2: AdjClose = 101 / 1.01961 ~= 99.07
 		rows := []EodRow{
-			{Close: 100.0, Dividend: 0, SplitFactor: 1.0},  // newest
+			{Close: 100.0, Dividend: 0, SplitFactor: 1.0},   // newest
 			{Close: 102.0, Dividend: 2.0, SplitFactor: 1.0}, // ex-dividend date
-			{Close: 101.0, Dividend: 0, SplitFactor: 1.0},  // oldest
+			{Close: 101.0, Dividend: 0, SplitFactor: 1.0},   // oldest
 		}
 		result := ComputeAdjustedClose(rows)
 		Expect(result[0].AdjClose).To(BeNumerically("~", 100.0, 0.01))
