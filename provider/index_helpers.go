@@ -50,6 +50,8 @@ func shouldTakeSnapshot(lastSnapshotDate, currentDate time.Time, frequency strin
 		interval = 30 * 24 * time.Hour
 	case "quarterly":
 		interval = 90 * 24 * time.Hour
+	case "yearly":
+		interval = 365 * 24 * time.Hour
 	default:
 		interval = 7 * 24 * time.Hour
 	}

@@ -179,7 +179,7 @@ onMounted(() => { loadSubscription(); loadRuns() })
         <Tabs v-model:value="activeTab">
           <TabList>
             <Tab value="0">Run History</Tab>
-            <Tab v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(idx + 1)">{{ dt }}</Tab>
+            <Tab v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(Number(idx) + 1)">{{ dt }}</Tab>
           </TabList>
           <TabPanels>
             <TabPanel value="0">
@@ -195,7 +195,7 @@ onMounted(() => { loadSubscription(); loadRuns() })
                 <Button label="Load more" text @click="runsOffset = runs.length; loadRuns(true)" />
               </div>
             </TabPanel>
-            <TabPanel v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(idx + 1)">
+            <TabPanel v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(Number(idx) + 1)">
               <DataBrowser :subscription-id="id" :datatype="dt" />
             </TabPanel>
           </TabPanels>

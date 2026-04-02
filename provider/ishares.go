@@ -65,20 +65,19 @@ func (ishares *IShares) Name() string {
 
 func (ishares *IShares) ConfigDescription() map[string]string {
 	return map[string]string{
-		"tickers":           "Comma-separated list of iShares ETF tickers to track (e.g. IVV,IWM,IJH)",
-		"snapshotFrequency": "How often to take snapshots: daily, weekly, monthly, quarterly (default: weekly)",
+		"etfs": "Comma-separated iShares ETF tickers whose holdings define the index. Defaults to all supported ETFs if left empty.",
 	}
 }
 
 func (ishares *IShares) Description() string {
-	return "iShares by BlackRock provides ETF holdings data. This provider scrapes index constituent holdings with weights from the iShares website."
+	return "Track index constituents and membership changes by scraping iShares ETF holdings from BlackRock."
 }
 
 func (ishares *IShares) Datasets() map[string]Dataset {
 	return map[string]Dataset{
-		"iShares Holdings": {
-			Name:        "iShares Holdings",
-			Description: "Download ETF holdings and track index membership changes.",
+		"Index Constituents": {
+			Name:        "Index Constituents",
+			Description: "Download index constituent holdings with weights and track membership changes over time.",
 			DataTypes:   []*data.DataType{data.DataTypes[data.IndexKey]},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
@@ -108,24 +107,20 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 		exitNotification <- runSummary
 	}()
 
-	// Parse tickers from config
-	tickerStr := subscription.Config["tickers"]
-	if tickerStr == "" {
-		logger.Error().Msg("no tickers configured for iShares provider")
+	// Parse ETF tickers from config; default to all supported ETFs
+	etfStr := subscription.Config["etfs"]
 
-		runSummary.Status = data.RunFailed
+	var tickers []string
 
-		return
-	}
-
-	tickers := strings.Split(tickerStr, ",")
-	for i := range tickers {
-		tickers[i] = strings.TrimSpace(tickers[i])
-	}
-
-	snapshotFrequency := subscription.Config["snapshotFrequency"]
-	if snapshotFrequency == "" {
-		snapshotFrequency = "weekly"
+	if etfStr == "" {
+		for t := range iSharesETFMap {
+			tickers = append(tickers, t)
+		}
+	} else {
+		tickers = strings.Split(etfStr, ",")
+		for i := range tickers {
+			tickers[i] = strings.TrimSpace(tickers[i])
+		}
 	}
 
 	// Acquire DB connection and build figi map
@@ -173,7 +168,7 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 			continue
 		}
 
-		n, err := downloadSingleISharesETF(ctx, client, ticker, etf, figiMap, snapshotFrequency, subscription, out)
+		n, err := downloadSingleISharesETF(ctx, client, ticker, etf, figiMap, subscription, out)
 		if err != nil {
 			logger.Error().Err(err).Str("Ticker", ticker).Msg("failed to download iShares ETF holdings")
 			continue
@@ -198,7 +193,6 @@ func downloadSingleISharesETF(
 	ticker string,
 	etf iSharesETF,
 	figiMap map[string]string,
-	snapshotFrequency string,
 	subscription *library.Subscription,
 	out chan<- *data.Observation,
 ) (int, error) {
@@ -319,7 +313,7 @@ func downloadSingleISharesETF(
 		numObs += len(weightChanged)
 
 		// Check if snapshot is due
-		if shouldTakeSnapshot(memLastSnapshotDate, eventDate, snapshotFrequency) {
+		if shouldTakeSnapshot(memLastSnapshotDate, eventDate, "yearly") {
 			for t, member := range currentHoldings {
 				out <- &data.Observation{
 					IndexSnapshot: &data.IndexSnapshot{
