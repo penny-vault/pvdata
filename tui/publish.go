@@ -145,6 +145,8 @@ func (m *PublishModel) buildViewsTable() table.Model {
 		table.WithHeight(height),
 	)
 	t.SetStyles(tableStyles())
+	t.UpdateViewport()
+	t.UpdateViewport()
 
 	return t
 }
@@ -197,6 +199,7 @@ func (m *PublishModel) buildSourcesTable() table.Model {
 		table.WithHeight(height),
 	)
 	t.SetStyles(tableStyles())
+	t.UpdateViewport()
 
 	return t
 }
@@ -229,6 +232,7 @@ func (m *PublishModel) buildAddTable() table.Model {
 		table.WithHeight(height),
 	)
 	t.SetStyles(tableStyles())
+	t.UpdateViewport()
 
 	return t
 }
@@ -261,6 +265,7 @@ func (m *PublishModel) buildNewViewTable() table.Model {
 		table.WithHeight(height),
 	)
 	t.SetStyles(tableStyles())
+	t.UpdateViewport()
 
 	return t
 }

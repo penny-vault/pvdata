@@ -132,7 +132,7 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 	} else {
 		tickers = strings.Split(etfStr, ",")
 		for i := range tickers {
-			tickers[i] = strings.TrimSpace(tickers[i])
+			tickers[i] = strings.ToUpper(strings.TrimSpace(tickers[i]))
 		}
 	}
 
