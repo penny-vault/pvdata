@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   getSubscription, getRunHistory,
   activateSubscription, deactivateSubscription, deleteSubscription,
+  runSubscription, subscribeRunEvents,
 } from '@/lib/api'
 import RevoGrid from '@revolist/vue3-datagrid'
 import Tag from 'primevue/tag'
@@ -17,6 +18,7 @@ import TabPanel from 'primevue/tabpanel'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import ProgressSpinner from 'primevue/progressspinner'
+import ProgressBar from 'primevue/progressbar'
 import Message from 'primevue/message'
 import RunHistoryChart from '@/components/RunHistoryChart.vue'
 import DataBrowser from '@/components/DataBrowser.vue'
@@ -38,6 +40,14 @@ const runsOffset = ref(0)
 const runsLimit = 20
 const activeTab = ref('0')
 const deleteConfirmText = ref('')
+
+const runStatus = ref<'idle' | 'running' | 'completed' | 'failed'>('idle')
+const runRecordCount = ref(0)
+const runRecords = ref<{ type: string; summary: string }[]>([])
+const maxRunRecords = 200
+const runLookback = ref('14d')
+const runLogRef = ref<HTMLElement | null>(null)
+let eventSource: EventSource | null = null
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr || dateStr.startsWith('0001')) return '--'
@@ -119,7 +129,84 @@ function openSqlConsole() {
   router.push({ path: '/sql', query: { q: `SELECT * FROM ${table} LIMIT 100` } })
 }
 
+async function triggerRun() {
+  try {
+    runStatus.value = 'running'
+    runRecordCount.value = 0
+    runRecords.value = []
+    error.value = ''
+
+    await runSubscription(id.value, runLookback.value)
+
+    eventSource = await subscribeRunEvents(id.value)
+
+    eventSource.addEventListener('started', () => {
+      runStatus.value = 'running'
+    })
+
+    eventSource.addEventListener('record', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      runRecordCount.value = data.count
+      runRecords.value.push({ type: data.type, summary: data.summary })
+      if (runRecords.value.length > maxRunRecords) {
+        runRecords.value = runRecords.value.slice(-maxRunRecords)
+      }
+    })
+
+    eventSource.addEventListener('completed', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      runRecordCount.value = data.count
+      runStatus.value = 'completed'
+      eventSource?.close()
+      eventSource = null
+      loadSubscription()
+      loadRuns()
+    })
+
+    eventSource.addEventListener('failed', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      runRecordCount.value = data.count
+      runStatus.value = 'failed'
+      error.value = data.error || 'Run failed'
+      eventSource?.close()
+      eventSource = null
+      loadSubscription()
+      loadRuns()
+    })
+
+    eventSource.onerror = () => {
+      if (runStatus.value === 'running') {
+        runStatus.value = 'failed'
+        error.value = 'Lost connection to run event stream'
+      }
+      eventSource?.close()
+      eventSource = null
+    }
+  } catch (e: any) {
+    runStatus.value = 'failed'
+    error.value = e.message || 'Failed to start run'
+  }
+}
+
+function dismissRunPanel() {
+  runStatus.value = 'idle'
+  runRecords.value = []
+  runRecordCount.value = 0
+}
+
+watch(runRecords, () => {
+  nextTick(() => {
+    if (runLogRef.value) {
+      runLogRef.value.scrollTop = runLogRef.value.scrollHeight
+    }
+  })
+}, { deep: true })
+
 onMounted(() => { loadSubscription(); loadRuns() })
+
+onUnmounted(() => {
+  eventSource?.close()
+})
 </script>
 
 <template>
@@ -142,6 +229,10 @@ onMounted(() => { loadSubscription(); loadRuns() })
           </div>
         </div>
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+          <div v-if="subscription.provider !== 'legacy'" style="display: flex; align-items: center; gap: 0.5rem">
+            <InputText v-model="runLookback" placeholder="14d" style="width: 5rem" :disabled="runStatus === 'running'" />
+            <Button label="Run Now" icon="pi pi-bolt" severity="info" :disabled="runStatus === 'running'" @click="triggerRun" />
+          </div>
           <Button v-if="subscription.provider !== 'legacy'" :label="subscription.active ? 'Deactivate' : 'Activate'" :icon="subscription.active ? 'pi pi-pause' : 'pi pi-play'" text @click="toggleActive" />
           <Button :label="editing ? 'Cancel Edit' : 'Edit'" icon="pi pi-pencil" severity="secondary" @click="editing = !editing" />
           <Button label="Delete" icon="pi pi-trash" severity="danger" @click="showDeleteConfirm = true" />
@@ -166,6 +257,38 @@ onMounted(() => { loadSubscription(); loadRuns() })
             <SubscriptionForm :subscription="subscription" @saved="onSaved" @cancel="editing = false" />
           </template>
         </Card>
+      </div>
+
+      <div v-if="runStatus !== 'idle'" style="margin-bottom: 1rem; border: 1px solid var(--p-content-border-color); border-radius: 8px; overflow: hidden">
+        <div :style="{
+          padding: '0.75rem 1rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          background: runStatus === 'completed' ? 'var(--p-green-900)' : runStatus === 'failed' ? 'var(--p-red-900)' : 'var(--p-surface-800)',
+        }">
+          <div style="display: flex; align-items: center; gap: 0.5rem">
+            <i v-if="runStatus === 'running'" class="pi pi-spin pi-spinner" />
+            <i v-else-if="runStatus === 'completed'" class="pi pi-check-circle" />
+            <i v-else class="pi pi-times-circle" />
+            <span style="font-weight: 600">
+              {{ runStatus === 'running' ? 'Running...' : runStatus === 'completed' ? 'Completed' : 'Failed' }}
+            </span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 1rem">
+            <span>Records: {{ runRecordCount.toLocaleString() }}</span>
+            <Button v-if="runStatus !== 'running'" icon="pi pi-times" text size="small" @click="dismissRunPanel" />
+          </div>
+        </div>
+        <div v-if="runStatus === 'running'" style="height: 2px">
+          <ProgressBar mode="indeterminate" style="height: 2px" />
+        </div>
+        <div ref="runLogRef" style="max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; padding: 0.5rem; background: var(--p-surface-900)">
+          <div v-for="(rec, i) in runRecords" :key="i" style="padding: 1px 0; white-space: nowrap">
+            <span style="opacity: 0.5; margin-right: 0.5rem">{{ rec.type }}</span>
+            <span>{{ rec.summary }}</span>
+          </div>
+        </div>
       </div>
 
       <div v-if="!editing" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem">
