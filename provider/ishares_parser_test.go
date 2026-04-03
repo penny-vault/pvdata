@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/rs/zerolog"
 )
 
 var _ = Describe("parseISharesCSV", func() {
@@ -158,6 +159,35 @@ Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,P
 		Expect(result.Holdings[0].Ticker).To(Equal("REAL"))
 	})
 
+	It("extracts holding name", func() {
+		result, err := parseISharesCSV(sampleCSV)
+		Expect(err).ToNot(HaveOccurred())
+		var aapl *iSharesHolding
+		for _, h := range result.Holdings {
+			if h.Ticker == "AAPL" {
+				aapl = &h
+				break
+			}
+		}
+		Expect(aapl).ToNot(BeNil())
+		Expect(aapl.Name).To(Equal("APPLE INC"))
+	})
+
+	It("filters out dash ticker", func() {
+		csv := []byte(`iShares Test ETF
+Fund Holdings as of,"Jun 01, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"OK","OK CORP","Tech","Equity","100.00","5.50","100.00","1.00","100.00","United States","NYSE","USD","1.00","USD","-"
+"-","BLACKROCK CASH","","Equity","50.00","0.01","50.00","50000.00","1.00","United States","-","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Ticker).To(Equal("OK"))
+	})
+
 	It("skips rows with unparseable weight", func() {
 		csv := []byte(`iShares Test ETF
 Fund Holdings as of,"Jun 01, 2026"
@@ -172,5 +202,79 @@ Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,P
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Holdings).To(HaveLen(1))
 		Expect(result.Holdings[0].Ticker).To(Equal("OK"))
+	})
+})
+
+var _ = Describe("resolveShareClass", func() {
+	var (
+		figiMap      map[string]string
+		assetNameMap map[string]string
+		logger       zerolog.Logger
+	)
+
+	BeforeEach(func() {
+		figiMap = map[string]string{
+			"BRK/B": "BBG000DWG505",
+			"BF/B":  "BBG000BFCQN2",
+			"MOG/A": "BBG000BNNKG9",
+		}
+		assetNameMap = map[string]string{
+			"BRK/B": "Berkshire Hathaway Inc",
+			"BF/B":  "Brown-Forman Corp",
+			"MOG/A": "Moog Inc",
+		}
+		logger = zerolog.Nop()
+	})
+
+	It("resolves BRKB to BRK/B when names match", func() {
+		holding := iSharesHolding{Ticker: "BRKB", Name: "BERKSHIRE HATHAWAY INC CLASS B", Weight: 0.01}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeTrue())
+		Expect(figiMap["BRKB"]).To(Equal("BBG000DWG505"))
+	})
+
+	It("resolves BFB to BF/B when names match", func() {
+		holding := iSharesHolding{Ticker: "BFB", Name: "BROWN FORMAN CORP CLASS B", Weight: 0.005}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeTrue())
+		Expect(figiMap["BFB"]).To(Equal("BBG000BFCQN2"))
+	})
+
+	It("resolves MOGA to MOG/A when names match", func() {
+		holding := iSharesHolding{Ticker: "MOGA", Name: "MOOG INC CLASS A", Weight: 0.002}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeTrue())
+		Expect(figiMap["MOGA"]).To(Equal("BBG000BNNKG9"))
+	})
+
+	It("rejects when names do not match", func() {
+		holding := iSharesHolding{Ticker: "BRKB", Name: "TOTALLY DIFFERENT COMPANY", Weight: 0.01}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeFalse())
+		Expect(figiMap).ToNot(HaveKey("BRKB"))
+	})
+
+	It("rejects tickers not ending in A or B", func() {
+		holding := iSharesHolding{Ticker: "AAPL", Name: "APPLE INC", Weight: 0.05}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeFalse())
+	})
+
+	It("rejects when candidate ticker does not exist", func() {
+		holding := iSharesHolding{Ticker: "XYZB", Name: "XYZ CORP CLASS B", Weight: 0.01}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeFalse())
+	})
+
+	It("rejects when holding name is empty", func() {
+		holding := iSharesHolding{Ticker: "BRKB", Name: "", Weight: 0.01}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeFalse())
+	})
+
+	It("rejects single-character tickers", func() {
+		holding := iSharesHolding{Ticker: "B", Name: "SOMETHING", Weight: 0.01}
+		resolved := resolveShareClass(holding, figiMap, assetNameMap, &logger)
+		Expect(resolved).To(BeFalse())
 	})
 })

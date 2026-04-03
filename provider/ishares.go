@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adrg/strutil"
+	"github.com/adrg/strutil/metrics"
 	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
@@ -157,8 +159,11 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 	}
 
 	figiMap := make(map[string]string, len(assets))
+	assetNameMap := make(map[string]string, len(assets))
+
 	for _, asset := range assets {
 		figiMap[asset.Ticker] = asset.CompositeFigi
+		assetNameMap[asset.Ticker] = asset.Name
 	}
 
 	// Create HTTP client
@@ -181,7 +186,7 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 			continue
 		}
 
-		n, err := downloadSingleISharesETF(ctx, client, ticker, etf, figiMap, subscription, out)
+		n, err := downloadSingleISharesETF(ctx, client, ticker, etf, figiMap, assetNameMap, subscription, out)
 		if err != nil {
 			logger.Error().Err(err).Str("Ticker", ticker).Msg("failed to download iShares ETF holdings")
 			continue
@@ -189,9 +194,9 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 
 		numObs += n
 
-		// Randomized delay between requests (5-45 seconds), skip after last ticker
+		// Randomized delay between requests (2-10 seconds), skip after last ticker
 		if i < len(tickers)-1 {
-			delay := 5*time.Second + time.Duration(rand.IntN(41))*time.Second
+			delay := 2*time.Second + time.Duration(rand.IntN(9))*time.Second
 			logger.Info().Dur("Delay", delay).Msg("waiting between iShares requests")
 			time.Sleep(delay)
 		}
@@ -206,6 +211,7 @@ func downloadSingleISharesETF(
 	ticker string,
 	etf iSharesETF,
 	figiMap map[string]string,
+	assetNameMap map[string]string,
 	subscription *library.Subscription,
 	out chan<- *data.Observation,
 ) (int, error) {
@@ -307,18 +313,32 @@ func downloadSingleISharesETF(
 			Str("IndexName", etf.IndexName).
 			Msg("parsed iShares holdings")
 
-		// Collect tickers missing from figiMap and resolve via OpenFIGI
+		// Resolve tickers missing from figiMap:
+		// 1. Try share class match (e.g. BRKB -> BRK/B) verified by name similarity
+		// 2. Fall back to OpenFIGI for truly unknown tickers
 		var unknownAssets []*data.Asset
 
 		for _, holding := range parseResult.Holdings {
-			if figiMap[holding.Ticker] == "" {
-				unknownAssets = append(unknownAssets, &data.Asset{Ticker: holding.Ticker})
+			if figiMap[holding.Ticker] != "" {
+				continue
 			}
+
+			if resolveShareClass(holding, figiMap, assetNameMap, logger) {
+				continue
+			}
+
+			unknownAssets = append(unknownAssets, &data.Asset{Ticker: holding.Ticker, Name: holding.Name})
 		}
 
 		if len(unknownAssets) > 0 {
+			unknownTickers := make([]string, len(unknownAssets))
+			for j, a := range unknownAssets {
+				unknownTickers[j] = a.Ticker
+			}
+
 			logger.Info().
 				Int("Count", len(unknownAssets)).
+				Strs("Tickers", unknownTickers).
 				Str("IndexName", etf.IndexName).
 				Msg("resolving unknown tickers via OpenFIGI")
 
@@ -327,6 +347,16 @@ func downloadSingleISharesETF(
 			for _, asset := range unknownAssets {
 				if asset.CompositeFigi != "" {
 					figiMap[asset.Ticker] = asset.CompositeFigi
+
+					// Emit asset so it gets saved to the database
+					out <- &data.Observation{
+						AssetObject:      asset,
+						ObservationDate:  obsTemplate.ObservationDate,
+						SubscriptionID:   obsTemplate.SubscriptionID,
+						SubscriptionName: obsTemplate.SubscriptionName,
+					}
+
+					numObs++
 				}
 			}
 		}
@@ -334,7 +364,7 @@ func downloadSingleISharesETF(
 		// Build current holdings map -- fail this index if any ticker is unresolved
 		currentHoldings := make(map[string]indexMember, len(parseResult.Holdings))
 
-		var unresolved []string
+		var unresolvedHoldings []iSharesHolding
 
 		for _, holding := range parseResult.Holdings {
 			f := figiMap[holding.Ticker]
@@ -344,19 +374,43 @@ func downloadSingleISharesETF(
 					Weight:        holding.Weight,
 				}
 			} else {
-				unresolved = append(unresolved, holding.Ticker)
+				unresolvedHoldings = append(unresolvedHoldings, holding)
 			}
 		}
 
-		if len(unresolved) > 0 {
-			logger.Error().
-				Int("Unresolved", len(unresolved)).
-				Int("TotalHoldings", len(parseResult.Holdings)).
-				Strs("Tickers", unresolved).
-				Str("IndexName", etf.IndexName).
-				Msg("aborting index update -- holdings have unresolved FIGIs even after OpenFIGI lookup")
+		if len(unresolvedHoldings) > 0 {
+			// Separate near-zero weight holdings (safe to omit) from
+			// significant holdings (must abort).
+			var significant, negligible []string
 
-			return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(unresolved), etf.IndexName)
+			for _, h := range unresolvedHoldings {
+				detail := h.Ticker + " (" + h.Name + " / " + h.Exchange + ")"
+
+				if h.Weight < 0.0001 { // < 0.01%
+					negligible = append(negligible, detail)
+				} else {
+					significant = append(significant, detail)
+				}
+			}
+
+			if len(negligible) > 0 {
+				logger.Warn().
+					Int("Count", len(negligible)).
+					Strs("Holdings", negligible).
+					Str("IndexName", etf.IndexName).
+					Msg("omitting near-zero weight holdings with unresolved FIGIs")
+			}
+
+			if len(significant) > 0 {
+				logger.Error().
+					Int("Unresolved", len(significant)).
+					Int("TotalHoldings", len(parseResult.Holdings)).
+					Strs("Holdings", significant).
+					Str("IndexName", etf.IndexName).
+					Msg("aborting index update -- holdings have unresolved FIGIs even after OpenFIGI lookup")
+
+				return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(significant), etf.IndexName)
+			}
 		}
 
 		// Diff against in-memory state
@@ -418,7 +472,7 @@ func downloadSingleISharesETF(
 
 		// Rate-limit delay between requests (skip after last)
 		if i < len(dates)-1 {
-			delay := 5*time.Second + time.Duration(rand.IntN(41))*time.Second
+			delay := 2*time.Second + time.Duration(rand.IntN(9))*time.Second
 			logger.Info().Dur("Delay", delay).Msg("waiting between iShares historical requests")
 
 			select {
@@ -430,4 +484,95 @@ func downloadSingleISharesETF(
 	}
 
 	return numObs, nil
+}
+
+const jaroWinklerThreshold = 0.85
+
+// resolveShareClass checks if a ticker ending in A or B corresponds to an
+// internal asset with a "/" separator (e.g. BRKB -> BRK/B). The match is
+// verified by comparing the iShares holding name against the internal asset
+// name using Jaro-Winkler similarity. On success it populates figiMap for
+// the iShares ticker and returns true.
+func resolveShareClass(holding iSharesHolding, figiMap map[string]string, assetNameMap map[string]string, logger *zerolog.Logger) bool {
+	ticker := holding.Ticker
+	if len(ticker) < 2 {
+		return false
+	}
+
+	lastChar := ticker[len(ticker)-1]
+	if lastChar != 'A' && lastChar != 'B' {
+		return false
+	}
+
+	candidate := ticker[:len(ticker)-1] + "/" + string(lastChar)
+
+	f := figiMap[candidate]
+	if f == "" {
+		return false
+	}
+
+	candidateName := assetNameMap[candidate]
+	if candidateName == "" || holding.Name == "" {
+		return false
+	}
+
+	similarity := strutil.Similarity(
+		strings.ToLower(holding.Name),
+		strings.ToLower(candidateName),
+		metrics.NewJaroWinkler(),
+	)
+
+	if similarity < jaroWinklerThreshold {
+		// Fallback: if the first two words match after normalization, accept
+		// the match. Handles cases like "U-Haul Holding Company" vs
+		// "U HAUL NON VOTING SERIES N" where suffixes diverge but the core
+		// company name is the same.
+		if !firstWordsMatch(holding.Name, candidateName, 2) {
+			logger.Debug().
+				Str("ISharesTicker", ticker).
+				Str("CandidateTicker", candidate).
+				Str("ISharesName", holding.Name).
+				Str("AssetName", candidateName).
+				Float64("Similarity", similarity).
+				Msg("share class candidate rejected -- name similarity too low")
+
+			return false
+		}
+	}
+
+	logger.Info().
+		Str("ISharesTicker", ticker).
+		Str("ResolvedTicker", candidate).
+		Float64("Similarity", similarity).
+		Msg("resolved share class ticker via name match")
+
+	figiMap[ticker] = f
+
+	return true
+}
+
+// firstWordsMatch normalizes two names (lowercase, remove hyphens) and checks
+// whether their first n words are identical.
+func firstWordsMatch(a, b string, n int) bool {
+	normalize := func(s string) []string {
+		s = strings.ToLower(s)
+		s = strings.ReplaceAll(s, "-", " ")
+
+		return strings.Fields(s)
+	}
+
+	wa := normalize(a)
+	wb := normalize(b)
+
+	if len(wa) < n || len(wb) < n {
+		return false
+	}
+
+	for i := range n {
+		if wa[i] != wb[i] {
+			return false
+		}
+	}
+
+	return true
 }

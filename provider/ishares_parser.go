@@ -24,13 +24,33 @@ import (
 )
 
 type iSharesHolding struct {
-	Ticker string
-	Weight float64
+	Ticker   string
+	Name     string
+	Exchange string
+	Weight   float64
 }
 
 type iSharesParseResult struct {
 	SnapshotDate time.Time
 	Holdings     []iSharesHolding
+}
+
+// validTicker returns true if the ticker looks like a real equity ticker.
+// US equity tickers (NASDAQ/NYSE) are letters only. iShares CSVs sometimes
+// contain placeholders ("-"), internal IDs ("1697089D", "P5N994"), or
+// rights/warrants with spaces ("MPTI RT") that should be skipped.
+func validTicker(ticker string) bool {
+	if ticker == "" || ticker == "-" {
+		return false
+	}
+
+	for _, c := range ticker {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+
+	return true
 }
 
 func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
@@ -91,12 +111,28 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 	}
 
 	tickerCol := colIdx["Ticker"]
+	nameCol := colIdx["Name"]
 	assetClassCol := colIdx["Asset Class"]
-	weightCol := colIdx["Weight (%)"]
+	exchangeCol := colIdx["Exchange"]
+
+	// Some iShares CSVs use "Weight (%)" while others use "Market Weight"
+	weightCol := -1
+	for _, candidate := range []string{"Weight (%)", "Market Weight"} {
+		if idx, ok := colIdx[candidate]; ok {
+			weightCol = idx
+			break
+		}
+	}
+
+	if weightCol < 0 {
+		return result, nil
+	}
+
+	minCols := max(tickerCol, nameCol, assetClassCol, weightCol, exchangeCol) + 1
 
 	// Parse data rows
 	for _, record := range records[headerIdx+1:] {
-		if len(record) <= weightCol {
+		if len(record) < minCols {
 			continue
 		}
 
@@ -106,7 +142,20 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 		}
 
 		ticker := strings.TrimSpace(record[tickerCol])
-		if ticker == "" {
+		if !validTicker(ticker) {
+			continue
+		}
+
+		name := strings.TrimSpace(record[nameCol])
+		exchange := strings.TrimSpace(record[exchangeCol])
+
+		// Skip non-constituent holdings: contingent value rights and unlisted
+		// securities are ETF portfolio artifacts, not index members.
+		if strings.HasSuffix(strings.ToUpper(name), " CVR") || strings.HasSuffix(strings.ToUpper(name), "- CVR") {
+			continue
+		}
+
+		if strings.Contains(strings.ToUpper(exchange), "NO MARKET") || strings.Contains(strings.ToUpper(exchange), "UNLISTED") {
 			continue
 		}
 
@@ -118,8 +167,10 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 		}
 
 		result.Holdings = append(result.Holdings, iSharesHolding{
-			Ticker: ticker,
-			Weight: weightPct / 100.0,
+			Ticker:   ticker,
+			Name:     name,
+			Exchange: exchange,
+			Weight:   weightPct / 100.0,
 		})
 	}
 
