@@ -18,7 +18,6 @@ var Map = map[string]Provider{
 	"ishares":  &IShares{},
 	"nasdaq":   &Nasdaq{},
 	"sharadar": &Sharadar{},
-	"tiingo":   &Tiingo{},
 	"zacks":    &Zacks{},
 }
 

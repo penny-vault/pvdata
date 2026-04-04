@@ -12,7 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package tiingo
 
 import (
 	"archive/zip"
@@ -30,10 +30,15 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
+
+func init() {
+	provider.Register("tiingo", &Tiingo{})
+}
 
 type Tiingo struct {
 }
@@ -62,8 +67,8 @@ func (tiingo *Tiingo) Description() string {
 	return `Tiingo provides EOD, Realtime, News and Fundamental data for stocks. Tiingo built a custom data processing engine that prioritizes performance, cleanliness, and completeness.`
 }
 
-func (tiingo *Tiingo) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (tiingo *Tiingo) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"EOD": {
 			Name:        "EOD",
 			Description: "Get end-of-day stock prices for active assets.",
@@ -71,7 +76,7 @@ func (tiingo *Tiingo) Datasets() map[string]Dataset {
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1960, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
-			PostFetch: []PostFetchHook{AdjustEodPrices},
+			PostFetch: []provider.PostFetchHook{provider.AdjustEodPrices},
 			Fetch:     downloadTiingoEODQuotes,
 		},
 
@@ -188,7 +193,7 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 
 	log.Debug().Int("NumAssets", len(assets)).Msg("downloading EOD quotes from Tiingo")
 
-	lookback := LookbackFromContext(ctx, 14*24*time.Hour)
+	lookback := provider.LookbackFromContext(ctx, 14*24*time.Hour)
 	startDate := time.Now().Add(-lookback)
 	startDateStr := startDate.Format("2006-01-02")
 
