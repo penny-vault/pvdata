@@ -229,14 +229,14 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 			}
 		}
 
-		if elem.IndexSnapshot != nil && subscription.DataTablesMap[data.IndexKey] != "" {
-			if err := elem.IndexSnapshot.SaveDB(ctx, subscription.DataTablesMap[data.IndexKey], conn); err != nil {
+		if elem.IndexSnapshot != nil && subscription.DataTablesMap[data.IndexSnapshotKey] != "" {
+			if err := elem.IndexSnapshot.SaveDB(ctx, subscription.DataTablesMap[data.IndexSnapshotKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save index snapshot to database")
 			}
 		}
 
-		if elem.IndexChange != nil && subscription.DataTablesMap[data.IndexKey] != "" {
-			if err := elem.IndexChange.SaveDB(ctx, subscription.DataTablesMap[data.IndexKey], conn); err != nil {
+		if elem.IndexChange != nil && subscription.DataTablesMap[data.IndexChangelogKey] != "" {
+			if err := elem.IndexChange.SaveDB(ctx, subscription.DataTablesMap[data.IndexChangelogKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save index change to database")
 			}
 		}
