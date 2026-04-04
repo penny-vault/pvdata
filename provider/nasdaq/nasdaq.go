@@ -205,7 +205,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	// Get previous snapshot and emit changelog
 	table := subscription.DataTablesMap[data.IndexKey]
-	prevRaw := provider.PreviousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
+	prevRaw := provider.PreviousSnapshotTickers(ctx, subscription.Library.Pool, table, "NDX")
 
 	previous := make(map[string]provider.IndexMember, len(prevRaw))
 	for ticker, figi := range prevRaw {
@@ -216,7 +216,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
 
-	provider.EmitChangelog(added, removed, "ndx100", eventDate, &data.Observation{
+	provider.EmitChangelog(added, removed, "NDX", eventDate, &data.Observation{
 		ObservationDate:  time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,
@@ -224,7 +224,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	numObs += len(added) + len(removed)
 
 	// Check if a snapshot should be taken
-	lastDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, "ndx100")
+	lastDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, "NDX")
 	if provider.ShouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
 		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
 

@@ -32,6 +32,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/xitongsys/parquet-go-source/local"
@@ -783,7 +784,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 		}
 	}
 
-	// Emit snapshots sorted by date
+	// Emit snapshots sorted by date, respecting snapshot frequency
 	dates := make([]string, 0, len(snapshotsByDate))
 	for d := range snapshotsByDate {
 		dates = append(dates, d)
@@ -791,10 +792,17 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 
 	sort.Strings(dates)
 
+	table := sub.DataTablesMap[data.IndexKey]
+	lastSnapshotDate := provider.LastSnapshotDate(ctx, sub.Library.Pool, table, sp500IndexTicker)
+
 	for _, dateStr := range dates {
 		snapshotDate, err := time.Parse("2006-01-02", dateStr)
 		if err != nil {
 			logger.Warn().Str("date", dateStr).Msg("skipping snapshot with invalid date")
+			continue
+		}
+
+		if !provider.ShouldTakeSnapshot(lastSnapshotDate, snapshotDate, "yearly") {
 			continue
 		}
 
@@ -816,6 +824,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 			SubscriptionName: sub.Name,
 		}
 
+		lastSnapshotDate = snapshotDate
 		count++
 	}
 
