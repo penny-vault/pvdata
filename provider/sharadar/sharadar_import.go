@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,6 +59,8 @@ func DetectSharadarDataset(path string) (string, error) {
 		return "Metrics", nil
 	case strings.Contains(base, "tickers"):
 		return "Stock Tickers", nil
+	case strings.Contains(base, "sp500"):
+		return "SP500", nil
 	default:
 		return "", fmt.Errorf("cannot detect Sharadar dataset from filename: %q", path)
 	}
@@ -215,7 +218,20 @@ func readParquetRows(path string) ([]map[string]string, error) {
 			row := make(map[string]string, typ.NumField())
 			for j := 0; j < typ.NumField(); j++ {
 				name := strings.ToLower(typ.Field(j).Name)
-				row[name] = fmt.Sprintf("%v", val.Field(j).Interface())
+				field := val.Field(j)
+
+				// Dereference pointer fields (nullable parquet columns)
+				if field.Kind() == reflect.Ptr {
+					if field.IsNil() {
+						row[name] = ""
+
+						continue
+					}
+
+					field = field.Elem()
+				}
+
+				row[name] = fmt.Sprintf("%v", field.Interface())
 			}
 
 			rows = append(rows, row)
@@ -511,6 +527,8 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 			n, err = importMetricsRows(ctx, sub, rows, out)
 		case "Stock Tickers":
 			n, err = importTickersRows(ctx, sub, rows, out)
+		case "SP500":
+			n, err = importSP500Rows(ctx, sub, rows, out)
 		default:
 			err = fmt.Errorf("unsupported dataset %q for file import", sub.Dataset)
 		}
@@ -683,6 +701,141 @@ func importTickersRows(ctx context.Context, sub *library.Subscription, rows []ma
 	}
 
 	logger.Info().Int("assets", count).Msg("tickers import complete")
+
+	return count, nil
+}
+
+const sp500IndexTicker = "SPX"
+
+// importSP500Rows processes rows for the SP500 dataset.
+// Rows with action "current" or "historical" are grouped by date into IndexSnapshots.
+// Rows with action "added" or "removed" become IndexChange observations.
+func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+	logger := zerolog.Ctx(ctx)
+
+	conn, err := sub.Library.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("could not acquire database connection: %w", err)
+	}
+	defer conn.Release()
+
+	assets, err := data.ActiveAssets(ctx, conn)
+	if err != nil {
+		return 0, fmt.Errorf("could not load active assets: %w", err)
+	}
+
+	figiMap := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		figiMap[asset.Ticker] = asset.CompositeFigi
+	}
+
+	// Group snapshot rows (current + historical) by date
+	snapshotsByDate := make(map[string][]data.IndexConstituent)
+
+	count := 0
+
+	// Collect changelog rows
+	var changes []*data.IndexChange
+
+	for _, row := range rows {
+		action := strings.TrimSpace(row["action"])
+		ticker := strings.TrimSpace(row["ticker"])
+		dateStr := strings.TrimSpace(row["date"])
+
+		if ticker == "" || dateStr == "" {
+			continue
+		}
+
+		switch action {
+		case "current", "historical":
+			snapshotsByDate[dateStr] = append(snapshotsByDate[dateStr], data.IndexConstituent{
+				Ticker:        ticker,
+				CompositeFigi: figiMap[ticker],
+			})
+		case "added":
+			eventDate, err := time.Parse("2006-01-02", dateStr)
+			if err != nil {
+				logger.Warn().Str("date", dateStr).Str("ticker", ticker).Msg("skipping added row with invalid date")
+				continue
+			}
+
+			changes = append(changes, &data.IndexChange{
+				Ticker:        ticker,
+				CompositeFigi: figiMap[ticker],
+				IndexTicker:   sp500IndexTicker,
+				EventDate:     eventDate,
+				Action:        "add",
+			})
+		case "removed":
+			eventDate, err := time.Parse("2006-01-02", dateStr)
+			if err != nil {
+				logger.Warn().Str("date", dateStr).Str("ticker", ticker).Msg("skipping removed row with invalid date")
+				continue
+			}
+
+			changes = append(changes, &data.IndexChange{
+				Ticker:        ticker,
+				CompositeFigi: figiMap[ticker],
+				IndexTicker:   sp500IndexTicker,
+				EventDate:     eventDate,
+				Action:        "remove",
+			})
+		}
+	}
+
+	// Emit snapshots sorted by date
+	dates := make([]string, 0, len(snapshotsByDate))
+	for d := range snapshotsByDate {
+		dates = append(dates, d)
+	}
+
+	sort.Strings(dates)
+
+	for _, dateStr := range dates {
+		snapshotDate, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			logger.Warn().Str("date", dateStr).Msg("skipping snapshot with invalid date")
+			continue
+		}
+
+		constituents := snapshotsByDate[dateStr]
+
+		// Sort constituents by ticker for deterministic output
+		sort.Slice(constituents, func(i, j int) bool {
+			return constituents[i].Ticker < constituents[j].Ticker
+		})
+
+		out <- &data.Observation{
+			IndexSnapshot: &data.IndexSnapshot{
+				IndexTicker:  sp500IndexTicker,
+				SnapshotDate: snapshotDate,
+				Constituents: constituents,
+			},
+			ObservationDate:  time.Now(),
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		count++
+	}
+
+	// Emit changelog entries
+	for _, change := range changes {
+		out <- &data.Observation{
+			IndexChange:      change,
+			ObservationDate:  time.Now(),
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		count++
+	}
+
+	logger.Info().
+		Int("snapshots", len(dates)).
+		Int("changes", len(changes)).
+		Int("total_observations", count).
+		Msg("SP500 import complete")
 
 	return count, nil
 }

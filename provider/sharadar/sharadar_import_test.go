@@ -66,6 +66,18 @@ var _ = Describe("DetectSharadarDataset", func() {
 		Expect(dataset).To(Equal("Fundamentals"))
 	})
 
+	It("detects SP500 from sp500 filename", func() {
+		dataset, err := DetectSharadarDataset("sharadar_sp500_20231228.parquet")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset).To(Equal("SP500"))
+	})
+
+	It("detects SP500 case-insensitively", func() {
+		dataset, err := DetectSharadarDataset("SHARADAR_SP500_data.csv")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset).To(Equal("SP500"))
+	})
+
 	It("returns error for unrecognized filenames", func() {
 		_, err := DetectSharadarDataset("unknown_data.parquet")
 		Expect(err).To(HaveOccurred())
@@ -150,6 +162,20 @@ var _ = Describe("readParquetRows", func() {
 		Expect(rows).NotTo(BeEmpty())
 		// Each row should have a ticker key
 		Expect(rows[0]).To(HaveKey("ticker"))
+	})
+
+	It("reads SP500 parquet rows if test file exists", func() {
+		parquetPath := "../../data/sharadar/sharadar_sp500_20231228.parquet"
+		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
+			Skip("test parquet file not available")
+		}
+
+		rows, err := readParquetRows(parquetPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rows).NotTo(BeEmpty())
+		Expect(rows[0]).To(HaveKey("ticker"))
+		Expect(rows[0]).To(HaveKey("action"))
+		Expect(rows[0]).To(HaveKey("date"))
 	})
 })
 

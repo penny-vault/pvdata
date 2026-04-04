@@ -73,5 +73,14 @@ func (sharadar *Sharadar) Datasets() map[string]provider.Dataset {
 			},
 			Fetch: downloadAllSharadarTickers,
 		},
+
+		"SP500": {
+			Name:        "SP500",
+			Description: "S&P 500 index constituents and changes.",
+			DataTypes:   []*data.DataType{data.DataTypes[data.IndexKey]},
+			DateRange: func() (time.Time, time.Time) {
+				return time.Date(1957, 3, 4, 0, 0, 0, 0, time.UTC), time.Now().UTC()
+			},
+		},
 	}
 }
