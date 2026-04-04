@@ -172,6 +172,7 @@ Also see: subscriptions, unsubscribe`,
 					huh.NewMultiSelect[string]().
 						Title("Which data types do you want to include?").
 						Options(dtOptions...).
+						Height(len(dtOptions) + 3).
 						Value(&selectedDataTypes),
 				),
 			)
