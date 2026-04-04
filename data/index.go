@@ -89,7 +89,7 @@ type IndexChange struct {
 
 func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
 	if idx.CompositeFigi == "" {
-		return nil
+		return fmt.Errorf("index change for ticker %s has empty composite FIGI", idx.Ticker)
 	}
 
 	tx, err := dbConn.Begin(ctx)
