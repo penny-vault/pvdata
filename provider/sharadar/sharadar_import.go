@@ -793,7 +793,39 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 		}
 	}
 
-	// Collect changelog rows
+	// Find the earliest "historical" snapshot date -- this is the first date
+	// where the source data is known to be complete. Data before this date
+	// is incomplete and must not be imported.
+	var earliestHistoricalDate string
+
+	for _, row := range rows {
+		if strings.TrimSpace(row["action"]) == "historical" {
+			dateStr := strings.TrimSpace(row["date"])
+			if earliestHistoricalDate == "" || dateStr < earliestHistoricalDate {
+				earliestHistoricalDate = dateStr
+			}
+		}
+	}
+
+	if earliestHistoricalDate == "" {
+		return 0, fmt.Errorf("no historical snapshot rows found in source data")
+	}
+
+	logger.Info().Str("earliest_historical", earliestHistoricalDate).Msg("using earliest historical snapshot as baseline")
+
+	// Seed membership from the earliest historical snapshot
+	membership := make(map[string]string) // ticker -> compositeFigi
+
+	for _, row := range rows {
+		if strings.TrimSpace(row["action"]) == "historical" && strings.TrimSpace(row["date"]) == earliestHistoricalDate {
+			ticker := strings.TrimSpace(row["ticker"])
+			if ticker != "" {
+				membership[ticker] = figiMap[ticker]
+			}
+		}
+	}
+
+	// Collect changelog rows on or after the earliest historical date
 	var changes []*data.IndexChange
 
 	for _, row := range rows {
@@ -801,7 +833,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 		ticker := strings.TrimSpace(row["ticker"])
 		dateStr := strings.TrimSpace(row["date"])
 
-		if ticker == "" || dateStr == "" {
+		if ticker == "" || dateStr == "" || dateStr <= earliestHistoricalDate {
 			continue
 		}
 
@@ -837,39 +869,51 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 		}
 	}
 
-	// Reconstruct snapshots by replaying adds/removes chronologically.
-	// The source data has quarterly "historical" snapshots from 1998 onward,
-	// but adds/removes go back to 1957. We reconstruct membership for the
-	// entire period and emit yearly snapshots.
-
 	// Sort changes by date for replay
 	sort.Slice(changes, func(i, j int) bool {
 		return changes[i].EventDate.Before(changes[j].EventDate)
 	})
 
-	// Build membership by replaying changes, emitting snapshots at yearly intervals
-	membership := make(map[string]string) // ticker -> compositeFigi
-
+	// Emit yearly snapshots by replaying changes forward from the baseline
 	snapshotTable := sub.DataTablesMap[data.IndexSnapshotKey]
 	lastSnapshotDate := provider.LastSnapshotDate(ctx, sub.Library.Pool, snapshotTable, sp500IndexTicker)
 
+	baselineDate, _ := time.Parse("2006-01-02", earliestHistoricalDate)
 	changeIdx := 0
 
-	// Also merge in the source snapshot dates so we can cross-check
-	// Collect all unique dates where we might want a snapshot: yearly from first change onward
-	var firstChangeDate, lastChangeDate time.Time
-	if len(changes) > 0 {
-		firstChangeDate = changes[0].EventDate
-		lastChangeDate = changes[len(changes)-1].EventDate
+	// Emit the baseline snapshot first if due
+	if provider.ShouldTakeSnapshot(lastSnapshotDate, baselineDate, "yearly") {
+		constituents := make([]data.IndexConstituent, 0, len(membership))
+		for ticker, compositeFigi := range membership {
+			constituents = append(constituents, data.IndexConstituent{
+				Ticker:        ticker,
+				CompositeFigi: compositeFigi,
+			})
+		}
+
+		sort.Slice(constituents, func(i, j int) bool {
+			return constituents[i].Ticker < constituents[j].Ticker
+		})
+
+		out <- &data.Observation{
+			IndexSnapshot: &data.IndexSnapshot{
+				IndexTicker:  sp500IndexTicker,
+				SnapshotDate: baselineDate,
+				Constituents: constituents,
+			},
+			ObservationDate:  time.Now(),
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		lastSnapshotDate = baselineDate
+		count++
 	}
 
-	// Walk through time year by year from first change to last change
-	if !firstChangeDate.IsZero() {
-		// Start at the first March 31 on or after the first change
-		snapshotDate := time.Date(firstChangeDate.Year(), 3, 31, 0, 0, 0, 0, time.UTC)
-		if snapshotDate.Before(firstChangeDate) {
-			snapshotDate = time.Date(firstChangeDate.Year()+1, 3, 31, 0, 0, 0, 0, time.UTC)
-		}
+	// Walk year by year from baseline+1 through last change
+	if len(changes) > 0 {
+		lastChangeDate := changes[len(changes)-1].EventDate
+		snapshotDate := baselineDate.AddDate(1, 0, 0)
 
 		for !snapshotDate.After(lastChangeDate) {
 			// Apply all changes up to and including this snapshot date
@@ -885,7 +929,6 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 				changeIdx++
 			}
 
-			// Emit snapshot if frequency allows
 			if provider.ShouldTakeSnapshot(lastSnapshotDate, snapshotDate, "yearly") {
 				constituents := make([]data.IndexConstituent, 0, len(membership))
 				for ticker, compositeFigi := range membership {
