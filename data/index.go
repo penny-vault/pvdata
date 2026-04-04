@@ -53,13 +53,13 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 		}
 	}()
 
-	sql := fmt.Sprintf(`INSERT INTO %[1]s_snapshot (
+	sql := fmt.Sprintf(`INSERT INTO %[1]s (
 		"index_ticker",
 		"snapshot_date",
 		"constituents"
 	) VALUES (
 		$1, $2, $3
-	) ON CONFLICT ON CONSTRAINT %[1]s_snapshot_pkey DO UPDATE SET
+	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		constituents = EXCLUDED.constituents`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
@@ -103,7 +103,7 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 		}
 	}()
 
-	sql := fmt.Sprintf(`INSERT INTO %[1]s_changelog (
+	sql := fmt.Sprintf(`INSERT INTO %[1]s (
 		"composite_figi",
 		"ticker",
 		"index_ticker",
@@ -112,7 +112,7 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 		"weight"
 	) VALUES (
 		$1, $2, $3, $4, $5, $6
-	) ON CONFLICT ON CONSTRAINT %[1]s_changelog_pkey DO UPDATE SET
+	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		action = EXCLUDED.action,
 		weight = EXCLUDED.weight`, tbl)
 
