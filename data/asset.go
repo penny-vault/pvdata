@@ -132,6 +132,53 @@ func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) (
 	return dbActiveAssets, nil
 }
 
+func AllAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*Asset, error) {
+	var assetTable string
+	if len(tables) == 0 {
+		assetTable = "assets"
+	} else {
+		assetTable = tables[0]
+	}
+
+	sql := fmt.Sprintf(`SELECT
+		ticker,
+		composite_figi,
+		share_class_figi,
+		primary_exchange,
+		asset_type,
+		active,
+		name,
+		description,
+		corporate_url,
+		sector,
+		industry,
+		sic_code,
+		cik,
+		cusips,
+		isins,
+		other_identifiers,
+		similar_tickers,
+		tags,
+		coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
+		coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
+		last_updated
+	FROM %s`, assetTable)
+
+	rows, err := dbConn.Query(ctx, sql)
+	if err != nil {
+		return nil, fmt.Errorf("query all assets from %s: %w", assetTable, err)
+	}
+
+	var dbAllAssets []*Asset
+
+	err = pgxscan.ScanAll(&dbAllAssets, rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan all assets: %w", err)
+	}
+
+	return dbAllAssets, nil
+}
+
 func (asset *Asset) ID() string {
 	return fmt.Sprintf("%s:%s", asset.Ticker, asset.CompositeFigi)
 }
