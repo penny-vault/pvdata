@@ -720,20 +720,81 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 	}
 	defer conn.Release()
 
-	assets, err := data.ActiveAssets(ctx, conn)
+	// Step 1: Load all assets (active + delisted) for FIGI map
+	assets, err := data.AllAssets(ctx, conn)
 	if err != nil {
-		return 0, fmt.Errorf("could not load active assets: %w", err)
+		return 0, fmt.Errorf("could not load assets: %w", err)
 	}
 
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
-		figiMap[asset.Ticker] = asset.CompositeFigi
+		if asset.CompositeFigi != "" {
+			figiMap[asset.Ticker] = asset.CompositeFigi
+		}
+	}
+
+	// Step 2: Collect all unique tickers from the data
+	uniqueTickers := make(map[string]string) // ticker -> name
+
+	for _, row := range rows {
+		ticker := strings.TrimSpace(row["ticker"])
+
+		name := strings.TrimSpace(row["name"])
+		if ticker != "" {
+			uniqueTickers[ticker] = name
+		}
+	}
+
+	// Step 3: Find tickers missing from FIGI map and resolve via OpenFIGI (including delisted)
+	var unresolvedAssets []*data.Asset
+
+	for ticker := range uniqueTickers {
+		if figiMap[ticker] == "" {
+			unresolvedAssets = append(unresolvedAssets, &data.Asset{Ticker: ticker})
+		}
+	}
+
+	if len(unresolvedAssets) > 0 {
+		logger.Info().Int("count", len(unresolvedAssets)).Msg("resolving unmatched tickers via OpenFIGI (including delisted)")
+
+		rateLimiter := figi.RateLimit()
+		figiResults := figi.LookupFigiUnlisted(unresolvedAssets, rateLimiter)
+
+		for _, asset := range unresolvedAssets {
+			if result, ok := figiResults[asset.Ticker]; ok && result.CompositeFIGI != "" {
+				figiMap[asset.Ticker] = result.CompositeFIGI
+			}
+		}
+	}
+
+	count := 0
+
+	// Step 4: Generate synthetic FIGIs for anything still unresolved, emit as assets
+	for ticker, name := range uniqueTickers {
+		if figiMap[ticker] == "" {
+			syntheticFigi := figi.GenerateSyntheticFIGI(ticker, name)
+			figiMap[ticker] = syntheticFigi
+
+			logger.Info().Str("ticker", ticker).Str("name", name).Str("figi", syntheticFigi).Msg("generated synthetic FIGI")
+
+			out <- &data.Observation{
+				AssetObject: &data.Asset{
+					Ticker:        ticker,
+					Name:          name,
+					CompositeFigi: syntheticFigi,
+					Active:        false,
+				},
+				ObservationDate:  time.Now(),
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+
+			count++
+		}
 	}
 
 	// Group snapshot rows (current + historical) by date
 	snapshotsByDate := make(map[string][]data.IndexConstituent)
-
-	count := 0
 
 	// Collect changelog rows
 	var changes []*data.IndexChange
