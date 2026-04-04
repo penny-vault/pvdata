@@ -15,8 +15,7 @@
 package provider
 
 var Map = map[string]Provider{
-	"ishares":  &IShares{},
-	"sharadar": &Sharadar{},
+	"ishares": &IShares{},
 }
 
 // Register adds a provider to the global Map. Sub-packages call this

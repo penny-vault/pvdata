@@ -12,13 +12,18 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package sharadar
 
 import (
 	"time"
 
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/provider"
 )
+
+func init() {
+	provider.Register("sharadar", &Sharadar{})
+}
 
 type Sharadar struct{}
 
@@ -37,8 +42,8 @@ func (sharadar *Sharadar) Description() string {
 	return `Sharadar publishes fundamentals, daily metrics, and other investment data via the Nasdaq Data Link API`
 }
 
-func (sharadar *Sharadar) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (sharadar *Sharadar) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"Fundamentals": {
 			Name:        "Fundamentals",
 			Description: "Download stock fundamentals.",

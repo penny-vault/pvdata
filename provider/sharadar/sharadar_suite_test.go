@@ -12,15 +12,16 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package cmd
+package sharadar
 
-// Blank imports to trigger init() registration for provider sub-packages.
 import (
-	_ "github.com/penny-vault/pvdata/provider/fred"
-	_ "github.com/penny-vault/pvdata/provider/legacy"
-	_ "github.com/penny-vault/pvdata/provider/massive"
-	_ "github.com/penny-vault/pvdata/provider/nasdaq"
-	_ "github.com/penny-vault/pvdata/provider/sharadar"
-	_ "github.com/penny-vault/pvdata/provider/tiingo"
-	_ "github.com/penny-vault/pvdata/provider/zacks"
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
+
+func TestSharadar(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Sharadar Suite")
+}
