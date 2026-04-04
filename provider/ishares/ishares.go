@@ -12,7 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package ishares
 
 import (
 	"context"
@@ -28,6 +28,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 )
 
@@ -48,6 +49,8 @@ var iSharesETFData []byte
 var iSharesETFMap map[string]iSharesETF
 
 func init() {
+	provider.Register("ishares", &IShares{})
+
 	var entries []struct {
 		Ticker string `json:"ticker"`
 		iSharesETF
@@ -86,8 +89,8 @@ func (ishares *IShares) Description() string {
 	return "Track index constituents and membership changes by scraping iShares ETF holdings from BlackRock."
 }
 
-func (ishares *IShares) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (ishares *IShares) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"Index Constituents": {
 			Name:        "Index Constituents",
 			Description: "Download index constituent holdings with weights and track membership changes over time.",
@@ -217,7 +220,7 @@ func downloadSingleISharesETF(
 	numObs := 0
 	table := subscription.DataTablesMap[data.IndexKey]
 
-	lookback := LookbackFromContext(ctx, 14*24*time.Hour)
+	lookback := provider.LookbackFromContext(ctx, 14*24*time.Hour)
 
 	// Build the list of dates to fetch.
 	// Always includes today (empty asOfDate = current data).
@@ -243,7 +246,7 @@ func downloadSingleISharesETF(
 	yesterday := time.Now().AddDate(0, 0, -1).Truncate(24 * time.Hour)
 
 	if startDate.Before(yesterday) {
-		days, err := TradingDays(ctx, subscription.Library.Pool, startDate, yesterday)
+		days, err := provider.TradingDays(ctx, subscription.Library.Pool, startDate, yesterday)
 		if err != nil {
 			logger.Warn().Err(err).Msg("could not query trading days, falling back to today only")
 		} else {
@@ -262,8 +265,8 @@ func downloadSingleISharesETF(
 	})
 
 	// Load initial state from DB: last snapshot + changelog entries up to start
-	state := CurrentIndexMembers(ctx, subscription.Library.Pool, table, etf.IndexName, startDate)
-	memLastSnapshotDate := LastSnapshotDate(ctx, subscription.Library.Pool, table, etf.IndexName)
+	state := provider.CurrentIndexMembers(ctx, subscription.Library.Pool, table, etf.IndexName, startDate)
+	memLastSnapshotDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, etf.IndexName)
 
 	obsTemplate := &data.Observation{
 		ObservationDate:  time.Now(),
@@ -321,7 +324,7 @@ func downloadSingleISharesETF(
 				continue
 			}
 
-			if ResolveShareClass(holding.Ticker, holding.Name, figiMap, assetNameMap, logger) {
+			if provider.ResolveShareClass(holding.Ticker, holding.Name, figiMap, assetNameMap, logger) {
 				continue
 			}
 
@@ -360,14 +363,14 @@ func downloadSingleISharesETF(
 		}
 
 		// Build current holdings map -- fail this index if any ticker is unresolved
-		currentHoldings := make(map[string]IndexMember, len(parseResult.Holdings))
+		currentHoldings := make(map[string]provider.IndexMember, len(parseResult.Holdings))
 
 		var unresolvedHoldings []iSharesHolding
 
 		for _, holding := range parseResult.Holdings {
 			f := figiMap[holding.Ticker]
 			if f != "" {
-				currentHoldings[holding.Ticker] = IndexMember{
+				currentHoldings[holding.Ticker] = provider.IndexMember{
 					CompositeFigi: f,
 					Weight:        holding.Weight,
 				}
@@ -412,7 +415,7 @@ func downloadSingleISharesETF(
 		}
 
 		// Diff against in-memory state
-		added, removed, weightChanged := DiffSnapshots(currentHoldings, state)
+		added, removed, weightChanged := provider.DiffSnapshots(currentHoldings, state)
 
 		eventDate := parseResult.SnapshotDate
 		if eventDate.IsZero() {
@@ -420,15 +423,15 @@ func downloadSingleISharesETF(
 		}
 
 		// Emit changelog: adds and removes
-		EmitChangelog(added, removed, etf.IndexName, eventDate, obsTemplate, out)
+		provider.EmitChangelog(added, removed, etf.IndexName, eventDate, obsTemplate, out)
 		numObs += len(added) + len(removed)
 
 		// Emit weight changes
-		EmitWeightChanges(weightChanged, etf.IndexName, eventDate, obsTemplate, out)
+		provider.EmitWeightChanges(weightChanged, etf.IndexName, eventDate, obsTemplate, out)
 		numObs += len(weightChanged)
 
 		// Check if snapshot is due
-		if ShouldTakeSnapshot(memLastSnapshotDate, eventDate, "yearly") {
+		if provider.ShouldTakeSnapshot(memLastSnapshotDate, eventDate, "yearly") {
 			constituents := make([]data.IndexConstituent, 0, len(currentHoldings))
 			for t, member := range currentHoldings {
 				constituents = append(constituents, data.IndexConstituent{

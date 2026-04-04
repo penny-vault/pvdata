@@ -12,13 +12,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package ishares
 
 import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 )
 
@@ -205,7 +206,7 @@ Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,P
 	})
 })
 
-var _ = Describe("ResolveShareClass", func() {
+var _ = Describe("provider.ResolveShareClass", func() {
 	var (
 		figiMap      map[string]string
 		assetNameMap map[string]string
@@ -227,46 +228,46 @@ var _ = Describe("ResolveShareClass", func() {
 	})
 
 	It("resolves BRKB to BRK/B when names match", func() {
-		resolved := ResolveShareClass("BRKB", "BERKSHIRE HATHAWAY INC CLASS B", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("BRKB", "BERKSHIRE HATHAWAY INC CLASS B", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeTrue())
 		Expect(figiMap["BRKB"]).To(Equal("BBG000DWG505"))
 	})
 
 	It("resolves BFB to BF/B when names match", func() {
-		resolved := ResolveShareClass("BFB", "BROWN FORMAN CORP CLASS B", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("BFB", "BROWN FORMAN CORP CLASS B", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeTrue())
 		Expect(figiMap["BFB"]).To(Equal("BBG000BFCQN2"))
 	})
 
 	It("resolves MOGA to MOG/A when names match", func() {
-		resolved := ResolveShareClass("MOGA", "MOOG INC CLASS A", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("MOGA", "MOOG INC CLASS A", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeTrue())
 		Expect(figiMap["MOGA"]).To(Equal("BBG000BNNKG9"))
 	})
 
 	It("rejects when names do not match", func() {
-		resolved := ResolveShareClass("BRKB", "TOTALLY DIFFERENT COMPANY", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("BRKB", "TOTALLY DIFFERENT COMPANY", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeFalse())
 		Expect(figiMap).ToNot(HaveKey("BRKB"))
 	})
 
 	It("rejects tickers not ending in A or B", func() {
-		resolved := ResolveShareClass("AAPL", "APPLE INC", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("AAPL", "APPLE INC", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeFalse())
 	})
 
 	It("rejects when candidate ticker does not exist", func() {
-		resolved := ResolveShareClass("XYZB", "XYZ CORP CLASS B", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("XYZB", "XYZ CORP CLASS B", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeFalse())
 	})
 
 	It("rejects when holding name is empty", func() {
-		resolved := ResolveShareClass("BRKB", "", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("BRKB", "", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeFalse())
 	})
 
 	It("rejects single-character tickers", func() {
-		resolved := ResolveShareClass("B", "SOMETHING", figiMap, assetNameMap, &logger)
+		resolved := provider.ResolveShareClass("B", "SOMETHING", figiMap, assetNameMap, &logger)
 		Expect(resolved).To(BeFalse())
 	})
 })

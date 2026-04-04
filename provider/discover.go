@@ -14,9 +14,7 @@
 // limitations under the License.
 package provider
 
-var Map = map[string]Provider{
-	"ishares": &IShares{},
-}
+var Map = map[string]Provider{}
 
 // Register adds a provider to the global Map. Sub-packages call this
 // from their init() functions to avoid import cycles.
