@@ -12,7 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package yfinance
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 )
 
 type YFinanceStreamer struct{}
@@ -38,10 +39,10 @@ func (yfinance *YFinanceStreamer) Description() string {
 	return `YFinanceStreamer publishes a real-time stream of quote data during market hours`
 }
 
-func (yfinance *YFinanceStreamer) Datasets() map[string]Dataset {
+func (yfinance *YFinanceStreamer) Datasets() map[string]provider.Dataset {
 	now := time.Now().UTC()
 
-	return map[string]Dataset{
+	return map[string]provider.Dataset{
 		"Real-time Quotes": {
 			Name:        "Real-time Quotes",
 			Description: "Real-time streaming stock quotes from Yahoo Finance",

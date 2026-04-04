@@ -4,7 +4,7 @@
 // 	protoc        v5.27.1
 // source: yfinance.proto
 
-package provider
+package yfinance
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
