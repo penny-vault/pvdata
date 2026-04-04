@@ -47,7 +47,9 @@ func indexedColumnsForDataType(datatype string) []string {
 		return []string{"ticker", "composite_figi"}
 	case "economic-indicator":
 		return []string{"series", "event_date"}
-	case "index":
+	case "index-snapshot":
+		return []string{"index_ticker", "snapshot_date"}
+	case "index-changelog":
 		return []string{"ticker", "index_ticker", "event_date"}
 	case "asset-description":
 		return []string{"ticker", "composite_figi", "name"}
@@ -82,17 +84,6 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 			Code:    "400",
 			Message: fmt.Sprintf("data type %q not found for this subscription", datatype),
 		})
-	}
-
-	// The index data type uses _snapshot and _changelog suffixed tables.
-	// Default to browsing the changelog (membership changes over time).
-	subtable := c.Query("subtable", "")
-	if datatype == "index" {
-		if subtable == "snapshot" {
-			tableName += "_snapshot"
-		} else {
-			tableName += "_changelog"
-		}
 	}
 
 	if !validTableName.MatchString(tableName) {
