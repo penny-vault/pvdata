@@ -90,7 +90,10 @@ func (tv *TradingView) Datasets() map[string]provider.Dataset {
 		"Index Constituents": {
 			Name:        "Index Constituents",
 			Description: "Download index constituent membership and track changes over time.",
-			DataTypes:   []*data.DataType{data.DataTypes[data.IndexKey]},
+			DataTypes: []*data.DataType{
+				data.DataTypes[data.IndexSnapshotKey],
+				data.DataTypes[data.IndexChangelogKey],
+			},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
@@ -287,7 +290,8 @@ func downloadSingleIndex(
 ) (int, error) {
 	logger := zerolog.Ctx(ctx)
 	numObs := 0
-	table := subscription.DataTablesMap[data.IndexKey]
+	snapshotTable := subscription.DataTablesMap[data.IndexSnapshotKey]
+	changelogTable := subscription.DataTablesMap[data.IndexChangelogKey]
 
 	// Fetch constituents from TradingView.
 	encodedSymbolID := url.QueryEscape(idx.SymbolID)
@@ -407,8 +411,8 @@ func downloadSingleIndex(
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
 
 	// Load current state from DB and diff.
-	state := provider.CurrentIndexMembers(ctx, subscription.Library.Pool, table, idx.Symbol, eventDate)
-	memLastSnapshotDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, idx.Symbol)
+	state := provider.CurrentIndexMembers(ctx, subscription.Library.Pool, snapshotTable, changelogTable, idx.Symbol, eventDate)
+	memLastSnapshotDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, snapshotTable, idx.Symbol)
 
 	added, removed, _ := provider.DiffSnapshots(currentHoldings, state)
 

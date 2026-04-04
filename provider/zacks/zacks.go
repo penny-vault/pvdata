@@ -68,7 +68,8 @@ func (zacks *Zacks) Datasets() map[string]provider.Dataset {
 				data.DataTypes[data.MetricKey],
 				data.DataTypes[data.EstimateKey],
 				data.DataTypes[data.ConsensusKey],
-				data.DataTypes[data.IndexKey],
+				data.DataTypes[data.IndexSnapshotKey],
+				data.DataTypes[data.IndexChangelogKey],
 			},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()

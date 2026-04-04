@@ -57,7 +57,11 @@ func (sharadar *Sharadar) Datasets() map[string]provider.Dataset {
 		"Metrics": {
 			Name:        "Metrics",
 			Description: "Download daily stock metrics.",
-			DataTypes:   []*data.DataType{data.DataTypes[data.MetricKey], data.DataTypes[data.IndexKey]},
+			DataTypes: []*data.DataType{
+				data.DataTypes[data.MetricKey],
+				data.DataTypes[data.IndexSnapshotKey],
+				data.DataTypes[data.IndexChangelogKey],
+			},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2007, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
@@ -77,7 +81,10 @@ func (sharadar *Sharadar) Datasets() map[string]provider.Dataset {
 		"SP500": {
 			Name:        "SP500",
 			Description: "S&P 500 index constituents and changes.",
-			DataTypes:   []*data.DataType{data.DataTypes[data.IndexKey]},
+			DataTypes: []*data.DataType{
+				data.DataTypes[data.IndexSnapshotKey],
+				data.DataTypes[data.IndexChangelogKey],
+			},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1957, 3, 4, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},

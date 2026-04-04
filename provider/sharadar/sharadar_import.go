@@ -792,8 +792,8 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 
 	sort.Strings(dates)
 
-	table := sub.DataTablesMap[data.IndexKey]
-	lastSnapshotDate := provider.LastSnapshotDate(ctx, sub.Library.Pool, table, sp500IndexTicker)
+	snapshotTable := sub.DataTablesMap[data.IndexSnapshotKey]
+	lastSnapshotDate := provider.LastSnapshotDate(ctx, sub.Library.Pool, snapshotTable, sp500IndexTicker)
 
 	for _, dateStr := range dates {
 		snapshotDate, err := time.Parse("2006-01-02", dateStr)
