@@ -108,7 +108,7 @@ func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexTicke
 
 	var snapshotDate time.Time
 
-	sql := fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s_snapshot WHERE index_ticker = $1`, table)
+	sql := fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s WHERE index_ticker = $1`, table)
 
 	err = conn.QueryRow(ctx, sql, indexTicker).Scan(&snapshotDate)
 	if err != nil {
@@ -129,9 +129,9 @@ func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 	}
 	defer conn.Release()
 
-	sql := fmt.Sprintf(`SELECT ticker, composite_figi FROM %s_snapshot
+	sql := fmt.Sprintf(`SELECT ticker, composite_figi FROM %s
 		WHERE index_ticker = $1 AND snapshot_date = (
-			SELECT MAX(snapshot_date) FROM %s_snapshot WHERE index_ticker = $1
+			SELECT MAX(snapshot_date) FROM %s WHERE index_ticker = $1
 		)`, table, table)
 
 	rows, err := conn.Query(ctx, sql, indexTicker)
@@ -159,7 +159,7 @@ func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 // CurrentIndexMembers reconstructs the true index membership as of a given date
 // by taking the most recent snapshot on or before asOfDate and applying all
 // changelog entries (adds, removes, weight-changes) between that snapshot and asOfDate.
-func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string, asOfDate time.Time) map[string]IndexMember {
+func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, snapshotTable, changelogTable, indexTicker string, asOfDate time.Time) map[string]IndexMember {
 	if pool == nil {
 		return map[string]IndexMember{}
 	}
@@ -175,7 +175,7 @@ func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexTi
 	var snapshotDate time.Time
 
 	err = conn.QueryRow(ctx,
-		fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s_snapshot WHERE index_ticker = $1 AND snapshot_date <= $2`, table),
+		fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s WHERE index_ticker = $1 AND snapshot_date <= $2`, snapshotTable),
 		indexTicker, asOfDate,
 	).Scan(&snapshotDate)
 	if err != nil {
@@ -190,7 +190,7 @@ func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexTi
 		var constituents []data.IndexConstituent
 
 		err = conn.QueryRow(ctx,
-			fmt.Sprintf(`SELECT constituents FROM %s_snapshot WHERE index_ticker = $1 AND snapshot_date = $2`, table),
+			fmt.Sprintf(`SELECT constituents FROM %s WHERE index_ticker = $1 AND snapshot_date = $2`, snapshotTable),
 			indexTicker, snapshotDate,
 		).Scan(&constituents)
 		if err != nil {
@@ -205,7 +205,7 @@ func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexTi
 
 	// Apply changelog entries after the snapshot date up to asOfDate
 	changeRows, err := conn.Query(ctx,
-		fmt.Sprintf(`SELECT ticker, composite_figi, action, weight FROM %s_changelog WHERE index_ticker = $1 AND event_date > $2 AND event_date <= $3 ORDER BY event_date`, table),
+		fmt.Sprintf(`SELECT ticker, composite_figi, action, weight FROM %s WHERE index_ticker = $1 AND event_date > $2 AND event_date <= $3 ORDER BY event_date`, changelogTable),
 		indexTicker, snapshotDate, asOfDate,
 	)
 	if err != nil {

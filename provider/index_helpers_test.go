@@ -192,7 +192,7 @@ var _ = Describe("tradingDays", func() {
 var _ = Describe("currentIndexMembers", func() {
 	It("returns empty map when pool is nil", func() {
 		asOf := time.Date(2026, 3, 30, 0, 0, 0, 0, time.UTC)
-		result := CurrentIndexMembers(context.Background(), nil, "test_table", "sp500", asOf)
+		result := CurrentIndexMembers(context.Background(), nil, "test_snapshot", "test_changelog", "sp500", asOf)
 		Expect(result).To(BeEmpty())
 	})
 })
