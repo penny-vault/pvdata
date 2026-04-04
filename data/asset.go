@@ -161,7 +161,7 @@ func AllAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*
 		tags,
 		coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
 		coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
-		last_updated
+		coalesce(last_updated, '0001-01-01'::timestamp) as last_updated
 	FROM %s`, assetTable)
 
 	rows, err := dbConn.Query(ctx, sql)
