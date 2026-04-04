@@ -12,7 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package fred
 
 import (
 	"context"
@@ -23,9 +23,14 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"golang.org/x/time/rate"
 )
+
+func init() {
+	provider.Register("fred", &Fred{})
+}
 
 // Example query for a specific economic indicator on all trading dayings:
 // select trading_days, locf(value) OVER( ORDER BY trading_days ) from trading_days(date'2024-04-01', date'2024-06-30') left join fred_economic_indicator_0b97b f ON (f.series='UNRATE' AND trading_days = f.event_date) order by trading_days desc;
@@ -47,8 +52,8 @@ func (fred *Fred) Description() string {
 	return `The Financial Reserve Economic Data (FRED) provides access over 800,000 economic indicators`
 }
 
-func (fred *Fred) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (fred *Fred) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"Economic Indicators": {
 			Name:        "Economic Indicators",
 			Description: "Download economic indicators.",

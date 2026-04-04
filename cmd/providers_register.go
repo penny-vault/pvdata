@@ -12,21 +12,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package cmd
 
-var Map = map[string]Provider{
-	"ishares":  &IShares{},
-	"legacy":   &Legacy{},
-	"massive":  &Massive{},
-	"nasdaq":   &Nasdaq{},
-	"polygon":  &Massive{},
-	"sharadar": &Sharadar{},
-	"tiingo":   &Tiingo{},
-	"zacks":    &Zacks{},
-}
-
-// Register adds a provider to the global Map. Sub-packages call this
-// from their init() functions to avoid import cycles.
-func Register(name string, p Provider) {
-	Map[name] = p
-}
+// Blank imports to trigger init() registration for provider sub-packages.
+import (
+	_ "github.com/penny-vault/pvdata/provider/fred"
+)
