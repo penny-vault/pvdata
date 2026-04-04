@@ -145,7 +145,7 @@ func AllAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*
 		coalesce(composite_figi, '') as composite_figi,
 		coalesce(share_class_figi, '') as share_class_figi,
 		coalesce(primary_exchange, '') as primary_exchange,
-		coalesce(asset_type, 'Unknown') as asset_type,
+		coalesce(asset_type::text, '') as asset_type,
 		coalesce(active, false) as active,
 		coalesce(name, '') as name,
 		coalesce(description, '') as description,
