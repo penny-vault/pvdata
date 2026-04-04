@@ -12,7 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package nasdaq
 
 import (
 	"context"
@@ -23,10 +23,15 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/playwright_helpers"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/playwright-community/playwright-go"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 )
+
+func init() {
+	provider.Register("nasdaq", &Nasdaq{})
+}
 
 const NASDAQ_NDX_URL = "https://www.nasdaq.com/market-activity/quotes/nasdaq-ndx-index"
 
@@ -51,8 +56,8 @@ func (n *Nasdaq) Description() string {
 	return "Nasdaq provides NDX-100 index constituent data. This provider scrapes index constituent holdings with weights from the Nasdaq website."
 }
 
-func (n *Nasdaq) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (n *Nasdaq) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"NDX-100 Holdings": {
 			Name:        "NDX-100 Holdings",
 			Description: "Download NDX-100 index holdings and track index membership changes.",
@@ -188,10 +193,10 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	logger.Info().Int("NumHoldings", len(holdings)).Msg("parsed NDX-100 holdings")
 
 	// Build current holdings map (ticker -> IndexMember)
-	currentHoldings := make(map[string]IndexMember, len(holdings))
+	currentHoldings := make(map[string]provider.IndexMember, len(holdings))
 	for _, holding := range holdings {
 		if figi, ok := figiMap[holding.Ticker]; ok {
-			currentHoldings[holding.Ticker] = IndexMember{
+			currentHoldings[holding.Ticker] = provider.IndexMember{
 				CompositeFigi: figi,
 				Weight:        holding.Weight,
 			}
@@ -200,18 +205,18 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	// Get previous snapshot and emit changelog
 	table := subscription.DataTablesMap[data.IndexKey]
-	prevRaw := PreviousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
+	prevRaw := provider.PreviousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
 
-	previous := make(map[string]IndexMember, len(prevRaw))
+	previous := make(map[string]provider.IndexMember, len(prevRaw))
 	for ticker, figi := range prevRaw {
-		previous[ticker] = IndexMember{CompositeFigi: figi}
+		previous[ticker] = provider.IndexMember{CompositeFigi: figi}
 	}
 
-	added, removed, _ := DiffSnapshots(currentHoldings, previous)
+	added, removed, _ := provider.DiffSnapshots(currentHoldings, previous)
 
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
 
-	EmitChangelog(added, removed, "ndx100", eventDate, &data.Observation{
+	provider.EmitChangelog(added, removed, "ndx100", eventDate, &data.Observation{
 		ObservationDate:  time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,
@@ -219,8 +224,8 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	numObs += len(added) + len(removed)
 
 	// Check if a snapshot should be taken
-	lastDate := LastSnapshotDate(ctx, subscription.Library.Pool, table, "ndx100")
-	if ShouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
+	lastDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, "ndx100")
+	if provider.ShouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
 		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
 
 		constituents := make([]data.IndexConstituent, 0, len(currentHoldings))

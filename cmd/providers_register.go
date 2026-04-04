@@ -19,5 +19,6 @@ import (
 	_ "github.com/penny-vault/pvdata/provider/fred"
 	_ "github.com/penny-vault/pvdata/provider/legacy"
 	_ "github.com/penny-vault/pvdata/provider/massive"
+	_ "github.com/penny-vault/pvdata/provider/nasdaq"
 	_ "github.com/penny-vault/pvdata/provider/tiingo"
 )
