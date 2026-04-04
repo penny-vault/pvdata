@@ -12,7 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package massive
 
 import (
 	"context"
@@ -31,10 +31,16 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
+
+func init() {
+	provider.Register("massive", &Massive{})
+	provider.Register("polygon", &Massive{})
+}
 
 var (
 	ErrInvalidStatusCode = errors.New("invalid status code received")
@@ -65,8 +71,8 @@ func (massive *Massive) Description() string {
 	return `The Massive Stocks API provides REST endpoints that let you query the latest market data from all US stock exchanges. You can also find data on company financials, stock market holidays, corporate actions, and more.`
 }
 
-func (massive *Massive) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (massive *Massive) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"Market Holidays": {
 			Name:        "Market Holidays",
 			Description: "Get upcoming market holidays and their open/close times.",

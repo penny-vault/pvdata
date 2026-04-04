@@ -16,9 +16,7 @@ package provider
 
 var Map = map[string]Provider{
 	"ishares":  &IShares{},
-	"massive":  &Massive{},
 	"nasdaq":   &Nasdaq{},
-	"polygon":  &Massive{},
 	"sharadar": &Sharadar{},
 	"tiingo":   &Tiingo{},
 	"zacks":    &Zacks{},
