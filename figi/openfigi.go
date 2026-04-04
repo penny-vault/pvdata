@@ -51,9 +51,10 @@ type OpenFigiQuery struct {
 	IdValue                 string `json:"idValue"`
 	ExchangeCode            string `json:"exchCode"`
 	MarketSectorDescription string `json:"marketSecDes"`
+	IncludeUnlistedEquities *bool  `json:"includeUnlistedEquities,omitempty"`
 }
 
-func rateLimit() *rate.Limiter {
+func RateLimit() *rate.Limiter {
 	dur := (time.Second * 6) / 25
 	openFigiRate := rate.Every(dur)
 
@@ -100,7 +101,7 @@ func mapFigis(query []*OpenFigiQuery) ([]*MappingResponse, error) {
 }
 
 func Enrich(assets ...*data.Asset) {
-	rateLimiter := rateLimit()
+	rateLimiter := RateLimit()
 
 	emptyFigis := make([]*data.Asset, 0, 100)
 
@@ -172,6 +173,58 @@ func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*Ope
 			IdValue:                 asset.Ticker,
 			ExchangeCode:            "US",
 			MarketSectorDescription: "Equity",
+		})
+
+		if len(query) == maxBatch {
+			if err := rateLimiter.Wait(context.Background()); err != nil {
+				log.Panic().Err(err).Msg("rate limiter failed")
+			}
+
+			mappingResponse, _ := mapFigis(query)
+			for _, resp := range mappingResponse {
+				for _, figiAsset := range resp.Data {
+					result[figiAsset.Ticker] = figiAsset
+				}
+			}
+
+			query = make([]*OpenFigiQuery, 0, maxBatch)
+		}
+	}
+
+	if len(query) > 0 {
+		if err := rateLimiter.Wait(context.Background()); err != nil {
+			log.Panic().Err(err).Msg("rate limiter failed")
+		}
+
+		mappingResponse, _ := mapFigis(query)
+		for _, resp := range mappingResponse {
+			for _, figiAsset := range resp.Data {
+				result[figiAsset.Ticker] = figiAsset
+			}
+		}
+	}
+
+	return result
+}
+
+func LookupFigiUnlisted(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*OpenFigiAsset {
+	maxBatch := batchSize()
+	includeUnlisted := true
+
+	if viper.GetString("openfigi.apikey") == "" {
+		log.Warn().Msg("no OpenFIGI API key configured -- using reduced batch size (10 per request); set openfigi.apikey in your config or re-run `pvdata init`")
+	}
+
+	query := make([]*OpenFigiQuery, 0, maxBatch)
+	result := make(map[string]*OpenFigiAsset)
+
+	for _, asset := range assets {
+		query = append(query, &OpenFigiQuery{
+			IdType:                  "TICKER",
+			IdValue:                 asset.Ticker,
+			ExchangeCode:            "US",
+			MarketSectorDescription: "Equity",
+			IncludeUnlistedEquities: &includeUnlisted,
 		})
 
 		if len(query) == maxBatch {
