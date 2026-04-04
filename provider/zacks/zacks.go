@@ -12,7 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package zacks
 
 import (
 	"context"
@@ -27,6 +27,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/playwright_helpers"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/playwright-community/playwright-go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -35,6 +36,10 @@ import (
 	"github.com/xitongsys/parquet-go/parquet"
 	"github.com/xitongsys/parquet-go/writer"
 )
+
+func init() {
+	provider.Register("zacks", &Zacks{})
+}
 
 type Zacks struct{}
 
@@ -53,8 +58,8 @@ func (zacks *Zacks) Description() string {
 	return `Zacks provides research and fundamental data for stocks. Their propietary Zacks Rank system scores stocks based on their potential to generate outsized returns.`
 }
 
-func (zacks *Zacks) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (zacks *Zacks) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"zacks-screener": {
 			Name:        "zacks-screener",
 			Description: "Download data using Zacks stock screener tool.",
