@@ -12,11 +12,16 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package provider
+package legacy
 
 import (
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/provider"
 )
+
+func init() {
+	provider.Register("legacy", &Legacy{})
+}
 
 // Legacy is a provider for legacy database data that has been migrated.
 // It has no Fetch function -- data is populated by the migrate-legacy command.
@@ -34,8 +39,8 @@ func (l *Legacy) Description() string {
 	return "Migrated data from a legacy penny-vault database. Not fetchable."
 }
 
-func (l *Legacy) Datasets() map[string]Dataset {
-	return map[string]Dataset{
+func (l *Legacy) Datasets() map[string]provider.Dataset {
+	return map[string]provider.Dataset{
 		"eod": {
 			Name:        "eod",
 			Description: "Legacy EOD price data",

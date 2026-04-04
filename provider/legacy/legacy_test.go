@@ -1,4 +1,4 @@
-package provider_test
+package legacy_test
 
 import (
 	"testing"
