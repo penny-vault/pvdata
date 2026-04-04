@@ -24,8 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adrg/strutil"
-	"github.com/adrg/strutil/metrics"
 	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
@@ -245,7 +243,7 @@ func downloadSingleISharesETF(
 	yesterday := time.Now().AddDate(0, 0, -1).Truncate(24 * time.Hour)
 
 	if startDate.Before(yesterday) {
-		days, err := tradingDays(ctx, subscription.Library.Pool, startDate, yesterday)
+		days, err := TradingDays(ctx, subscription.Library.Pool, startDate, yesterday)
 		if err != nil {
 			logger.Warn().Err(err).Msg("could not query trading days, falling back to today only")
 		} else {
@@ -264,8 +262,8 @@ func downloadSingleISharesETF(
 	})
 
 	// Load initial state from DB: last snapshot + changelog entries up to start
-	state := currentIndexMembers(ctx, subscription.Library.Pool, table, etf.IndexName, startDate)
-	memLastSnapshotDate := lastSnapshotDate(ctx, subscription.Library.Pool, table, etf.IndexName)
+	state := CurrentIndexMembers(ctx, subscription.Library.Pool, table, etf.IndexName, startDate)
+	memLastSnapshotDate := LastSnapshotDate(ctx, subscription.Library.Pool, table, etf.IndexName)
 
 	obsTemplate := &data.Observation{
 		ObservationDate:  time.Now(),
@@ -323,7 +321,7 @@ func downloadSingleISharesETF(
 				continue
 			}
 
-			if resolveShareClass(holding, figiMap, assetNameMap, logger) {
+			if ResolveShareClass(holding.Ticker, holding.Name, figiMap, assetNameMap, logger) {
 				continue
 			}
 
@@ -362,14 +360,14 @@ func downloadSingleISharesETF(
 		}
 
 		// Build current holdings map -- fail this index if any ticker is unresolved
-		currentHoldings := make(map[string]indexMember, len(parseResult.Holdings))
+		currentHoldings := make(map[string]IndexMember, len(parseResult.Holdings))
 
 		var unresolvedHoldings []iSharesHolding
 
 		for _, holding := range parseResult.Holdings {
 			f := figiMap[holding.Ticker]
 			if f != "" {
-				currentHoldings[holding.Ticker] = indexMember{
+				currentHoldings[holding.Ticker] = IndexMember{
 					CompositeFigi: f,
 					Weight:        holding.Weight,
 				}
@@ -414,7 +412,7 @@ func downloadSingleISharesETF(
 		}
 
 		// Diff against in-memory state
-		added, removed, weightChanged := diffSnapshots(currentHoldings, state)
+		added, removed, weightChanged := DiffSnapshots(currentHoldings, state)
 
 		eventDate := parseResult.SnapshotDate
 		if eventDate.IsZero() {
@@ -422,15 +420,15 @@ func downloadSingleISharesETF(
 		}
 
 		// Emit changelog: adds and removes
-		emitChangelog(added, removed, etf.IndexName, eventDate, obsTemplate, out)
+		EmitChangelog(added, removed, etf.IndexName, eventDate, obsTemplate, out)
 		numObs += len(added) + len(removed)
 
 		// Emit weight changes
-		emitWeightChanges(weightChanged, etf.IndexName, eventDate, obsTemplate, out)
+		EmitWeightChanges(weightChanged, etf.IndexName, eventDate, obsTemplate, out)
 		numObs += len(weightChanged)
 
 		// Check if snapshot is due
-		if shouldTakeSnapshot(memLastSnapshotDate, eventDate, "yearly") {
+		if ShouldTakeSnapshot(memLastSnapshotDate, eventDate, "yearly") {
 			constituents := make([]data.IndexConstituent, 0, len(currentHoldings))
 			for t, member := range currentHoldings {
 				constituents = append(constituents, data.IndexConstituent{
@@ -484,95 +482,4 @@ func downloadSingleISharesETF(
 	}
 
 	return numObs, nil
-}
-
-const jaroWinklerThreshold = 0.85
-
-// resolveShareClass checks if a ticker ending in A or B corresponds to an
-// internal asset with a "/" separator (e.g. BRKB -> BRK/B). The match is
-// verified by comparing the iShares holding name against the internal asset
-// name using Jaro-Winkler similarity. On success it populates figiMap for
-// the iShares ticker and returns true.
-func resolveShareClass(holding iSharesHolding, figiMap map[string]string, assetNameMap map[string]string, logger *zerolog.Logger) bool {
-	ticker := holding.Ticker
-	if len(ticker) < 2 {
-		return false
-	}
-
-	lastChar := ticker[len(ticker)-1]
-	if lastChar != 'A' && lastChar != 'B' {
-		return false
-	}
-
-	candidate := ticker[:len(ticker)-1] + "/" + string(lastChar)
-
-	f := figiMap[candidate]
-	if f == "" {
-		return false
-	}
-
-	candidateName := assetNameMap[candidate]
-	if candidateName == "" || holding.Name == "" {
-		return false
-	}
-
-	similarity := strutil.Similarity(
-		strings.ToLower(holding.Name),
-		strings.ToLower(candidateName),
-		metrics.NewJaroWinkler(),
-	)
-
-	if similarity < jaroWinklerThreshold {
-		// Fallback: if the first two words match after normalization, accept
-		// the match. Handles cases like "U-Haul Holding Company" vs
-		// "U HAUL NON VOTING SERIES N" where suffixes diverge but the core
-		// company name is the same.
-		if !firstWordsMatch(holding.Name, candidateName, 2) {
-			logger.Debug().
-				Str("ISharesTicker", ticker).
-				Str("CandidateTicker", candidate).
-				Str("ISharesName", holding.Name).
-				Str("AssetName", candidateName).
-				Float64("Similarity", similarity).
-				Msg("share class candidate rejected -- name similarity too low")
-
-			return false
-		}
-	}
-
-	logger.Info().
-		Str("ISharesTicker", ticker).
-		Str("ResolvedTicker", candidate).
-		Float64("Similarity", similarity).
-		Msg("resolved share class ticker via name match")
-
-	figiMap[ticker] = f
-
-	return true
-}
-
-// firstWordsMatch normalizes two names (lowercase, remove hyphens) and checks
-// whether their first n words are identical.
-func firstWordsMatch(a, b string, n int) bool {
-	normalize := func(s string) []string {
-		s = strings.ToLower(s)
-		s = strings.ReplaceAll(s, "-", " ")
-
-		return strings.Fields(s)
-	}
-
-	wa := normalize(a)
-	wb := normalize(b)
-
-	if len(wa) < n || len(wb) < n {
-		return false
-	}
-
-	for i := range n {
-		if wa[i] != wb[i] {
-			return false
-		}
-	}
-
-	return true
 }

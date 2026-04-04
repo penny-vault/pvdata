@@ -17,24 +17,28 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/adrg/strutil"
+	"github.com/adrg/strutil/metrics"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
-// indexMember represents a constituent of an index with its FIGI and weight.
-type indexMember struct {
+// IndexMember represents a constituent of an index with its FIGI and weight.
+type IndexMember struct {
 	CompositeFigi string
 	Weight        float64
 }
 
-const weightChangeThreshold = 0.01
+const WeightChangeThreshold = 0.01
 
-// shouldTakeSnapshot returns true if a new snapshot should be taken based on the
+// ShouldTakeSnapshot returns true if a new snapshot should be taken based on the
 // configured frequency, the date of the last snapshot, and the current processing date.
-func shouldTakeSnapshot(lastSnapshotDate, currentDate time.Time, frequency string) bool {
+func ShouldTakeSnapshot(lastSnapshotDate, currentDate time.Time, frequency string) bool {
 	if lastSnapshotDate.IsZero() {
 		return true
 	}
@@ -59,13 +63,13 @@ func shouldTakeSnapshot(lastSnapshotDate, currentDate time.Time, frequency strin
 	return currentDate.Sub(lastSnapshotDate) >= interval
 }
 
-// diffSnapshots compares current holdings against previous holdings
+// DiffSnapshots compares current holdings against previous holdings
 // and returns maps of added, removed, and weight-changed tickers.
-// A weight change is significant when the absolute difference exceeds weightChangeThreshold.
-func diffSnapshots(current, previous map[string]indexMember) (added, removed, weightChanged map[string]indexMember) {
-	added = make(map[string]indexMember)
-	removed = make(map[string]indexMember)
-	weightChanged = make(map[string]indexMember)
+// A weight change is significant when the absolute difference exceeds WeightChangeThreshold.
+func DiffSnapshots(current, previous map[string]IndexMember) (added, removed, weightChanged map[string]IndexMember) {
+	added = make(map[string]IndexMember)
+	removed = make(map[string]IndexMember)
+	weightChanged = make(map[string]IndexMember)
 
 	for ticker, member := range current {
 		prev, ok := previous[ticker]
@@ -79,7 +83,7 @@ func diffSnapshots(current, previous map[string]indexMember) (added, removed, we
 			delta = -delta
 		}
 
-		if delta >= weightChangeThreshold-1e-9 {
+		if delta >= WeightChangeThreshold-1e-9 {
 			weightChanged[ticker] = member
 		}
 	}
@@ -93,8 +97,8 @@ func diffSnapshots(current, previous map[string]indexMember) (added, removed, we
 	return
 }
 
-// lastSnapshotDate queries the database for the most recent snapshot date for the given index.
-func lastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexName string) time.Time {
+// LastSnapshotDate queries the database for the most recent snapshot date for the given index.
+func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexName string) time.Time {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire db connection for lastSnapshotDate")
@@ -115,9 +119,9 @@ func lastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexName 
 	return snapshotDate
 }
 
-// previousSnapshotTickers queries the database for all tickers in the most recent
+// PreviousSnapshotTickers queries the database for all tickers in the most recent
 // snapshot for the given index name, returning a map of ticker->compositeFigi.
-func previousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, indexName string) map[string]string {
+func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, indexName string) map[string]string {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire db connection for previousSnapshotTickers")
@@ -152,18 +156,18 @@ func previousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 	return result
 }
 
-// currentIndexMembers reconstructs the true index membership as of a given date
+// CurrentIndexMembers reconstructs the true index membership as of a given date
 // by taking the most recent snapshot on or before asOfDate and applying all
 // changelog entries (adds, removes, weight-changes) between that snapshot and asOfDate.
-func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexName string, asOfDate time.Time) map[string]indexMember {
+func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexName string, asOfDate time.Time) map[string]IndexMember {
 	if pool == nil {
-		return map[string]indexMember{}
+		return map[string]IndexMember{}
 	}
 
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire db connection for currentIndexMembers")
-		return map[string]indexMember{}
+		return map[string]IndexMember{}
 	}
 	defer conn.Release()
 
@@ -176,10 +180,10 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 	).Scan(&snapshotDate)
 	if err != nil {
 		log.Error().Err(err).Msg("could not query snapshot date for currentIndexMembers")
-		return map[string]indexMember{}
+		return map[string]IndexMember{}
 	}
 
-	result := make(map[string]indexMember)
+	result := make(map[string]IndexMember)
 
 	if !snapshotDate.IsZero() {
 		// Load the snapshot (single row with JSONB constituents)
@@ -191,11 +195,11 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 		).Scan(&constituents)
 		if err != nil {
 			log.Error().Err(err).Msg("could not query snapshot for currentIndexMembers")
-			return map[string]indexMember{}
+			return map[string]IndexMember{}
 		}
 
 		for _, c := range constituents {
-			result[c.Ticker] = indexMember{CompositeFigi: c.CompositeFigi, Weight: c.Weight}
+			result[c.Ticker] = IndexMember{CompositeFigi: c.CompositeFigi, Weight: c.Weight}
 		}
 	}
 
@@ -222,7 +226,7 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 
 		switch action {
 		case "add":
-			result[ticker] = indexMember{CompositeFigi: figi, Weight: weight}
+			result[ticker] = IndexMember{CompositeFigi: figi, Weight: weight}
 		case "remove":
 			delete(result, ticker)
 		case "weight-change":
@@ -236,8 +240,8 @@ func currentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 	return result
 }
 
-// emitWeightChanges emits IndexChange observations with "weight-change" action.
-func emitWeightChanges(changes map[string]indexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
+// EmitWeightChanges emits IndexChange observations with "weight-change" action.
+func EmitWeightChanges(changes map[string]IndexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
 	for ticker, member := range changes {
 		out <- &data.Observation{
 			IndexChange: &data.IndexChange{
@@ -255,9 +259,9 @@ func emitWeightChanges(changes map[string]indexMember, indexName string, eventDa
 	}
 }
 
-// tradingDays returns NYSE trading days between start and end (inclusive)
+// TradingDays returns NYSE trading days between start and end (inclusive)
 // by calling the database's trading_days(DATE, DATE) function.
-func tradingDays(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) ([]time.Time, error) {
+func TradingDays(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) ([]time.Time, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("database pool is nil")
 	}
@@ -288,8 +292,8 @@ func tradingDays(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) 
 	return days, nil
 }
 
-// emitChangelog emits IndexChange observations for adds and removes.
-func emitChangelog(adds, removes map[string]indexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
+// EmitChangelog emits IndexChange observations for adds and removes.
+func EmitChangelog(adds, removes map[string]IndexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
 	for ticker, member := range adds {
 		out <- &data.Observation{
 			IndexChange: &data.IndexChange{
@@ -320,4 +324,94 @@ func emitChangelog(adds, removes map[string]indexMember, indexName string, event
 			SubscriptionName: subscription.SubscriptionName,
 		}
 	}
+}
+
+const JaroWinklerThreshold = 0.85
+
+// ResolveShareClass checks if a ticker ending in A or B corresponds to an
+// internal asset with a "/" separator (e.g. BRKB -> BRK/B). The match is
+// verified by comparing the holding name against the internal asset
+// name using Jaro-Winkler similarity. On success it populates figiMap for
+// the ticker and returns true.
+func ResolveShareClass(ticker, holdingName string, figiMap map[string]string, assetNameMap map[string]string, logger *zerolog.Logger) bool {
+	if len(ticker) < 2 {
+		return false
+	}
+
+	lastChar := ticker[len(ticker)-1]
+	if lastChar != 'A' && lastChar != 'B' {
+		return false
+	}
+
+	candidate := ticker[:len(ticker)-1] + "/" + string(lastChar)
+
+	f := figiMap[candidate]
+	if f == "" {
+		return false
+	}
+
+	candidateName := assetNameMap[candidate]
+	if candidateName == "" || holdingName == "" {
+		return false
+	}
+
+	similarity := strutil.Similarity(
+		strings.ToLower(holdingName),
+		strings.ToLower(candidateName),
+		metrics.NewJaroWinkler(),
+	)
+
+	if similarity < JaroWinklerThreshold {
+		// Fallback: if the first two words match after normalization, accept
+		// the match. Handles cases like "U-Haul Holding Company" vs
+		// "U HAUL NON VOTING SERIES N" where suffixes diverge but the core
+		// company name is the same.
+		if !FirstWordsMatch(holdingName, candidateName, 2) {
+			logger.Debug().
+				Str("ISharesTicker", ticker).
+				Str("CandidateTicker", candidate).
+				Str("HoldingName", holdingName).
+				Str("AssetName", candidateName).
+				Float64("Similarity", similarity).
+				Msg("share class candidate rejected -- name similarity too low")
+
+			return false
+		}
+	}
+
+	logger.Info().
+		Str("ISharesTicker", ticker).
+		Str("ResolvedTicker", candidate).
+		Float64("Similarity", similarity).
+		Msg("resolved share class ticker via name match")
+
+	figiMap[ticker] = f
+
+	return true
+}
+
+// FirstWordsMatch normalizes two names (lowercase, remove hyphens) and checks
+// whether their first n words are identical.
+func FirstWordsMatch(a, b string, n int) bool {
+	normalize := func(s string) []string {
+		s = strings.ToLower(s)
+		s = strings.ReplaceAll(s, "-", " ")
+
+		return strings.Fields(s)
+	}
+
+	wa := normalize(a)
+	wb := normalize(b)
+
+	if len(wa) < n || len(wb) < n {
+		return false
+	}
+
+	for i := range n {
+		if wa[i] != wb[i] {
+			return false
+		}
+	}
+
+	return true
 }

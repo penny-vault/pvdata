@@ -187,11 +187,11 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	logger.Info().Int("NumHoldings", len(holdings)).Msg("parsed NDX-100 holdings")
 
-	// Build current holdings map (ticker -> indexMember)
-	currentHoldings := make(map[string]indexMember, len(holdings))
+	// Build current holdings map (ticker -> IndexMember)
+	currentHoldings := make(map[string]IndexMember, len(holdings))
 	for _, holding := range holdings {
 		if figi, ok := figiMap[holding.Ticker]; ok {
-			currentHoldings[holding.Ticker] = indexMember{
+			currentHoldings[holding.Ticker] = IndexMember{
 				CompositeFigi: figi,
 				Weight:        holding.Weight,
 			}
@@ -200,18 +200,18 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	// Get previous snapshot and emit changelog
 	table := subscription.DataTablesMap[data.IndexKey]
-	prevRaw := previousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
+	prevRaw := PreviousSnapshotTickers(ctx, subscription.Library.Pool, table, "ndx100")
 
-	previous := make(map[string]indexMember, len(prevRaw))
+	previous := make(map[string]IndexMember, len(prevRaw))
 	for ticker, figi := range prevRaw {
-		previous[ticker] = indexMember{CompositeFigi: figi}
+		previous[ticker] = IndexMember{CompositeFigi: figi}
 	}
 
-	added, removed, _ := diffSnapshots(currentHoldings, previous)
+	added, removed, _ := DiffSnapshots(currentHoldings, previous)
 
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
 
-	emitChangelog(added, removed, "ndx100", eventDate, &data.Observation{
+	EmitChangelog(added, removed, "ndx100", eventDate, &data.Observation{
 		ObservationDate:  time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,
@@ -219,8 +219,8 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	numObs += len(added) + len(removed)
 
 	// Check if a snapshot should be taken
-	lastDate := lastSnapshotDate(ctx, subscription.Library.Pool, table, "ndx100")
-	if shouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
+	lastDate := LastSnapshotDate(ctx, subscription.Library.Pool, table, "ndx100")
+	if ShouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
 		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
 
 		constituents := make([]data.IndexConstituent, 0, len(currentHoldings))

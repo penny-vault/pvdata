@@ -117,6 +117,7 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 
 	// Some iShares CSVs use "Weight (%)" while others use "Market Weight"
 	weightCol := -1
+
 	for _, candidate := range []string{"Weight (%)", "Market Weight"} {
 		if idx, ok := colIdx[candidate]; ok {
 			weightCol = idx
