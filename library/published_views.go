@@ -25,7 +25,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
 )
 
@@ -55,50 +54,37 @@ type PublishedView struct {
 }
 
 // GenerateViewSQL produces the SQL statements needed to create (or drop) the
-// published view. For most data types this returns a single CREATE OR REPLACE VIEW
-// statement. For the "index" data type it returns two statements: one for the
-// _snapshot view and one for the _changelog view. When there are zero sources
-// it returns DROP VIEW IF EXISTS statements.
+// published view. This returns a single CREATE OR REPLACE VIEW statement, or a
+// DROP VIEW IF EXISTS statement when there are zero sources.
 func (pv *PublishedView) GenerateViewSQL() []string {
-	if pv.DataTypeKey == data.IndexKey {
-		return []string{
-			generateUnionSQL(pv.ViewName+"_snapshot", "_snapshot", pv.Sources),
-			generateUnionSQL(pv.ViewName+"_changelog", "_changelog", pv.Sources),
-		}
-	}
-
-	return []string{generateUnionSQL(pv.ViewName, "", pv.Sources)}
+	return []string{generateUnionSQL(pv.ViewName, pv.Sources)}
 }
 
 // generateUnionSQL builds a CREATE OR REPLACE VIEW or DROP VIEW statement.
-// tableSuffix is appended to each source table name (e.g. "_snapshot" for index types).
-func generateUnionSQL(viewName, tableSuffix string, sources []ViewSource) string {
+func generateUnionSQL(viewName string, sources []ViewSource) string {
 	if len(sources) == 0 {
 		return fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName)
 	}
 
 	if len(sources) == 1 {
 		s := sources[0]
-		tbl := s.TableName + tableSuffix
 
 		where := buildWhereClause(s)
 		if where == "" {
-			return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s", viewName, tbl)
+			return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s", viewName, s.TableName)
 		}
 
-		return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s WHERE %s", viewName, tbl, where)
+		return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s WHERE %s", viewName, s.TableName, where)
 	}
 
 	var legs []string
 
 	for _, s := range sources {
-		tbl := s.TableName + tableSuffix
-
 		where := buildWhereClause(s)
 		if where == "" {
-			legs = append(legs, fmt.Sprintf("SELECT * FROM %s", tbl))
+			legs = append(legs, fmt.Sprintf("SELECT * FROM %s", s.TableName))
 		} else {
-			legs = append(legs, fmt.Sprintf("SELECT * FROM %s WHERE %s", tbl, where))
+			legs = append(legs, fmt.Sprintf("SELECT * FROM %s WHERE %s", s.TableName, where))
 		}
 	}
 
@@ -176,26 +162,19 @@ func ValidateSourceTables(ctx context.Context, q Querier, pv *PublishedView) err
 	}
 
 	for _, src := range pv.Sources {
-		tables := []string{src.TableName}
-		if pv.DataTypeKey == data.IndexKey {
-			tables = []string{src.TableName + "_snapshot", src.TableName + "_changelog"}
+		var exists bool
+
+		err := q.QueryRow(ctx,
+			`SELECT EXISTS (
+			   SELECT 1 FROM information_schema.tables
+			   WHERE table_name = $1 AND table_schema = 'public'
+			 )`, src.TableName).Scan(&exists)
+		if err != nil {
+			return fmt.Errorf("check table existence for %s: %w", src.TableName, err)
 		}
 
-		for _, tbl := range tables {
-			var exists bool
-
-			err := q.QueryRow(ctx,
-				`SELECT EXISTS (
-				   SELECT 1 FROM information_schema.tables
-				   WHERE table_name = $1 AND table_schema = 'public'
-				 )`, tbl).Scan(&exists)
-			if err != nil {
-				return fmt.Errorf("check table existence for %s: %w", tbl, err)
-			}
-
-			if !exists {
-				return fmt.Errorf("source table %s does not exist", tbl)
-			}
+		if !exists {
+			return fmt.Errorf("source table %s does not exist", src.TableName)
 		}
 	}
 
