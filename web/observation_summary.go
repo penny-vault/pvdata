@@ -27,13 +27,13 @@ func summarizeObservation(obs *data.Observation) (string, string) {
 		s := obs.IndexSnapshot
 
 		return "index_snapshot", fmt.Sprintf("%s %d constituents %s",
-			s.IndexName, len(s.Constituents), s.SnapshotDate.Format("2006-01-02"))
+			s.IndexTicker, len(s.Constituents), s.SnapshotDate.Format("2006-01-02"))
 
 	case obs.IndexChange != nil:
 		c := obs.IndexChange
 
 		return "index_change", fmt.Sprintf("%s %s %s weight=%.4f %s",
-			c.IndexName, c.Ticker, c.Action, c.Weight, c.EventDate.Format("2006-01-02"))
+			c.IndexTicker, c.Ticker, c.Action, c.Weight, c.EventDate.Format("2006-01-02"))
 
 	case obs.EodQuote != nil:
 		e := obs.EodQuote

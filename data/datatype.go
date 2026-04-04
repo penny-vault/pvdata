@@ -233,29 +233,30 @@ CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, series);`,
 		Name:     IndexKey,
 		ViewName: "indices",
 		Schema: `CREATE TABLE %[1]s_snapshot (
-    index_name     TEXT   NOT NULL,
+    index_ticker   TEXT   NOT NULL,
     snapshot_date  DATE   NOT NULL,
     constituents   JSONB  NOT NULL,
-    PRIMARY KEY (index_name, snapshot_date)
+    PRIMARY KEY (index_ticker, snapshot_date)
 );
 
 CREATE TABLE %[1]s_changelog (
     composite_figi CHARACTER(12)         NOT NULL,
     ticker         CHARACTER VARYING(10) NOT NULL,
-    index_name     TEXT                  NOT NULL,
+    index_ticker   TEXT                  NOT NULL,
     event_date     DATE                  NOT NULL,
     action         TEXT                  NOT NULL,
     weight         REAL                  NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (composite_figi, index_name, event_date)
+    PRIMARY KEY (composite_figi, index_ticker, event_date)
 );
 
-CREATE INDEX %[1]s_snapshot_index_name_idx ON %[1]s_snapshot(index_name, snapshot_date);
-CREATE INDEX %[1]s_changelog_index_name_idx ON %[1]s_changelog(index_name, event_date);`,
+CREATE INDEX %[1]s_snapshot_index_ticker_idx ON %[1]s_snapshot(index_ticker, snapshot_date);
+CREATE INDEX %[1]s_changelog_index_ticker_idx ON %[1]s_changelog(index_ticker, event_date);`,
 		Migrations: []string{
 			`ALTER TABLE %[1]s_snapshot ADD COLUMN IF NOT EXISTS weight REAL NOT NULL DEFAULT 0.0;`,
 			`DROP TABLE IF EXISTS %[1]s_snapshot; CREATE TABLE %[1]s_snapshot (index_name TEXT NOT NULL, snapshot_date DATE NOT NULL, constituents JSONB NOT NULL, PRIMARY KEY (index_name, snapshot_date));`,
+			`ALTER TABLE %[1]s_snapshot RENAME COLUMN index_name TO index_ticker; ALTER TABLE %[1]s_changelog RENAME COLUMN index_name TO index_ticker; DROP INDEX IF EXISTS %[1]s_snapshot_index_name_idx; DROP INDEX IF EXISTS %[1]s_changelog_index_name_idx; CREATE INDEX IF NOT EXISTS %[1]s_snapshot_index_ticker_idx ON %[1]s_snapshot(index_ticker, snapshot_date); CREATE INDEX IF NOT EXISTS %[1]s_changelog_index_ticker_idx ON %[1]s_changelog(index_ticker, event_date);`,
 		},
-		Version:       2,
+		Version:       3,
 		IsPartitioned: false,
 	},
 	FundamentalsKey: {

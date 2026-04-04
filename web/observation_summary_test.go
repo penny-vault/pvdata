@@ -33,7 +33,7 @@ var _ = Describe("summarizeObservation", func() {
 	It("summarizes an IndexSnapshot", func() {
 		obs := &data.Observation{
 			IndexSnapshot: &data.IndexSnapshot{
-				IndexName:    "sp-500",
+				IndexTicker:    "sp-500",
 				SnapshotDate: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
 				Constituents: []data.IndexConstituent{
 					{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", Weight: 0.0712},
@@ -49,7 +49,7 @@ var _ = Describe("summarizeObservation", func() {
 	It("summarizes an IndexChange", func() {
 		obs := &data.Observation{
 			IndexChange: &data.IndexChange{
-				IndexName: "sp-500",
+				IndexTicker: "sp-500",
 				Ticker:    "NVDA",
 				Action:    "add",
 				Weight:    0.0523,

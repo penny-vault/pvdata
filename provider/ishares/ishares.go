@@ -265,8 +265,8 @@ func downloadSingleISharesETF(
 	})
 
 	// Load initial state from DB: last snapshot + changelog entries up to start
-	state := provider.CurrentIndexMembers(ctx, subscription.Library.Pool, table, etf.IndexName, startDate)
-	memLastSnapshotDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, etf.IndexName)
+	state := provider.CurrentIndexMembers(ctx, subscription.Library.Pool, table, etf.BloombergTicker, startDate)
+	memLastSnapshotDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, etf.BloombergTicker)
 
 	obsTemplate := &data.Observation{
 		ObservationDate:  time.Now(),
@@ -281,37 +281,37 @@ func downloadSingleISharesETF(
 			csvURL += "&asOfDate=" + fd.asOfDate
 		}
 
-		logger.Info().Str("URL", csvURL).Str("IndexName", etf.IndexName).Time("Date", fd.date).Msg("downloading iShares holdings CSV")
+		logger.Info().Str("URL", csvURL).Str("IndexTicker", etf.BloombergTicker).Time("Date", fd.date).Msg("downloading iShares holdings CSV")
 
 		resp, err := client.R().SetContext(ctx).Get(csvURL)
 		if err != nil {
-			logger.Error().Err(err).Str("IndexName", etf.IndexName).Time("Date", fd.date).Msg("HTTP request failed")
+			logger.Error().Err(err).Str("IndexTicker", etf.BloombergTicker).Time("Date", fd.date).Msg("HTTP request failed")
 			continue
 		}
 
 		if resp.StatusCode() != 200 {
-			logger.Error().Int("StatusCode", resp.StatusCode()).Str("IndexName", etf.IndexName).Time("Date", fd.date).Msg("HTTP error")
+			logger.Error().Int("StatusCode", resp.StatusCode()).Str("IndexTicker", etf.BloombergTicker).Time("Date", fd.date).Msg("HTTP error")
 			continue
 		}
 
 		csvData := resp.Body()
-		logger.Info().Int("Bytes", len(csvData)).Str("IndexName", etf.IndexName).Msg("downloaded iShares holdings CSV")
+		logger.Info().Int("Bytes", len(csvData)).Str("IndexTicker", etf.BloombergTicker).Msg("downloaded iShares holdings CSV")
 
 		parseResult, err := parseISharesCSV(csvData)
 		if err != nil {
-			logger.Error().Err(err).Str("IndexName", etf.IndexName).Time("Date", fd.date).Msg("could not parse CSV")
+			logger.Error().Err(err).Str("IndexTicker", etf.BloombergTicker).Time("Date", fd.date).Msg("could not parse CSV")
 			continue
 		}
 
 		if len(parseResult.Holdings) == 0 {
-			logger.Warn().Str("IndexName", etf.IndexName).Time("Date", fd.date).Msg("no holdings found")
+			logger.Warn().Str("IndexTicker", etf.BloombergTicker).Time("Date", fd.date).Msg("no holdings found")
 			continue
 		}
 
 		logger.Info().
 			Int("NumHoldings", len(parseResult.Holdings)).
 			Time("SnapshotDate", parseResult.SnapshotDate).
-			Str("IndexName", etf.IndexName).
+			Str("IndexTicker", etf.BloombergTicker).
 			Msg("parsed iShares holdings")
 
 		// Resolve tickers missing from figiMap:
@@ -340,7 +340,7 @@ func downloadSingleISharesETF(
 			logger.Info().
 				Int("Count", len(unknownAssets)).
 				Strs("Tickers", unknownTickers).
-				Str("IndexName", etf.IndexName).
+				Str("IndexTicker", etf.BloombergTicker).
 				Msg("resolving unknown tickers via OpenFIGI")
 
 			figi.Enrich(unknownAssets...)
@@ -398,7 +398,7 @@ func downloadSingleISharesETF(
 				logger.Warn().
 					Int("Count", len(negligible)).
 					Strs("Holdings", negligible).
-					Str("IndexName", etf.IndexName).
+					Str("IndexTicker", etf.BloombergTicker).
 					Msg("omitting near-zero weight holdings with unresolved FIGIs")
 			}
 
@@ -407,10 +407,10 @@ func downloadSingleISharesETF(
 					Int("Unresolved", len(significant)).
 					Int("TotalHoldings", len(parseResult.Holdings)).
 					Strs("Holdings", significant).
-					Str("IndexName", etf.IndexName).
+					Str("IndexTicker", etf.BloombergTicker).
 					Msg("aborting index update -- holdings have unresolved FIGIs even after OpenFIGI lookup")
 
-				return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(significant), etf.IndexName)
+				return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(significant), etf.BloombergTicker)
 			}
 		}
 
@@ -423,11 +423,11 @@ func downloadSingleISharesETF(
 		}
 
 		// Emit changelog: adds and removes
-		provider.EmitChangelog(added, removed, etf.IndexName, eventDate, obsTemplate, out)
+		provider.EmitChangelog(added, removed, etf.BloombergTicker, eventDate, obsTemplate, out)
 		numObs += len(added) + len(removed)
 
 		// Emit weight changes
-		provider.EmitWeightChanges(weightChanged, etf.IndexName, eventDate, obsTemplate, out)
+		provider.EmitWeightChanges(weightChanged, etf.BloombergTicker, eventDate, obsTemplate, out)
 		numObs += len(weightChanged)
 
 		// Check if snapshot is due
@@ -443,7 +443,7 @@ func downloadSingleISharesETF(
 
 			out <- &data.Observation{
 				IndexSnapshot: &data.IndexSnapshot{
-					IndexName:    etf.IndexName,
+					IndexTicker:  etf.BloombergTicker,
 					SnapshotDate: eventDate,
 					Constituents: constituents,
 				},
@@ -457,7 +457,7 @@ func downloadSingleISharesETF(
 
 			logger.Info().
 				Int("NumConstituents", len(constituents)).
-				Str("IndexName", etf.IndexName).
+				Str("IndexTicker", etf.BloombergTicker).
 				Time("SnapshotDate", eventDate).
 				Msg("emitted index snapshot")
 		}

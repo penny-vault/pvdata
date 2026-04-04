@@ -32,7 +32,7 @@ type IndexConstituent struct {
 
 // IndexSnapshot represents the full composition of an index at a point in time.
 type IndexSnapshot struct {
-	IndexName    string             `json:"index_name"`
+	IndexTicker  string             `json:"index_ticker"`
 	SnapshotDate time.Time          `json:"snapshot_date"`
 	Constituents []IndexConstituent `json:"constituents"`
 }
@@ -54,7 +54,7 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 	}()
 
 	sql := fmt.Sprintf(`INSERT INTO %[1]s_snapshot (
-		"index_name",
+		"index_ticker",
 		"snapshot_date",
 		"constituents"
 	) VALUES (
@@ -63,7 +63,7 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 		constituents = EXCLUDED.constituents`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
-		idx.IndexName,
+		idx.IndexTicker,
 		idx.SnapshotDate,
 		idx.Constituents,
 	)
@@ -81,7 +81,7 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 type IndexChange struct {
 	Ticker        string
 	CompositeFigi string
-	IndexName     string
+	IndexTicker   string
 	EventDate     time.Time
 	Action        string // "add" or "remove"
 	Weight        float64
@@ -106,7 +106,7 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 	sql := fmt.Sprintf(`INSERT INTO %[1]s_changelog (
 		"composite_figi",
 		"ticker",
-		"index_name",
+		"index_ticker",
 		"event_date",
 		"action",
 		"weight"
@@ -119,7 +119,7 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 	_, err = tx.Exec(ctx, sql,
 		idx.CompositeFigi,
 		idx.Ticker,
-		idx.IndexName,
+		idx.IndexTicker,
 		idx.EventDate,
 		idx.Action,
 		idx.Weight,

@@ -98,7 +98,7 @@ func DiffSnapshots(current, previous map[string]IndexMember) (added, removed, we
 }
 
 // LastSnapshotDate queries the database for the most recent snapshot date for the given index.
-func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexName string) time.Time {
+func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string) time.Time {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire db connection for lastSnapshotDate")
@@ -108,9 +108,9 @@ func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexName 
 
 	var snapshotDate time.Time
 
-	sql := fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s_snapshot WHERE index_name = $1`, table)
+	sql := fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s_snapshot WHERE index_ticker = $1`, table)
 
-	err = conn.QueryRow(ctx, sql, indexName).Scan(&snapshotDate)
+	err = conn.QueryRow(ctx, sql, indexTicker).Scan(&snapshotDate)
 	if err != nil {
 		log.Error().Err(err).Msg("could not query last snapshot date")
 		return time.Time{}
@@ -121,7 +121,7 @@ func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexName 
 
 // PreviousSnapshotTickers queries the database for all tickers in the most recent
 // snapshot for the given index name, returning a map of ticker->compositeFigi.
-func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, indexName string) map[string]string {
+func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string) map[string]string {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire db connection for previousSnapshotTickers")
@@ -130,11 +130,11 @@ func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 	defer conn.Release()
 
 	sql := fmt.Sprintf(`SELECT ticker, composite_figi FROM %s_snapshot
-		WHERE index_name = $1 AND snapshot_date = (
-			SELECT MAX(snapshot_date) FROM %s_snapshot WHERE index_name = $1
+		WHERE index_ticker = $1 AND snapshot_date = (
+			SELECT MAX(snapshot_date) FROM %s_snapshot WHERE index_ticker = $1
 		)`, table, table)
 
-	rows, err := conn.Query(ctx, sql, indexName)
+	rows, err := conn.Query(ctx, sql, indexTicker)
 	if err != nil {
 		log.Error().Err(err).Msg("could not query previous snapshot tickers")
 		return map[string]string{}
@@ -159,7 +159,7 @@ func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, ind
 // CurrentIndexMembers reconstructs the true index membership as of a given date
 // by taking the most recent snapshot on or before asOfDate and applying all
 // changelog entries (adds, removes, weight-changes) between that snapshot and asOfDate.
-func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexName string, asOfDate time.Time) map[string]IndexMember {
+func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string, asOfDate time.Time) map[string]IndexMember {
 	if pool == nil {
 		return map[string]IndexMember{}
 	}
@@ -175,8 +175,8 @@ func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 	var snapshotDate time.Time
 
 	err = conn.QueryRow(ctx,
-		fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s_snapshot WHERE index_name = $1 AND snapshot_date <= $2`, table),
-		indexName, asOfDate,
+		fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s_snapshot WHERE index_ticker = $1 AND snapshot_date <= $2`, table),
+		indexTicker, asOfDate,
 	).Scan(&snapshotDate)
 	if err != nil {
 		log.Error().Err(err).Msg("could not query snapshot date for currentIndexMembers")
@@ -190,8 +190,8 @@ func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 		var constituents []data.IndexConstituent
 
 		err = conn.QueryRow(ctx,
-			fmt.Sprintf(`SELECT constituents FROM %s_snapshot WHERE index_name = $1 AND snapshot_date = $2`, table),
-			indexName, snapshotDate,
+			fmt.Sprintf(`SELECT constituents FROM %s_snapshot WHERE index_ticker = $1 AND snapshot_date = $2`, table),
+			indexTicker, snapshotDate,
 		).Scan(&constituents)
 		if err != nil {
 			log.Error().Err(err).Msg("could not query snapshot for currentIndexMembers")
@@ -205,8 +205,8 @@ func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 
 	// Apply changelog entries after the snapshot date up to asOfDate
 	changeRows, err := conn.Query(ctx,
-		fmt.Sprintf(`SELECT ticker, composite_figi, action, weight FROM %s_changelog WHERE index_name = $1 AND event_date > $2 AND event_date <= $3 ORDER BY event_date`, table),
-		indexName, snapshotDate, asOfDate,
+		fmt.Sprintf(`SELECT ticker, composite_figi, action, weight FROM %s_changelog WHERE index_ticker = $1 AND event_date > $2 AND event_date <= $3 ORDER BY event_date`, table),
+		indexTicker, snapshotDate, asOfDate,
 	)
 	if err != nil {
 		log.Error().Err(err).Msg("could not query changelog for currentIndexMembers")
@@ -241,13 +241,13 @@ func CurrentIndexMembers(ctx context.Context, pool *pgxpool.Pool, table, indexNa
 }
 
 // EmitWeightChanges emits IndexChange observations with "weight-change" action.
-func EmitWeightChanges(changes map[string]IndexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
+func EmitWeightChanges(changes map[string]IndexMember, indexTicker string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
 	for ticker, member := range changes {
 		out <- &data.Observation{
 			IndexChange: &data.IndexChange{
 				Ticker:        ticker,
 				CompositeFigi: member.CompositeFigi,
-				IndexName:     indexName,
+				IndexTicker:   indexTicker,
 				EventDate:     eventDate,
 				Action:        "weight-change",
 				Weight:        member.Weight,
@@ -293,13 +293,13 @@ func TradingDays(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) 
 }
 
 // EmitChangelog emits IndexChange observations for adds and removes.
-func EmitChangelog(adds, removes map[string]IndexMember, indexName string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
+func EmitChangelog(adds, removes map[string]IndexMember, indexTicker string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
 	for ticker, member := range adds {
 		out <- &data.Observation{
 			IndexChange: &data.IndexChange{
 				Ticker:        ticker,
 				CompositeFigi: member.CompositeFigi,
-				IndexName:     indexName,
+				IndexTicker:   indexTicker,
 				EventDate:     eventDate,
 				Action:        "add",
 				Weight:        member.Weight,
@@ -315,7 +315,7 @@ func EmitChangelog(adds, removes map[string]IndexMember, indexName string, event
 			IndexChange: &data.IndexChange{
 				Ticker:        ticker,
 				CompositeFigi: member.CompositeFigi,
-				IndexName:     indexName,
+				IndexTicker:   indexTicker,
 				EventDate:     eventDate,
 				Action:        "remove",
 			},

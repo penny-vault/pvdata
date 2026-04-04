@@ -278,9 +278,11 @@ func (asset *Asset) MarshalZerologObject(e *zerolog.Event) {
 	e.Strs("CUSIP", asset.CUSIP)
 	e.Strs("ISIN", asset.ISIN)
 	e.Str("CIK", asset.CIK)
+
 	if asset.SIC != nil {
 		e.Int("SIC", *asset.SIC)
 	}
+
 	e.Str("ListingDate", asset.ListingDate)
 	e.Str("DelistingDate", asset.DelistingDate)
 	e.Str("Industry", asset.Industry)

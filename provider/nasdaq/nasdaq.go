@@ -239,7 +239,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 		out <- &data.Observation{
 			IndexSnapshot: &data.IndexSnapshot{
-				IndexName:    "ndx100",
+				IndexTicker:  "NDX",
 				SnapshotDate: snapshotDate,
 				Constituents: constituents,
 			},

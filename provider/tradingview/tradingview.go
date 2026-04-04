@@ -295,31 +295,31 @@ func downloadSingleIndex(
 	fullURL := fmt.Sprintf("%s?table_id=symbols.components&version=54&columnset_id=overview&symbol_constituents_id=%s",
 		screenerURL, encodedSymbolID)
 
-	logger.Info().Str("URL", fullURL).Str("IndexName", idx.Name).Msg("downloading TradingView index constituents")
+	logger.Info().Str("URL", fullURL).Str("IndexTicker", idx.Symbol).Msg("downloading TradingView index constituents")
 
 	resp, err := client.R().SetContext(ctx).SetBody(requestBody).Post(fullURL)
 	if err != nil {
-		return 0, fmt.Errorf("HTTP request failed for %s: %w", idx.Name, err)
+		return 0, fmt.Errorf("HTTP request failed for %s: %w", idx.Symbol, err)
 	}
 
 	if resp.StatusCode() != 200 {
-		return 0, fmt.Errorf("HTTP error %d for %s", resp.StatusCode(), idx.Name)
+		return 0, fmt.Errorf("HTTP error %d for %s", resp.StatusCode(), idx.Symbol)
 	}
 
 	parseResult, err := parseTradingViewResponse(resp.Body())
 	if err != nil {
-		return 0, fmt.Errorf("could not parse response for %s: %w", idx.Name, err)
+		return 0, fmt.Errorf("could not parse response for %s: %w", idx.Symbol, err)
 	}
 
 	if len(parseResult.Holdings) == 0 {
-		logger.Warn().Str("IndexName", idx.Name).Msg("no holdings found")
+		logger.Warn().Str("IndexTicker", idx.Symbol).Msg("no holdings found")
 		return 0, nil
 	}
 
 	logger.Info().
 		Int("NumHoldings", len(parseResult.Holdings)).
 		Int("TotalCount", parseResult.TotalCount).
-		Str("IndexName", idx.Name).
+		Str("IndexTicker", idx.Symbol).
 		Msg("parsed TradingView index constituents")
 
 	// Resolve tickers missing from figiMap:
@@ -354,7 +354,7 @@ func downloadSingleIndex(
 		logger.Info().
 			Int("Count", len(unknownAssets)).
 			Strs("Tickers", unknownTickers).
-			Str("IndexName", idx.Name).
+			Str("IndexTicker", idx.Symbol).
 			Msg("resolving unknown tickers via OpenFIGI")
 
 		figi.Enrich(unknownAssets...)
@@ -397,23 +397,23 @@ func downloadSingleIndex(
 			Int("Unresolved", len(unresolvedTickers)).
 			Int("TotalHoldings", len(parseResult.Holdings)).
 			Strs("Holdings", unresolvedTickers).
-			Str("IndexName", idx.Name).
+			Str("IndexTicker", idx.Symbol).
 			Msg("aborting index update -- holdings have unresolved FIGIs even after OpenFIGI lookup")
 
-		return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(unresolvedTickers), idx.Name)
+		return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(unresolvedTickers), idx.Symbol)
 	}
 
 	// Compute today's date as event date.
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
 
 	// Load current state from DB and diff.
-	state := provider.CurrentIndexMembers(ctx, subscription.Library.Pool, table, idx.Name, eventDate)
-	memLastSnapshotDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, idx.Name)
+	state := provider.CurrentIndexMembers(ctx, subscription.Library.Pool, table, idx.Symbol, eventDate)
+	memLastSnapshotDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, table, idx.Symbol)
 
 	added, removed, _ := provider.DiffSnapshots(currentHoldings, state)
 
 	// Emit changelog: adds and removes.
-	provider.EmitChangelog(added, removed, idx.Name, eventDate, obsTemplate, out)
+	provider.EmitChangelog(added, removed, idx.Symbol, eventDate, obsTemplate, out)
 	numObs += len(added) + len(removed)
 
 	// Check if snapshot is due.
@@ -429,7 +429,7 @@ func downloadSingleIndex(
 
 		out <- &data.Observation{
 			IndexSnapshot: &data.IndexSnapshot{
-				IndexName:    idx.Name,
+				IndexTicker:  idx.Symbol,
 				SnapshotDate: eventDate,
 				Constituents: constituents,
 			},
@@ -442,7 +442,7 @@ func downloadSingleIndex(
 
 		logger.Info().
 			Int("NumConstituents", len(constituents)).
-			Str("IndexName", idx.Name).
+			Str("IndexTicker", idx.Symbol).
 			Time("SnapshotDate", eventDate).
 			Msg("emitted index snapshot")
 	}
