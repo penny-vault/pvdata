@@ -59,7 +59,7 @@ func (c *MissingQuarters) Audit(ctx context.Context, pool *pgxpool.Pool, table s
 		WHERE next_event_date IS NOT NULL
 		  AND gap_days > 120`, table)
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " AND event_date > $1"

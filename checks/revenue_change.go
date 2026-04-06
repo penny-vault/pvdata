@@ -59,7 +59,7 @@ func (c *RevenueChange) Audit(ctx context.Context, pool *pgxpool.Pool, table str
 		  AND revenues != 0
 		  AND ABS(revenues::float / prev_revenues::float) > 10`, table)
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " AND event_date > $1"

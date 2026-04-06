@@ -66,7 +66,7 @@ func (c *FundamentalsWithoutAsset) Audit(ctx context.Context, pool *pgxpool.Pool
 		LEFT JOIN assets a ON f.composite_figi = a.composite_figi
 		WHERE a.composite_figi IS NULL`, table)
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " AND f.event_date > $1"

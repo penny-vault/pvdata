@@ -61,7 +61,7 @@ func (c *MarginRange) Audit(ctx context.Context, pool *pgxpool.Pool, table strin
 		   OR (ebitda_margin != 0 AND (ebitda_margin < -1 OR ebitda_margin > 1))
 		   OR (profit_margin != 0 AND (profit_margin < -1 OR profit_margin > 1))`, table)
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " AND event_date > $1"

@@ -76,7 +76,7 @@ func (c *MetricFundamentalAgree) Audit(ctx context.Context, pool *pgxpool.Pool, 
 		WHERE f.pe != 0 AND m.pe != 0
 		  AND ABS(f.pe - m.pe) / ABS(f.pe) > 0.10`
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " AND f.event_date > $1"

@@ -48,7 +48,7 @@ func (c *DuplicateObservations) Audit(ctx context.Context, pool *pgxpool.Pool, t
 		SELECT ticker, composite_figi, dimension, event_date, COUNT(*) AS cnt
 		FROM %s`, table)
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " WHERE event_date > $1"

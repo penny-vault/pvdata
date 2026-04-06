@@ -59,7 +59,7 @@ func (c *AssetsChange) Audit(ctx context.Context, pool *pgxpool.Pool, table stri
 		  AND total_assets != 0
 		  AND ABS(total_assets::float / prev_assets::float) > 5`, table)
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " AND event_date > $1"

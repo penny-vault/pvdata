@@ -85,7 +85,7 @@ func (c *EodWithoutFundamentals) Audit(ctx context.Context, pool *pgxpool.Pool, 
 		WHERE e.latest_eod >= now() - INTERVAL '6 months'
 		  AND (f.latest_fundamental IS NULL OR f.latest_fundamental < now() - INTERVAL '6 months')`
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += fmt.Sprintf(" AND e.latest_eod > $%d", len(args)+1)

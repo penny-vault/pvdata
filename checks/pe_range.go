@@ -46,7 +46,7 @@ func (c *PERange) Audit(ctx context.Context, pool *pgxpool.Pool, table string, l
 		FROM %s
 		WHERE pe != 0 AND (pe < 0 OR pe > 1000)`, table)
 
-	var args []interface{}
+	var args []any
 
 	if lastChecked != nil {
 		baseQuery += " AND event_date > $1"
