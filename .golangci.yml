@@ -48,16 +48,7 @@ linters:
       - legacy
 
     # Excluding configuration per-path, per-linter, per-text and per-source.
-    rules:
-      # Streaming helpers added alongside existing batch readers; callers will
-      # be wired up in subsequent tasks.
-      - linters:
-          - unused
-        text: "func stream(CSV|CSVRows|CSVZstRows|CSVZipRows|ParquetRows|FileRows) is unused"
-      - linters:
-          - unused
-        text: "const rowChannelBuffer is unused"
-
+    rules: []
 
 formatters:
   # Enable specific formatter.

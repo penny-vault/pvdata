@@ -126,64 +126,6 @@ var _ = Describe("detectFileFormat", func() {
 	})
 })
 
-var _ = Describe("readCSVRows", func() {
-	It("reads CSV rows into maps with lowercase headers", func() {
-		dir := GinkgoT().TempDir()
-		path := filepath.Join(dir, "test.csv")
-
-		content := "Ticker,Date,Value\nAAPL,2023-01-01,150.00\nMSFT,2023-01-02,250.00\n"
-		Expect(os.WriteFile(path, []byte(content), 0600)).To(Succeed())
-
-		rows, err := readCSVRows(path)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(HaveLen(2))
-		Expect(rows[0]["ticker"]).To(Equal("AAPL"))
-		Expect(rows[0]["date"]).To(Equal("2023-01-01"))
-		Expect(rows[0]["value"]).To(Equal("150.00"))
-		Expect(rows[1]["ticker"]).To(Equal("MSFT"))
-	})
-
-	It("returns empty slice for CSV with only headers", func() {
-		dir := GinkgoT().TempDir()
-		path := filepath.Join(dir, "empty.csv")
-
-		Expect(os.WriteFile(path, []byte("Ticker,Date\n"), 0600)).To(Succeed())
-
-		rows, err := readCSVRows(path)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(BeEmpty())
-	})
-})
-
-var _ = Describe("readParquetRows", func() {
-	It("reads parquet rows if test file exists", func() {
-		parquetPath := "../../data/sharadar/sharadar_metrics_20231228.parquet"
-		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
-			Skip("test parquet file not available")
-		}
-
-		rows, err := readParquetRows(parquetPath)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).NotTo(BeEmpty())
-		// Each row should have a ticker key
-		Expect(rows[0]).To(HaveKey("ticker"))
-	})
-
-	It("reads SP500 parquet rows if test file exists", func() {
-		parquetPath := "../../data/sharadar/sharadar_sp500_20231228.parquet"
-		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
-			Skip("test parquet file not available")
-		}
-
-		rows, err := readParquetRows(parquetPath)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).NotTo(BeEmpty())
-		Expect(rows[0]).To(HaveKey("ticker"))
-		Expect(rows[0]).To(HaveKey("action"))
-		Expect(rows[0]).To(HaveKey("date"))
-	})
-})
-
 var _ = Describe("mapRowToSharadarMetric", func() {
 	It("maps a row to a sharadarMetric struct", func() {
 		row := map[string]string{

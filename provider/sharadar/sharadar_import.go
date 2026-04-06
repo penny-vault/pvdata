@@ -228,187 +228,6 @@ func detectFileFormat(path string) (fileFormat, error) {
 	}
 }
 
-// parseCSV reads CSV data from r. The first row is used as headers; header names
-// are normalized to lowercase. Each subsequent row is returned as a map[string]string.
-func parseCSV(r io.Reader) ([]map[string]string, error) {
-	cr := csv.NewReader(r)
-
-	headers, err := cr.Read()
-	if err != nil {
-		return nil, fmt.Errorf("read CSV headers: %w", err)
-	}
-
-	for i, h := range headers {
-		headers[i] = strings.ToLower(strings.TrimSpace(h))
-	}
-
-	var rows []map[string]string
-
-	for {
-		record, err := cr.Read()
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("read CSV row: %w", err)
-		}
-
-		row := make(map[string]string, len(headers))
-		for i, h := range headers {
-			if i < len(record) {
-				row[h] = record[i]
-			}
-		}
-
-		rows = append(rows, row)
-	}
-
-	return rows, nil
-}
-
-// readCSVRows opens a plain CSV file and returns its rows as maps.
-func readCSVRows(path string) ([]map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open CSV %s: %w", path, err)
-	}
-	defer f.Close()
-
-	return parseCSV(f)
-}
-
-// readCSVZstRows opens a zstd-compressed CSV file and returns its rows as maps.
-func readCSVZstRows(path string) ([]map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open CSV.zst %s: %w", path, err)
-	}
-	defer f.Close()
-
-	zr, err := zstd.NewReader(f)
-	if err != nil {
-		return nil, fmt.Errorf("create zstd reader for %s: %w", path, err)
-	}
-	defer zr.Close()
-
-	return parseCSV(zr)
-}
-
-// readCSVZipRows opens a zip archive, finds the first .csv entry, and returns its rows as maps.
-func readCSVZipRows(path string) ([]map[string]string, error) {
-	zr, err := zip.OpenReader(path)
-	if err != nil {
-		return nil, fmt.Errorf("open ZIP %s: %w", path, err)
-	}
-	defer zr.Close()
-
-	for _, f := range zr.File {
-		if strings.HasSuffix(strings.ToLower(f.Name), ".csv") {
-			rc, err := f.Open()
-			if err != nil {
-				return nil, fmt.Errorf("open CSV entry %s in ZIP %s: %w", f.Name, path, err)
-			}
-			defer rc.Close()
-
-			return parseCSV(rc)
-		}
-	}
-
-	return nil, fmt.Errorf("no CSV entry found in ZIP %s", path)
-}
-
-// readParquetRows reads a parquet file and returns its rows as maps.
-// Column names are normalized to lowercase.
-func readParquetRows(path string) ([]map[string]string, error) {
-	fr, err := local.NewLocalFileReader(path)
-	if err != nil {
-		return nil, fmt.Errorf("open parquet %s: %w", path, err)
-	}
-	defer fr.Close()
-
-	pr, err := reader.NewParquetReader(fr, nil, 4)
-	if err != nil {
-		return nil, fmt.Errorf("create parquet reader for %s: %w", path, err)
-	}
-	defer pr.ReadStop()
-
-	numRows := int(pr.GetNumRows())
-	rows := make([]map[string]string, 0, numRows)
-
-	batchSize := 10000
-	for numRows > 0 {
-		readCount := batchSize
-		if readCount > numRows {
-			readCount = numRows
-		}
-
-		batch, err := pr.ReadByNumber(readCount)
-		if err != nil {
-			return nil, fmt.Errorf("read parquet rows: %w", err)
-		}
-
-		for _, rawRow := range batch {
-			val := reflect.ValueOf(rawRow)
-			if val.Kind() == reflect.Ptr {
-				val = val.Elem()
-			}
-
-			if val.Kind() != reflect.Struct {
-				continue
-			}
-
-			typ := val.Type()
-
-			row := make(map[string]string, typ.NumField())
-			for j := 0; j < typ.NumField(); j++ {
-				name := strings.ToLower(typ.Field(j).Name)
-				field := val.Field(j)
-
-				// Dereference pointer fields (nullable parquet columns)
-				if field.Kind() == reflect.Ptr {
-					if field.IsNil() {
-						row[name] = ""
-
-						continue
-					}
-
-					field = field.Elem()
-				}
-
-				row[name] = fmt.Sprintf("%v", field.Interface())
-			}
-
-			rows = append(rows, row)
-		}
-
-		numRows -= readCount
-	}
-
-	return rows, nil
-}
-
-// readFileRows dispatches to the appropriate reader based on the file format.
-func readFileRows(path string) ([]map[string]string, error) {
-	format, err := detectFileFormat(path)
-	if err != nil {
-		return nil, err
-	}
-
-	switch format {
-	case fileFormatParquet:
-		return readParquetRows(path)
-	case fileFormatCSV:
-		return readCSVRows(path)
-	case fileFormatCSVZst:
-		return readCSVZstRows(path)
-	case fileFormatCSVZip:
-		return readCSVZipRows(path)
-	default:
-		return nil, fmt.Errorf("unsupported file format for %q", path)
-	}
-}
-
 // streamCSV reads CSV data from r and sends each row to out as a RowResult.
 // Headers are normalized to lowercase. The channel is closed via defer when
 // reading is complete or an error occurs. Cancellation is supported via ctx.
@@ -920,30 +739,24 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 	}()
 
 	for _, filePath := range files {
-		logger.Info().Str("file", filePath).Msg("reading file")
+		logger.Info().Str("file", filePath).Msg("streaming file")
 
-		rows, err := readFileRows(filePath)
-		if err != nil {
-			logger.Error().Err(err).Str("file", filePath).Msg("failed to read file")
+		rowChan := streamFileRows(ctx, filePath)
 
-			runSummary.Status = data.RunFailed
-
-			return
-		}
-
-		logger.Info().Int("rows", len(rows)).Str("file", filePath).Msg("file loaded")
-
-		var n int
+		var (
+			n   int
+			err error
+		)
 
 		switch sub.Dataset {
 		case "Fundamentals":
-			n, err = importFundamentalsRows(ctx, sub, rows, out)
+			n, err = importFundamentalsRows(ctx, sub, rowChan, out)
 		case "Metrics":
-			n, err = importMetricsRows(ctx, sub, rows, out)
+			n, err = importMetricsRows(ctx, sub, rowChan, out)
 		case "Stock Tickers":
-			n, err = importTickersRows(ctx, sub, rows, out)
+			n, err = importTickersRows(ctx, sub, rowChan, out)
 		case "SP500":
-			n, err = importSP500Rows(ctx, sub, rows, out)
+			n, err = importSP500Rows(ctx, sub, rowChan, out)
 		default:
 			err = fmt.Errorf("unsupported dataset %q for file import", sub.Dataset)
 		}
@@ -962,7 +775,7 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 }
 
 // importFundamentalsRows processes rows for the Fundamentals dataset.
-func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
 	conn, err := sub.Library.Pool.Acquire(ctx)
@@ -983,8 +796,12 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 
 	count := 0
 
-	for i, row := range rows {
-		fundamental := mapRowToSharadarFundamental(row)
+	for rr := range rows {
+		if rr.Err != nil {
+			return 0, fmt.Errorf("reading file: %w", rr.Err)
+		}
+
+		fundamental := mapRowToSharadarFundamental(rr.Row)
 		pvFundamental := fundamental.PvFundamental(figiMap)
 
 		out <- &data.Observation{
@@ -996,8 +813,8 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 
 		count++
 
-		if (i+1)%10000 == 0 {
-			logger.Info().Int("rows_processed", i+1).Int("total_rows", len(rows)).Msg("fundamentals import progress")
+		if count%10000 == 0 {
+			logger.Info().Int("rows_processed", count).Msg("fundamentals import progress")
 		}
 	}
 
@@ -1005,7 +822,7 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 }
 
 // importMetricsRows processes rows for the Metrics dataset.
-func importMetricsRows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+func importMetricsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
 	conn, err := sub.Library.Pool.Acquire(ctx)
@@ -1031,8 +848,12 @@ func importMetricsRows(ctx context.Context, sub *library.Subscription, rows []ma
 
 	count := 0
 
-	for i, row := range rows {
-		metric := mapRowToSharadarMetric(row)
+	for rr := range rows {
+		if rr.Err != nil {
+			return 0, fmt.Errorf("reading file: %w", rr.Err)
+		}
+
+		metric := mapRowToSharadarMetric(rr.Row)
 		pvMetric := metric.PvMetric(figiMap, nyc)
 
 		out <- &data.Observation{
@@ -1044,8 +865,8 @@ func importMetricsRows(ctx context.Context, sub *library.Subscription, rows []ma
 
 		count++
 
-		if (i+1)%10000 == 0 {
-			logger.Info().Int("rows_processed", i+1).Int("total_rows", len(rows)).Msg("metrics import progress")
+		if count%10000 == 0 {
+			logger.Info().Int("rows_processed", count).Msg("metrics import progress")
 		}
 	}
 
@@ -1053,13 +874,23 @@ func importMetricsRows(ctx context.Context, sub *library.Subscription, rows []ma
 }
 
 // importTickersRows processes rows for the Stock Tickers dataset.
-func importTickersRows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+func importTickersRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
-	enrichAssets := make([]*data.Asset, 0, 5000)
-	allAssets := make([]*data.Asset, 0, len(rows))
+	var rowSlice []map[string]string
 
-	for _, row := range rows {
+	for rr := range rows {
+		if rr.Err != nil {
+			return 0, fmt.Errorf("reading file: %w", rr.Err)
+		}
+
+		rowSlice = append(rowSlice, rr.Row)
+	}
+
+	enrichAssets := make([]*data.Asset, 0, 5000)
+	allAssets := make([]*data.Asset, 0, len(rowSlice))
+
+	for _, row := range rowSlice {
 		// Only process SF1 table rows
 		if row["table"] != "SF1" {
 			continue
@@ -1125,8 +956,18 @@ const sp500IndexTicker = "SPX"
 // importSP500Rows processes rows for the SP500 dataset.
 // Rows with action "current" or "historical" are grouped by date into IndexSnapshots.
 // Rows with action "added" or "removed" become IndexChange observations.
-func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[string]string, out chan<- *data.Observation) (int, error) {
+func importSP500Rows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
+
+	var rowSlice []map[string]string
+
+	for rr := range rows {
+		if rr.Err != nil {
+			return 0, fmt.Errorf("reading file: %w", rr.Err)
+		}
+
+		rowSlice = append(rowSlice, rr.Row)
+	}
 
 	conn, err := sub.Library.Pool.Acquire(ctx)
 	if err != nil {
@@ -1150,7 +991,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 	// Step 2: Collect all unique tickers from the data
 	uniqueTickers := make(map[string]string) // ticker -> name
 
-	for _, row := range rows {
+	for _, row := range rowSlice {
 		ticker := strings.TrimSpace(row["ticker"])
 
 		name := strings.TrimSpace(row["name"])
@@ -1212,7 +1053,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 	// is incomplete and must not be imported.
 	var earliestHistoricalDate string
 
-	for _, row := range rows {
+	for _, row := range rowSlice {
 		if strings.TrimSpace(row["action"]) == "historical" {
 			dateStr := strings.TrimSpace(row["date"])
 			if earliestHistoricalDate == "" || dateStr < earliestHistoricalDate {
@@ -1230,7 +1071,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 	// Seed membership from the earliest historical snapshot
 	membership := make(map[string]string) // ticker -> compositeFigi
 
-	for _, row := range rows {
+	for _, row := range rowSlice {
 		if strings.TrimSpace(row["action"]) == "historical" && strings.TrimSpace(row["date"]) == earliestHistoricalDate {
 			ticker := strings.TrimSpace(row["ticker"])
 			if ticker != "" {
@@ -1242,7 +1083,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows []map[
 	// Collect changelog rows on or after the earliest historical date
 	var changes []*data.IndexChange
 
-	for _, row := range rows {
+	for _, row := range rowSlice {
 		action := strings.TrimSpace(row["action"])
 		ticker := strings.TrimSpace(row["ticker"])
 		dateStr := strings.TrimSpace(row["date"])
