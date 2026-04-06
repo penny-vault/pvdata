@@ -29,4 +29,20 @@ func init() {
 	RegisterInline(&NetIncomeEPS{})
 	RegisterInline(&CashFlowSum{})
 	RegisterInline(&CurrentRatioCalc{})
+
+	// Layer 3: Statistical Outlier Detection (Audit only)
+	RegisterAudit(&RevenueChange{})
+	RegisterAudit(&AssetsChange{})
+	RegisterAudit(&PERange{})
+	RegisterAudit(&MarginRange{})
+
+	// Layer 4: Coverage and Staleness (Audit only)
+	RegisterAudit(&MissingQuarters{})
+	RegisterAudit(&StaleData{})
+	RegisterAudit(&EodWithoutFundamentals{})
+	RegisterAudit(&FundamentalsWithoutAsset{})
+
+	// Layer 5: Cross-Type Consistency (Audit only)
+	RegisterAudit(&MetricFundamentalAgree{})
+	RegisterAudit(&DuplicateObservations{})
 }
