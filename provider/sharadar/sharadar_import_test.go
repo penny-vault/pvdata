@@ -475,3 +475,41 @@ var _ = Describe("streamParquetRows", func() {
 		Expect(firstResult.Err).To(HaveOccurred())
 	})
 })
+
+var _ = Describe("streamFileRows", func() {
+	It("streams rows from a plain CSV file", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "test.csv")
+		content := "Ticker,Date,Value\nAAPL,2023-01-01,150.00\nMSFT,2023-01-02,250.00\n"
+		Expect(os.WriteFile(path, []byte(content), 0600)).To(Succeed())
+
+		ctx := context.Background()
+		ch := streamFileRows(ctx, path)
+
+		var rows []map[string]string
+		for r := range ch {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0]["ticker"]).To(Equal("AAPL"))
+		Expect(rows[1]["ticker"]).To(Equal("MSFT"))
+	})
+
+	It("sends error for unsupported file format", func() {
+		ctx := context.Background()
+		ch := streamFileRows(ctx, "/tmp/data.xlsx")
+
+		var firstResult RowResult
+		for r := range ch {
+			firstResult = r
+			break
+		}
+		// drain
+		for range ch {
+		}
+
+		Expect(firstResult.Err).To(HaveOccurred())
+	})
+})

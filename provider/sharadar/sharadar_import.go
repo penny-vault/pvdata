@@ -553,6 +553,132 @@ func streamParquetRows(ctx context.Context, path string, out chan<- RowResult) {
 	}
 }
 
+// streamCSVRows opens a plain CSV file and streams rows to out via streamCSV.
+// On open error, an error RowResult is sent and the channel is closed.
+// streamCSV is responsible for closing the channel in the non-error path.
+func streamCSVRows(ctx context.Context, path string, out chan<- RowResult) {
+	f, err := os.Open(path)
+	if err != nil {
+		out <- RowResult{Err: fmt.Errorf("open CSV %s: %w", path, err)}
+
+		close(out)
+
+		return
+	}
+
+	defer f.Close()
+
+	streamCSV(ctx, f, out)
+}
+
+// streamCSVZstRows opens a zstd-compressed CSV file and streams rows to out via streamCSV.
+// On open/decompress error, an error RowResult is sent and the channel is closed.
+// streamCSV is responsible for closing the channel in the non-error path.
+func streamCSVZstRows(ctx context.Context, path string, out chan<- RowResult) {
+	f, err := os.Open(path)
+	if err != nil {
+		out <- RowResult{Err: fmt.Errorf("open CSV.zst %s: %w", path, err)}
+
+		close(out)
+
+		return
+	}
+
+	defer f.Close()
+
+	zr, err := zstd.NewReader(f)
+	if err != nil {
+		out <- RowResult{Err: fmt.Errorf("create zstd reader for %s: %w", path, err)}
+
+		close(out)
+
+		return
+	}
+
+	defer zr.Close()
+
+	streamCSV(ctx, zr, out)
+}
+
+// streamCSVZipRows opens a zip archive, finds the first .csv entry, and streams
+// its rows to out via streamCSV. On error before streamCSV is called, an error
+// RowResult is sent and the channel is closed. streamCSV handles close(out).
+func streamCSVZipRows(ctx context.Context, path string, out chan<- RowResult) {
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		out <- RowResult{Err: fmt.Errorf("open ZIP %s: %w", path, err)}
+
+		close(out)
+
+		return
+	}
+
+	defer zr.Close()
+
+	for _, f := range zr.File {
+		if strings.HasSuffix(strings.ToLower(f.Name), ".csv") {
+			rc, err := f.Open()
+			if err != nil {
+				out <- RowResult{Err: fmt.Errorf("open CSV entry %s in ZIP %s: %w", f.Name, path, err)}
+
+				close(out)
+
+				return
+			}
+
+			defer rc.Close()
+
+			streamCSV(ctx, rc, out)
+
+			return
+		}
+	}
+
+	out <- RowResult{Err: fmt.Errorf("no CSV entry found in ZIP %s", path)}
+
+	close(out)
+}
+
+// rowChannelBuffer is the buffer size used for channels returned by streamFileRows.
+const rowChannelBuffer = 10000
+
+// streamFileRows detects the file format of path and returns a channel that
+// receives RowResult values as rows are read in a background goroutine.
+// The channel is closed when all rows have been sent or an error occurs.
+func streamFileRows(ctx context.Context, path string) <-chan RowResult {
+	ch := make(chan RowResult, rowChannelBuffer)
+
+	format, err := detectFileFormat(path)
+	if err != nil {
+		go func() {
+			ch <- RowResult{Err: err}
+
+			close(ch)
+		}()
+
+		return ch
+	}
+
+	switch format {
+	case fileFormatParquet:
+		go streamParquetRows(ctx, path, ch)
+	case fileFormatCSV:
+		go streamCSVRows(ctx, path, ch)
+	case fileFormatCSVZst:
+		go streamCSVZstRows(ctx, path, ch)
+	case fileFormatCSVZip:
+		go streamCSVZipRows(ctx, path, ch)
+	default:
+		go func() {
+			ch <- RowResult{Err: fmt.Errorf("unsupported file format for %q", path)}
+
+			close(ch)
+		}()
+	}
+
+	return ch
+}
+
 // parseFloat converts a string to float64, treating empty/"<nil>"/"None" as 0.
 func parseFloat(s string) float64 {
 	s = strings.TrimSpace(s)
