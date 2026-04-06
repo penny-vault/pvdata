@@ -12,6 +12,7 @@ const router = useRouter()
 const menuItems = [
   { label: 'Subscriptions', icon: 'pi pi-database', command: () => router.push('/') },
   { label: 'SQL Console', icon: 'pi pi-code', command: () => router.push('/sql') },
+  { label: 'Data Quality', icon: 'pi pi-check-circle', command: () => router.push('/data-quality') },
 ]
 
 onMounted(() => {

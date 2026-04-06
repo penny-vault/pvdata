@@ -148,3 +148,16 @@ export async function subscribeRunEvents(id: string): Promise<EventSource> {
   const qs = token ? `?token=${encodeURIComponent(token)}` : ''
   return new EventSource(`${BASE}/subscriptions/${id}/run/events${qs}`)
 }
+
+// ---------- Data Quality ----------
+
+export async function getQualityIssues(params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString()
+  const res = await authFetch(`/quality/issues${qs ? '?' + qs : ''}`)
+  return handleResponse<{ issues: any[]; total: number; limit: number; offset: number }>(res)
+}
+
+export async function getQualitySummary() {
+  const res = await authFetch('/quality/summary')
+  return handleResponse<any[]>(res)
+}

@@ -22,6 +22,11 @@ const routes = [
     component: () => import('@/pages/SqlConsolePage.vue'),
   },
   {
+    path: '/data-quality',
+    name: 'data-quality',
+    component: () => import('@/pages/DataQualityPage.vue'),
+  },
+  {
     path: '/auth/callback',
     name: 'auth-callback',
     component: () => import('@/pages/SubscriptionsPage.vue'),
