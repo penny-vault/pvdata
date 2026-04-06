@@ -48,15 +48,7 @@ linters:
       - legacy
 
     # Excluding configuration per-path, per-linter, per-text and per-source.
-    #rules:
-    #  # Exclude some linters from running on tests files.
-    #  - path: _test\.go
-    #    linters:
-    #      - gocyclo
-    #      - errcheck
-    #      - dupl
-    #      - gosec
-
+    rules: []
 
 formatters:
   # Enable specific formatter.

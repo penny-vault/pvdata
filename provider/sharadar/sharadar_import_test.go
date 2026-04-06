@@ -15,8 +15,10 @@
 package sharadar
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -121,64 +123,6 @@ var _ = Describe("detectFileFormat", func() {
 	It("returns error for unsupported format", func() {
 		_, err := detectFileFormat("data.xlsx")
 		Expect(err).To(HaveOccurred())
-	})
-})
-
-var _ = Describe("readCSVRows", func() {
-	It("reads CSV rows into maps with lowercase headers", func() {
-		dir := GinkgoT().TempDir()
-		path := filepath.Join(dir, "test.csv")
-
-		content := "Ticker,Date,Value\nAAPL,2023-01-01,150.00\nMSFT,2023-01-02,250.00\n"
-		Expect(os.WriteFile(path, []byte(content), 0600)).To(Succeed())
-
-		rows, err := readCSVRows(path)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(HaveLen(2))
-		Expect(rows[0]["ticker"]).To(Equal("AAPL"))
-		Expect(rows[0]["date"]).To(Equal("2023-01-01"))
-		Expect(rows[0]["value"]).To(Equal("150.00"))
-		Expect(rows[1]["ticker"]).To(Equal("MSFT"))
-	})
-
-	It("returns empty slice for CSV with only headers", func() {
-		dir := GinkgoT().TempDir()
-		path := filepath.Join(dir, "empty.csv")
-
-		Expect(os.WriteFile(path, []byte("Ticker,Date\n"), 0600)).To(Succeed())
-
-		rows, err := readCSVRows(path)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(BeEmpty())
-	})
-})
-
-var _ = Describe("readParquetRows", func() {
-	It("reads parquet rows if test file exists", func() {
-		parquetPath := "../../data/sharadar/sharadar_metrics_20231228.parquet"
-		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
-			Skip("test parquet file not available")
-		}
-
-		rows, err := readParquetRows(parquetPath)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).NotTo(BeEmpty())
-		// Each row should have a ticker key
-		Expect(rows[0]).To(HaveKey("ticker"))
-	})
-
-	It("reads SP500 parquet rows if test file exists", func() {
-		parquetPath := "../../data/sharadar/sharadar_sp500_20231228.parquet"
-		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
-			Skip("test parquet file not available")
-		}
-
-		rows, err := readParquetRows(parquetPath)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).NotTo(BeEmpty())
-		Expect(rows[0]).To(HaveKey("ticker"))
-		Expect(rows[0]).To(HaveKey("action"))
-		Expect(rows[0]).To(HaveKey("date"))
 	})
 })
 
@@ -323,5 +267,191 @@ var _ = Describe("mapRowToSharadarTicker", func() {
 		Expect(ticker).NotTo(BeNil())
 		Expect(ticker.LastUpdated).To(Equal(time.Time{}))
 		Expect(ticker.FirstAdded).To(Equal(time.Time{}))
+	})
+})
+
+var _ = Describe("streamCSV", func() {
+	It("streams rows with lowercase headers from a string reader", func() {
+		ctx := context.Background()
+		out := make(chan RowResult, 10)
+		input := "Ticker,Date,Value\nAAPL,2023-01-01,150.00\nMSFT,2023-01-02,250.00\n"
+
+		go streamCSV(ctx, strings.NewReader(input), out)
+
+		var rows []map[string]string
+		for r := range out {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0]["ticker"]).To(Equal("AAPL"))
+		Expect(rows[0]["date"]).To(Equal("2023-01-01"))
+		Expect(rows[0]["value"]).To(Equal("150.00"))
+		Expect(rows[1]["ticker"]).To(Equal("MSFT"))
+	})
+
+	It("streams empty result for headers-only CSV", func() {
+		ctx := context.Background()
+		out := make(chan RowResult, 10)
+		input := "Ticker,Date\n"
+
+		go streamCSV(ctx, strings.NewReader(input), out)
+
+		var rows []map[string]string
+		for r := range out {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).To(BeEmpty())
+	})
+
+	It("sends error on malformed CSV", func() {
+		ctx := context.Background()
+		out := make(chan RowResult, 10)
+		// A bare quote mid-field triggers a parse error in encoding/csv
+		input := "Ticker,Date\nAA\"PL,2023-01-01\n"
+
+		go streamCSV(ctx, strings.NewReader(input), out)
+
+		var errResult RowResult
+		for r := range out {
+			if r.Err != nil {
+				errResult = r
+			}
+		}
+
+		Expect(errResult.Err).To(HaveOccurred())
+	})
+
+	It("stops when context is cancelled", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		// Unbuffered channel so sender blocks after consumer stops reading.
+		out := make(chan RowResult)
+
+		// Build a large CSV so many rows would be sent without cancellation.
+		var sb strings.Builder
+		sb.WriteString("ticker,date\n")
+		for i := 0; i < 1000; i++ {
+			sb.WriteString("AAPL,2023-01-01\n")
+		}
+
+		go streamCSV(ctx, strings.NewReader(sb.String()), out)
+
+		// Read one row, then cancel.
+		<-out
+		cancel()
+
+		// Drain remaining rows; channel must close eventually.
+		count := 1
+		for range out {
+			count++
+		}
+
+		Expect(count).To(BeNumerically("<", 1000))
+	})
+})
+
+var _ = Describe("streamParquetRows", func() {
+	It("streams parquet rows if test file exists", func() {
+		parquetPath := "../../data/sharadar/sharadar_metrics_20231228.parquet"
+		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
+			Skip("test parquet file not available")
+		}
+
+		ctx := context.Background()
+		ch := make(chan RowResult, 10000)
+
+		go streamParquetRows(ctx, parquetPath, ch)
+
+		var rows []map[string]string
+		for r := range ch {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).NotTo(BeEmpty())
+		Expect(rows[0]).To(HaveKey("ticker"))
+	})
+
+	It("streams SP500 parquet rows if test file exists", func() {
+		parquetPath := "../../data/sharadar/sharadar_sp500_20231228.parquet"
+		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
+			Skip("test parquet file not available")
+		}
+
+		ctx := context.Background()
+		ch := make(chan RowResult, 10000)
+
+		go streamParquetRows(ctx, parquetPath, ch)
+
+		var rows []map[string]string
+		for r := range ch {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).NotTo(BeEmpty())
+		Expect(rows[0]).To(HaveKey("ticker"))
+		Expect(rows[0]).To(HaveKey("action"))
+		Expect(rows[0]).To(HaveKey("date"))
+	})
+
+	It("sends error for non-existent parquet file", func() {
+		ctx := context.Background()
+		ch := make(chan RowResult, 10)
+
+		go streamParquetRows(ctx, "/nonexistent/path/file.parquet", ch)
+
+		var firstResult RowResult
+		for r := range ch {
+			firstResult = r
+			break
+		}
+		// drain
+		for range ch {
+		}
+
+		Expect(firstResult.Err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("streamFileRows", func() {
+	It("streams rows from a plain CSV file", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "test.csv")
+		content := "Ticker,Date,Value\nAAPL,2023-01-01,150.00\nMSFT,2023-01-02,250.00\n"
+		Expect(os.WriteFile(path, []byte(content), 0600)).To(Succeed())
+
+		ctx := context.Background()
+		ch := streamFileRows(ctx, path)
+
+		var rows []map[string]string
+		for r := range ch {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0]["ticker"]).To(Equal("AAPL"))
+		Expect(rows[1]["ticker"]).To(Equal("MSFT"))
+	})
+
+	It("sends error for unsupported file format", func() {
+		ctx := context.Background()
+		ch := streamFileRows(ctx, "/tmp/data.xlsx")
+
+		var firstResult RowResult
+		for r := range ch {
+			firstResult = r
+			break
+		}
+		// drain
+		for range ch {
+		}
+
+		Expect(firstResult.Err).To(HaveOccurred())
 	})
 })
