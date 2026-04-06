@@ -38,6 +38,12 @@ import (
 	"github.com/xitongsys/parquet-go/reader"
 )
 
+// RowResult carries a single row or an error from a streaming file reader.
+type RowResult struct {
+	Row map[string]string
+	Err error
+}
+
 // fileFormat represents the format of a data file.
 type fileFormat int
 
@@ -400,6 +406,58 @@ func readFileRows(path string) ([]map[string]string, error) {
 		return readCSVZipRows(path)
 	default:
 		return nil, fmt.Errorf("unsupported file format for %q", path)
+	}
+}
+
+// streamCSV reads CSV data from r and sends each row to out as a RowResult.
+// Headers are normalized to lowercase. The channel is closed via defer when
+// reading is complete or an error occurs. Cancellation is supported via ctx.
+func streamCSV(ctx context.Context, r io.Reader, out chan<- RowResult) {
+	defer close(out)
+
+	cr := csv.NewReader(r)
+
+	headers, err := cr.Read()
+	if err != nil {
+		select {
+		case out <- RowResult{Err: fmt.Errorf("read CSV headers: %w", err)}:
+		case <-ctx.Done():
+		}
+
+		return
+	}
+
+	for i, h := range headers {
+		headers[i] = strings.ToLower(strings.TrimSpace(h))
+	}
+
+	for {
+		record, err := cr.Read()
+		if err == io.EOF {
+			return
+		}
+
+		if err != nil {
+			select {
+			case out <- RowResult{Err: fmt.Errorf("read CSV row: %w", err)}:
+			case <-ctx.Done():
+			}
+
+			return
+		}
+
+		row := make(map[string]string, len(headers))
+		for i, h := range headers {
+			if i < len(record) {
+				row[h] = record[i]
+			}
+		}
+
+		select {
+		case out <- RowResult{Row: row}:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
