@@ -461,6 +461,98 @@ func streamCSV(ctx context.Context, r io.Reader, out chan<- RowResult) {
 	}
 }
 
+// streamParquetRows opens a parquet file and sends each row to out as a RowResult.
+// Rows are read in batches of 10 000. Column names are normalized to lowercase.
+// The channel is closed via defer when reading is complete or an error occurs.
+// Cancellation is supported via ctx.
+func streamParquetRows(ctx context.Context, path string, out chan<- RowResult) {
+	defer close(out)
+
+	fr, err := local.NewLocalFileReader(path)
+	if err != nil {
+		select {
+		case out <- RowResult{Err: fmt.Errorf("open parquet %s: %w", path, err)}:
+		case <-ctx.Done():
+		}
+
+		return
+	}
+
+	defer fr.Close()
+
+	pr, err := reader.NewParquetReader(fr, nil, 4)
+	if err != nil {
+		select {
+		case out <- RowResult{Err: fmt.Errorf("create parquet reader for %s: %w", path, err)}:
+		case <-ctx.Done():
+		}
+
+		return
+	}
+
+	defer pr.ReadStop()
+
+	numRows := int(pr.GetNumRows())
+	batchSize := 10000
+
+	for numRows > 0 {
+		readCount := batchSize
+		if readCount > numRows {
+			readCount = numRows
+		}
+
+		batch, err := pr.ReadByNumber(readCount)
+		if err != nil {
+			select {
+			case out <- RowResult{Err: fmt.Errorf("read parquet rows from %s: %w", path, err)}:
+			case <-ctx.Done():
+			}
+
+			return
+		}
+
+		for _, rawRow := range batch {
+			val := reflect.ValueOf(rawRow)
+			if val.Kind() == reflect.Ptr {
+				val = val.Elem()
+			}
+
+			if val.Kind() != reflect.Struct {
+				continue
+			}
+
+			typ := val.Type()
+
+			row := make(map[string]string, typ.NumField())
+			for j := 0; j < typ.NumField(); j++ {
+				name := strings.ToLower(typ.Field(j).Name)
+				field := val.Field(j)
+
+				// Dereference pointer fields (nullable parquet columns)
+				if field.Kind() == reflect.Ptr {
+					if field.IsNil() {
+						row[name] = ""
+
+						continue
+					}
+
+					field = field.Elem()
+				}
+
+				row[name] = fmt.Sprintf("%v", field.Interface())
+			}
+
+			select {
+			case out <- RowResult{Row: row}:
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		numRows -= readCount
+	}
+}
+
 // parseFloat converts a string to float64, treating empty/"<nil>"/"None" as 0.
 func parseFloat(s string) float64 {
 	s = strings.TrimSpace(s)

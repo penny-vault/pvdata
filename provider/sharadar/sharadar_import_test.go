@@ -411,3 +411,67 @@ var _ = Describe("streamCSV", func() {
 		Expect(count).To(BeNumerically("<", 1000))
 	})
 })
+
+var _ = Describe("streamParquetRows", func() {
+	It("streams parquet rows if test file exists", func() {
+		parquetPath := "../../data/sharadar/sharadar_metrics_20231228.parquet"
+		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
+			Skip("test parquet file not available")
+		}
+
+		ctx := context.Background()
+		ch := make(chan RowResult, 10000)
+
+		go streamParquetRows(ctx, parquetPath, ch)
+
+		var rows []map[string]string
+		for r := range ch {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).NotTo(BeEmpty())
+		Expect(rows[0]).To(HaveKey("ticker"))
+	})
+
+	It("streams SP500 parquet rows if test file exists", func() {
+		parquetPath := "../../data/sharadar/sharadar_sp500_20231228.parquet"
+		if _, err := os.Stat(parquetPath); os.IsNotExist(err) {
+			Skip("test parquet file not available")
+		}
+
+		ctx := context.Background()
+		ch := make(chan RowResult, 10000)
+
+		go streamParquetRows(ctx, parquetPath, ch)
+
+		var rows []map[string]string
+		for r := range ch {
+			Expect(r.Err).NotTo(HaveOccurred())
+			rows = append(rows, r.Row)
+		}
+
+		Expect(rows).NotTo(BeEmpty())
+		Expect(rows[0]).To(HaveKey("ticker"))
+		Expect(rows[0]).To(HaveKey("action"))
+		Expect(rows[0]).To(HaveKey("date"))
+	})
+
+	It("sends error for non-existent parquet file", func() {
+		ctx := context.Background()
+		ch := make(chan RowResult, 10)
+
+		go streamParquetRows(ctx, "/nonexistent/path/file.parquet", ch)
+
+		var firstResult RowResult
+		for r := range ch {
+			firstResult = r
+			break
+		}
+		// drain
+		for range ch {
+		}
+
+		Expect(firstResult.Err).To(HaveOccurred())
+	})
+})
