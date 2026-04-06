@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
@@ -96,7 +97,7 @@ func (rm *RunManager) RunAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	go rm.myLibrary.SaveObservations(outChan, &wg)
+	go rm.myLibrary.SaveObservations(outChan, &wg, checks.NewInlineValidator(checks.InlineChecks()))
 
 	// Create a counting channel that wraps outChan to track progress
 	countChan := make(chan *data.Observation, 1000)

@@ -138,11 +138,17 @@ func (m *PublishModel) buildViewsTable() table.Model {
 		height = max(m.height-8, 3)
 	}
 
+	width := 0
+	for _, c := range columns {
+		width += c.Width + 2
+	}
+
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(height),
+		table.WithWidth(width),
 	)
 	t.SetStyles(tableStyles())
 
@@ -190,11 +196,17 @@ func (m *PublishModel) buildSourcesTable() table.Model {
 		height = max(m.height-10, 3)
 	}
 
+	width := 0
+	for _, c := range columns {
+		width += c.Width + 2
+	}
+
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(height),
+		table.WithWidth(width),
 	)
 	t.SetStyles(tableStyles())
 
@@ -222,11 +234,17 @@ func (m *PublishModel) buildAddTable() table.Model {
 		height = max(m.height-10, 3)
 	}
 
+	width := 0
+	for _, c := range columns {
+		width += c.Width + 2
+	}
+
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(height),
+		table.WithWidth(width),
 	)
 	t.SetStyles(tableStyles())
 
@@ -254,11 +272,17 @@ func (m *PublishModel) buildNewViewTable() table.Model {
 		height = max(m.height-10, 3)
 	}
 
+	width := 0
+	for _, c := range columns {
+		width += c.Width + 2
+	}
+
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(height),
+		table.WithWidth(width),
 	)
 	t.SetStyles(tableStyles())
 

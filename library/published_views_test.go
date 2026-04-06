@@ -85,20 +85,32 @@ var _ = Describe("PublishedViews", func() {
 			))
 		})
 
-		It("generates two views for index data type", func() {
+		It("generates view for index-snapshot data type", func() {
 			pv := &library.PublishedView{
-				ViewName:    "indices",
-				DataTypeKey: "index",
+				ViewName:    "indices_snapshot",
+				DataTypeKey: "index-snapshot",
 				Sources: []library.ViewSource{
-					{TableName: "index_ishares_abc12", SubscriptionID: "sub-1"},
+					{TableName: "ishares_index_constituents_abc12_index_snapshot", SubscriptionID: "sub-1"},
 				},
 			}
 			sqls := pv.GenerateViewSQL()
-			Expect(sqls).To(HaveLen(2))
+			Expect(sqls).To(HaveLen(1))
 			Expect(sqls[0]).To(ContainSubstring("indices_snapshot"))
-			Expect(sqls[0]).To(ContainSubstring("index_ishares_abc12_snapshot"))
-			Expect(sqls[1]).To(ContainSubstring("indices_changelog"))
-			Expect(sqls[1]).To(ContainSubstring("index_ishares_abc12_changelog"))
+			Expect(sqls[0]).To(ContainSubstring("ishares_index_constituents_abc12_index_snapshot"))
+		})
+
+		It("generates view for index-changelog data type", func() {
+			pv := &library.PublishedView{
+				ViewName:    "indices_changelog",
+				DataTypeKey: "index-changelog",
+				Sources: []library.ViewSource{
+					{TableName: "ishares_index_constituents_abc12_index_changelog", SubscriptionID: "sub-1"},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).To(ContainSubstring("indices_changelog"))
+			Expect(sqls[0]).To(ContainSubstring("ishares_index_constituents_abc12_index_changelog"))
 		})
 	})
 

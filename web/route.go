@@ -27,6 +27,9 @@ func SetupRoutes(app *fiber.App) {
 	api.Post("/subscriptions/:id/activate", ActivateSubscription)
 	api.Post("/subscriptions/:id/deactivate", DeactivateSubscription)
 
+	api.Post("/subscriptions/:id/run", TriggerRun)
+	api.Get("/subscriptions/:id/run/events", RunEvents)
+
 	api.Get("/providers", GetProviders)
 
 	api.Get("/subscriptions/:id/runs", GetRunHistory)
@@ -36,4 +39,7 @@ func SetupRoutes(app *fiber.App) {
 
 	api.Post("/sql", ExecuteSQL)
 	api.Post("/sql/export", ExportSQL)
+
+	api.Get("/quality/issues", GetQualityIssues)
+	api.Get("/quality/summary", GetQualitySummary)
 }

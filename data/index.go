@@ -23,16 +23,22 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// IndexConstituent represents a single member of an index at a point in time.
+type IndexConstituent struct {
+	Ticker        string  `json:"ticker"`
+	CompositeFigi string  `json:"composite_figi"`
+	Weight        float64 `json:"weight"`
+}
+
+// IndexSnapshot represents the full composition of an index at a point in time.
 type IndexSnapshot struct {
-	Ticker        string
-	CompositeFigi string
-	IndexName     string
-	SnapshotDate  time.Time
-	Weight        float64
+	IndexTicker  string             `json:"index_ticker"`
+	SnapshotDate time.Time          `json:"snapshot_date"`
+	Constituents []IndexConstituent `json:"constituents"`
 }
 
 func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
-	if idx.CompositeFigi == "" {
+	if len(idx.Constituents) == 0 {
 		return nil
 	}
 
@@ -47,23 +53,19 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 		}
 	}()
 
-	sql := fmt.Sprintf(`INSERT INTO %[1]s_snapshot (
-		"composite_figi",
-		"ticker",
-		"index_name",
+	sql := fmt.Sprintf(`INSERT INTO %[1]s (
+		"index_ticker",
 		"snapshot_date",
-		"weight"
+		"constituents"
 	) VALUES (
-		$1, $2, $3, $4, $5
-	) ON CONFLICT ON CONSTRAINT %[1]s_snapshot_pkey DO UPDATE SET
-		weight = EXCLUDED.weight`, tbl)
+		$1, $2, $3
+	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
+		constituents = EXCLUDED.constituents`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
-		idx.CompositeFigi,
-		idx.Ticker,
-		idx.IndexName,
+		idx.IndexTicker,
 		idx.SnapshotDate,
-		idx.Weight,
+		idx.Constituents,
 	)
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save index snapshot to DB failed")
@@ -79,7 +81,7 @@ func (idx *IndexSnapshot) SaveDB(ctx context.Context, tbl string, dbConn *pgxpoo
 type IndexChange struct {
 	Ticker        string
 	CompositeFigi string
-	IndexName     string
+	IndexTicker   string
 	EventDate     time.Time
 	Action        string // "add" or "remove"
 	Weight        float64
@@ -87,7 +89,7 @@ type IndexChange struct {
 
 func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
 	if idx.CompositeFigi == "" {
-		return nil
+		return fmt.Errorf("index change for ticker %s has empty composite FIGI", idx.Ticker)
 	}
 
 	tx, err := dbConn.Begin(ctx)
@@ -101,23 +103,23 @@ func (idx *IndexChange) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.
 		}
 	}()
 
-	sql := fmt.Sprintf(`INSERT INTO %[1]s_changelog (
+	sql := fmt.Sprintf(`INSERT INTO %[1]s (
 		"composite_figi",
 		"ticker",
-		"index_name",
+		"index_ticker",
 		"event_date",
 		"action",
 		"weight"
 	) VALUES (
 		$1, $2, $3, $4, $5, $6
-	) ON CONFLICT ON CONSTRAINT %[1]s_changelog_pkey DO UPDATE SET
+	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		action = EXCLUDED.action,
 		weight = EXCLUDED.weight`, tbl)
 
 	_, err = tx.Exec(ctx, sql,
 		idx.CompositeFigi,
 		idx.Ticker,
-		idx.IndexName,
+		idx.IndexTicker,
 		idx.EventDate,
 		idx.Action,
 		idx.Weight,

@@ -1,0 +1,2 @@
+-- PostgreSQL does not support removing enum values directly.
+-- The old 'index' value remains in the enum; no rollback needed.

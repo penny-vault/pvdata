@@ -47,8 +47,10 @@ func indexedColumnsForDataType(datatype string) []string {
 		return []string{"ticker", "composite_figi"}
 	case "economic-indicator":
 		return []string{"series", "event_date"}
-	case "index":
-		return []string{"ticker", "index_name", "event_date"}
+	case "index-snapshot":
+		return []string{"index_ticker", "snapshot_date"}
+	case "index-changelog":
+		return []string{"ticker", "index_ticker", "event_date"}
 	case "asset-description":
 		return []string{"ticker", "composite_figi", "name"}
 	case "market-holidays":

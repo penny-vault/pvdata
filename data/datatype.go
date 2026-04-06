@@ -74,7 +74,8 @@ const (
 	EODKey               = "eod"
 	EstimateKey          = "estimate"
 	FundamentalsKey      = "fundamental"
-	IndexKey             = "index"
+	IndexSnapshotKey     = "index-snapshot"
+	IndexChangelogKey    = "index-changelog"
 	MarketHolidaysKey    = "market-holidays"
 	MetricKey            = "metric"
 	QuoteKey             = "quote"
@@ -229,34 +230,37 @@ CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, series);`,
 		Version:       0,
 		IsPartitioned: false,
 	},
-	IndexKey: {
-		Name:     IndexKey,
-		ViewName: "indices",
-		Schema: `CREATE TABLE %[1]s_snapshot (
-    composite_figi CHARACTER(12)         NOT NULL,
-    ticker         CHARACTER VARYING(10) NOT NULL,
-    index_name     TEXT                  NOT NULL,
-    snapshot_date  DATE                  NOT NULL,
-    weight         REAL                  NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (composite_figi, index_name, snapshot_date)
+	IndexSnapshotKey: {
+		Name:     IndexSnapshotKey,
+		ViewName: "indices_snapshot",
+		Schema: `CREATE TABLE %[1]s (
+    index_ticker   TEXT   NOT NULL,
+    snapshot_date  DATE   NOT NULL,
+    constituents   JSONB  NOT NULL,
+    PRIMARY KEY (index_ticker, snapshot_date)
 );
 
-CREATE TABLE %[1]s_changelog (
+CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, snapshot_date);`,
+		Migrations:    []string{},
+		Version:       0,
+		IsPartitioned: false,
+	},
+	IndexChangelogKey: {
+		Name:     IndexChangelogKey,
+		ViewName: "indices_changelog",
+		Schema: `CREATE TABLE %[1]s (
     composite_figi CHARACTER(12)         NOT NULL,
     ticker         CHARACTER VARYING(10) NOT NULL,
-    index_name     TEXT                  NOT NULL,
+    index_ticker   TEXT                  NOT NULL,
     event_date     DATE                  NOT NULL,
     action         TEXT                  NOT NULL,
     weight         REAL                  NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (composite_figi, index_name, event_date)
+    PRIMARY KEY (composite_figi, index_ticker, event_date)
 );
 
-CREATE INDEX %[1]s_snapshot_index_name_idx ON %[1]s_snapshot(index_name, snapshot_date);
-CREATE INDEX %[1]s_changelog_index_name_idx ON %[1]s_changelog(index_name, event_date);`,
-		Migrations: []string{
-			`ALTER TABLE %[1]s_snapshot ADD COLUMN IF NOT EXISTS weight REAL NOT NULL DEFAULT 0.0;`,
-		},
-		Version:       1,
+CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
+		Migrations:    []string{},
+		Version:       0,
 		IsPartitioned: false,
 	},
 	FundamentalsKey: {

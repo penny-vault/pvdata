@@ -24,10 +24,13 @@ import (
 
 func CreateFiberApp(myLibrary *library.Library) *fiber.App {
 	app := fiber.New()
+	registry := NewRunRegistry()
 
-	// Inject shared library connection pool into request context
+	// Inject shared library connection pool and run registry into request context
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("library", myLibrary)
+		c.Locals("registry", registry)
+
 		return c.Next()
 	})
 

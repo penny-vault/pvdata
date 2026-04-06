@@ -67,7 +67,7 @@ type Asset struct {
 	CUSIP                []string  `json:"cusips" parquet:"name=cusip, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"cusips"`
 	ISIN                 []string  `json:"isins" parquet:"name=isin, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"isins"`
 	CIK                  string    `json:"cik" parquet:"name=cik, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	SIC                  int       `json:"sic" db:"sic_code"`
+	SIC                  *int      `json:"sic" db:"sic_code"`
 	ListingDate          string    `json:"listing_date" toml:"listing_date" parquet:"name=listing_date, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"listed"`
 	DelistingDate        string    `json:"delisting_date" toml:"delisting_date" parquet:"name=delisting_date, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" db:"delisted"`
 	Industry             string    `json:"industry" parquet:"name=industry, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
@@ -130,6 +130,53 @@ func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) (
 	}
 
 	return dbActiveAssets, nil
+}
+
+func AllAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*Asset, error) {
+	var assetTable string
+	if len(tables) == 0 {
+		assetTable = "assets"
+	} else {
+		assetTable = tables[0]
+	}
+
+	sql := fmt.Sprintf(`SELECT
+		coalesce(ticker, '') as ticker,
+		coalesce(composite_figi, '') as composite_figi,
+		coalesce(share_class_figi, '') as share_class_figi,
+		coalesce(primary_exchange, '') as primary_exchange,
+		coalesce(asset_type::text, '') as asset_type,
+		coalesce(active, false) as active,
+		coalesce(name, '') as name,
+		coalesce(description, '') as description,
+		coalesce(corporate_url, '') as corporate_url,
+		coalesce(sector, '') as sector,
+		coalesce(industry, '') as industry,
+		sic_code,
+		coalesce(cik, '') as cik,
+		cusips,
+		isins,
+		other_identifiers,
+		similar_tickers,
+		tags,
+		coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
+		coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
+		coalesce(last_updated, '0001-01-01'::timestamp) as last_updated
+	FROM %s`, assetTable)
+
+	rows, err := dbConn.Query(ctx, sql)
+	if err != nil {
+		return nil, fmt.Errorf("query all assets from %s: %w", assetTable, err)
+	}
+
+	var dbAllAssets []*Asset
+
+	err = pgxscan.ScanAll(&dbAllAssets, rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan all assets: %w", err)
+	}
+
+	return dbAllAssets, nil
 }
 
 func (asset *Asset) ID() string {
@@ -278,7 +325,11 @@ func (asset *Asset) MarshalZerologObject(e *zerolog.Event) {
 	e.Strs("CUSIP", asset.CUSIP)
 	e.Strs("ISIN", asset.ISIN)
 	e.Str("CIK", asset.CIK)
-	e.Int("SIC", asset.SIC)
+
+	if asset.SIC != nil {
+		e.Int("SIC", *asset.SIC)
+	}
+
 	e.Str("ListingDate", asset.ListingDate)
 	e.Str("DelistingDate", asset.DelistingDate)
 	e.Str("Industry", asset.Industry)

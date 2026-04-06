@@ -1,0 +1,9 @@
+[
+  {"symbol": "SPX", "indexName": "S&P 500", "symbolID": "SYML:SP;SPX"},
+  {"symbol": "MID", "indexName": "S&P MidCap 400", "symbolID": "SYML:SP;MID"},
+  {"symbol": "OEX", "indexName": "S&P 100", "symbolID": "SYML:SP;OEX"},
+  {"symbol": "IXIC", "indexName": "Nasdaq Composite", "symbolID": "SYML:NASDAQ;IXIC"},
+  {"symbol": "NDX", "indexName": "Nasdaq 100", "symbolID": "SYML:NASDAQ;NDX"},
+  {"symbol": "RUI", "indexName": "Russell 1000", "symbolID": "SYML:TVC;RUI"},
+  {"symbol": "RUT", "indexName": "Russell 2000", "symbolID": "SYML:TVC;RUT"}
+]

@@ -248,44 +248,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 		return err
 	}
 
-	// auto-create published views for data types that don't have one yet
-	existingViews, err := LoadPublishedViews(ctx, tx)
-	if err != nil {
-		log.Warn().Err(err).Msg("could not query existing published views")
-	} else {
-		existingSet := make(map[string]bool)
-		for _, pv := range existingViews {
-			existingSet[pv.ViewName] = true
-		}
-
-		for _, dataTypeKey := range subscription.DataTypes {
-			dt := data.DataTypes[dataTypeKey]
-			if dt == nil || dt.ViewName == "" {
-				continue
-			}
-
-			if existingSet[dt.ViewName] {
-				continue
-			}
-
-			tableName := subscription.DataTablesMap[dataTypeKey]
-			if tableName == "" {
-				continue
-			}
-
-			pv := &PublishedView{
-				ViewName:    dt.ViewName,
-				DataTypeKey: dataTypeKey,
-				Sources: []ViewSource{
-					{TableName: tableName, SubscriptionID: subscription.ID.String()},
-				},
-			}
-			if err := SavePublishedView(ctx, tx, pv); err != nil {
-				log.Warn().Err(err).Str("DataType", dataTypeKey).Msg("could not auto-create published view")
-			}
-		}
-	}
-
 	return nil
 }
 

@@ -26,66 +26,66 @@ var _ = Describe("shouldTakeSnapshot", func() {
 	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
 
 	It("returns true when no previous snapshot exists", func() {
-		Expect(shouldTakeSnapshot(time.Time{}, now, "weekly")).To(BeTrue())
+		Expect(ShouldTakeSnapshot(time.Time{}, now, "weekly")).To(BeTrue())
 	})
 
 	It("returns true when daily and last snapshot was yesterday", func() {
 		yesterday := now.AddDate(0, 0, -1)
-		Expect(shouldTakeSnapshot(yesterday, now, "daily")).To(BeTrue())
+		Expect(ShouldTakeSnapshot(yesterday, now, "daily")).To(BeTrue())
 	})
 
 	It("returns false when daily and last snapshot was today", func() {
-		Expect(shouldTakeSnapshot(now, now, "daily")).To(BeFalse())
+		Expect(ShouldTakeSnapshot(now, now, "daily")).To(BeFalse())
 	})
 
 	It("returns true when weekly and last snapshot was 8 days ago", func() {
 		eightDaysAgo := now.AddDate(0, 0, -8)
-		Expect(shouldTakeSnapshot(eightDaysAgo, now, "weekly")).To(BeTrue())
+		Expect(ShouldTakeSnapshot(eightDaysAgo, now, "weekly")).To(BeTrue())
 	})
 
 	It("returns false when weekly and last snapshot was 3 days ago", func() {
 		threeDaysAgo := now.AddDate(0, 0, -3)
-		Expect(shouldTakeSnapshot(threeDaysAgo, now, "weekly")).To(BeFalse())
+		Expect(ShouldTakeSnapshot(threeDaysAgo, now, "weekly")).To(BeFalse())
 	})
 
 	It("returns true when monthly and last snapshot was 32 days ago", func() {
 		thirtyTwoDaysAgo := now.AddDate(0, 0, -32)
-		Expect(shouldTakeSnapshot(thirtyTwoDaysAgo, now, "monthly")).To(BeTrue())
+		Expect(ShouldTakeSnapshot(thirtyTwoDaysAgo, now, "monthly")).To(BeTrue())
 	})
 
 	It("returns false when monthly and last snapshot was 15 days ago", func() {
 		fifteenDaysAgo := now.AddDate(0, 0, -15)
-		Expect(shouldTakeSnapshot(fifteenDaysAgo, now, "monthly")).To(BeFalse())
+		Expect(ShouldTakeSnapshot(fifteenDaysAgo, now, "monthly")).To(BeFalse())
 	})
 
 	It("returns true when quarterly and last snapshot was 95 days ago", func() {
 		ninetyFiveDaysAgo := now.AddDate(0, 0, -95)
-		Expect(shouldTakeSnapshot(ninetyFiveDaysAgo, now, "quarterly")).To(BeTrue())
+		Expect(ShouldTakeSnapshot(ninetyFiveDaysAgo, now, "quarterly")).To(BeTrue())
 	})
 
 	It("defaults to weekly for unknown frequency", func() {
 		eightDaysAgo := now.AddDate(0, 0, -8)
-		Expect(shouldTakeSnapshot(eightDaysAgo, now, "bogus")).To(BeTrue())
+		Expect(ShouldTakeSnapshot(eightDaysAgo, now, "bogus")).To(BeTrue())
 	})
 })
 
 var _ = Describe("diffSnapshots", func() {
 	It("returns all as added when previous is empty", func() {
-		current := map[string]indexMember{
+		current := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.04},
 		}
-		adds, removes, weightChanges := diffSnapshots(current, map[string]indexMember{})
+		adds, removes, weightChanges := DiffSnapshots(current, map[string]IndexMember{})
 		Expect(adds).To(HaveLen(2))
 		Expect(removes).To(BeEmpty())
 		Expect(weightChanges).To(BeEmpty())
 	})
 
 	It("returns all as removed when current is empty", func() {
-		previous := map[string]indexMember{
+		previous := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 		}
-		adds, removes, weightChanges := diffSnapshots(map[string]indexMember{}, previous)
+		adds, removes, weightChanges := DiffSnapshots(map[string]IndexMember{}, previous)
 		Expect(adds).To(BeEmpty())
 		Expect(removes).To(HaveLen(1))
 		Expect(removes).To(HaveKey("AAPL"))
@@ -93,15 +93,15 @@ var _ = Describe("diffSnapshots", func() {
 	})
 
 	It("detects additions and removals", func() {
-		current := map[string]indexMember{
+		current := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 			"GOOG": {CompositeFigi: "BBG009S39JX6", Weight: 0.03},
 		}
-		previous := map[string]indexMember{
+		previous := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.04},
 		}
-		adds, removes, weightChanges := diffSnapshots(current, previous)
+		adds, removes, weightChanges := DiffSnapshots(current, previous)
 		Expect(adds).To(HaveLen(1))
 		Expect(adds).To(HaveKey("GOOG"))
 		Expect(removes).To(HaveLen(1))
@@ -110,26 +110,26 @@ var _ = Describe("diffSnapshots", func() {
 	})
 
 	It("returns empty when sets are identical", func() {
-		current := map[string]indexMember{
+		current := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 		}
-		previous := map[string]indexMember{
+		previous := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 		}
-		adds, removes, weightChanges := diffSnapshots(current, previous)
+		adds, removes, weightChanges := DiffSnapshots(current, previous)
 		Expect(adds).To(BeEmpty())
 		Expect(removes).To(BeEmpty())
 		Expect(weightChanges).To(BeEmpty())
 	})
 
 	It("detects significant weight change above 0.01 threshold", func() {
-		current := map[string]indexMember{
+		current := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.065},
 		}
-		previous := map[string]indexMember{
+		previous := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 		}
-		adds, removes, weightChanges := diffSnapshots(current, previous)
+		adds, removes, weightChanges := DiffSnapshots(current, previous)
 		Expect(adds).To(BeEmpty())
 		Expect(removes).To(BeEmpty())
 		Expect(weightChanges).To(HaveLen(1))
@@ -138,39 +138,39 @@ var _ = Describe("diffSnapshots", func() {
 	})
 
 	It("ignores weight change below 0.01 threshold", func() {
-		current := map[string]indexMember{
+		current := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.055},
 		}
-		previous := map[string]indexMember{
+		previous := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 		}
-		adds, removes, weightChanges := diffSnapshots(current, previous)
+		adds, removes, weightChanges := DiffSnapshots(current, previous)
 		Expect(adds).To(BeEmpty())
 		Expect(removes).To(BeEmpty())
 		Expect(weightChanges).To(BeEmpty())
 	})
 
 	It("detects weight change exactly at 0.01 boundary", func() {
-		current := map[string]indexMember{
+		current := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.06},
 		}
-		previous := map[string]indexMember{
+		previous := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 		}
-		_, _, weightChanges := diffSnapshots(current, previous)
+		_, _, weightChanges := DiffSnapshots(current, previous)
 		Expect(weightChanges).To(HaveLen(1))
 	})
 
 	It("handles simultaneous adds, removes, and weight changes", func() {
-		current := map[string]indexMember{
+		current := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.08},
 			"GOOG": {CompositeFigi: "BBG009S39JX6", Weight: 0.03},
 		}
-		previous := map[string]indexMember{
+		previous := map[string]IndexMember{
 			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
 			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.04},
 		}
-		adds, removes, weightChanges := diffSnapshots(current, previous)
+		adds, removes, weightChanges := DiffSnapshots(current, previous)
 		Expect(adds).To(HaveLen(1))
 		Expect(adds).To(HaveKey("GOOG"))
 		Expect(removes).To(HaveLen(1))
@@ -184,7 +184,7 @@ var _ = Describe("tradingDays", func() {
 	It("returns an error when pool is nil", func() {
 		start := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
 		end := time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)
-		_, err := tradingDays(context.Background(), nil, start, end)
+		_, err := TradingDays(context.Background(), nil, start, end)
 		Expect(err).To(HaveOccurred())
 	})
 })
@@ -192,7 +192,7 @@ var _ = Describe("tradingDays", func() {
 var _ = Describe("currentIndexMembers", func() {
 	It("returns empty map when pool is nil", func() {
 		asOf := time.Date(2026, 3, 30, 0, 0, 0, 0, time.UTC)
-		result := currentIndexMembers(context.Background(), nil, "test_table", "sp500", asOf)
+		result := CurrentIndexMembers(context.Background(), nil, "test_snapshot", "test_changelog", "sp500", asOf)
 		Expect(result).To(BeEmpty())
 	})
 })

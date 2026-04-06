@@ -8,14 +8,18 @@ require (
 	charm.land/glamour/v2 v2.0.0
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.2
+	github.com/MicahParks/keyfunc/v3 v3.8.0
+	github.com/adrg/strutil v0.3.1
 	github.com/alphadose/haxmap v1.4.1
 	github.com/go-co-op/gocron/v2 v2.19.1
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/goccy/go-json v0.10.6
 	github.com/gofiber/fiber/v2 v2.52.12
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/klauspost/compress v1.18.5
 	github.com/kothar/go-backblaze v0.0.0-20210124194846-35409b867216
+	github.com/parquet-go/parquet-go v0.29.0
 	github.com/tidwall/gjson v1.18.0
 	github.com/xitongsys/parquet-go v1.6.2
 	golang.org/x/time v0.15.0
@@ -23,17 +27,16 @@ require (
 
 require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
-	github.com/MicahParks/keyfunc/v3 v3.8.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
-	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/apache/arrow/go/arrow v0.0.0-20211112161151-bc219186db40 // indirect
 	github.com/apache/thrift v0.22.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/harmonica v0.2.0 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260316091819-b93f6a3b8502 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260330092749-0f94982c930b // indirect
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
-	github.com/charmbracelet/x/exp/slice v0.0.0-20260323091123-df7b1bcffcca // indirect
+	github.com/charmbracelet/x/exp/slice v0.0.0-20260406091427-a791e22d5143 // indirect
 	github.com/charmbracelet/x/exp/strings v0.1.0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
@@ -42,12 +45,11 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/glog v1.2.5 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
@@ -57,8 +59,7 @@ require (
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/parquet-go/bitpack v1.0.0 // indirect
-	github.com/parquet-go/jsonlite v1.0.0 // indirect
-	github.com/parquet-go/parquet-go v0.29.0 // indirect
+	github.com/parquet-go/jsonlite v1.5.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
@@ -95,7 +96,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.21 // indirect
+	github.com/mattn/go-runewidth v0.0.22 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/onsi/ginkgo/v2 v2.19.0

@@ -131,7 +131,7 @@ onMounted(async () => {
         <StepPanels>
           <!-- Step 1: Provider -->
           <StepPanel v-slot="{ activateCallback }" value="1">
-            <div style="padding: 1.5rem 0; min-height: 300px">
+            <div style="padding: 1.5rem; min-height: 300px">
               <h3 style="margin-bottom: 1rem">Select a provider</h3>
               <div style="display: flex; flex-direction: column; gap: 0.5rem">
                 <div
@@ -158,7 +158,7 @@ onMounted(async () => {
 
           <!-- Step 2: Dataset -->
           <StepPanel v-slot="{ activateCallback }" value="2">
-            <div style="padding: 1.5rem 0; min-height: 300px">
+            <div style="padding: 1.5rem; min-height: 300px">
               <h3 style="margin-bottom: 1rem">Select a dataset</h3>
               <div style="display: flex; flex-direction: column; gap: 0.5rem">
                 <div
@@ -190,7 +190,7 @@ onMounted(async () => {
 
           <!-- Step 3: Schedule + Config -->
           <StepPanel v-slot="{ activateCallback }" value="3">
-            <div style="padding: 1.5rem 0; min-height: 300px">
+            <div style="padding: 1.5rem; min-height: 300px">
               <h3 style="margin-bottom: 1rem">Schedule &amp; Configuration</h3>
 
               <div style="margin-bottom: 1.5rem">
@@ -213,28 +213,20 @@ onMounted(async () => {
 
           <!-- Step 4: Provider Config -->
           <StepPanel v-slot="{ activateCallback }" value="4">
-            <div style="padding: 1.5rem 0; min-height: 300px">
+            <div style="padding: 1.5rem; min-height: 300px">
               <h3 style="margin-bottom: 0.5rem">Provider Configuration</h3>
-              <p style="opacity: 0.5; margin-bottom: 1rem">Key-value pairs specific to {{ selectedProviderData?.name || selectedProvider }}.</p>
+              <p style="opacity: 0.5; margin-bottom: 1.5rem">Settings for {{ selectedProviderData?.name || selectedProvider }}.</p>
 
-              <div style="display: flex; flex-direction: column; gap: 0.75rem">
-                <div
-                  v-for="(entry, i) in configEntries"
-                  :key="i"
-                  style="display: flex; gap: 0.5rem; align-items: flex-end"
-                >
-                  <div style="flex: 1">
-                    <label style="display: block; font-size: 12px; margin-bottom: 0.25rem">Key</label>
-                    <InputText v-model="entry.key" placeholder="config_key" style="width: 100%" />
+              <div style="display: flex; flex-direction: column; gap: 1.25rem">
+                <div v-for="(entry, i) in configEntries" :key="i">
+                  <label style="display: block; margin-bottom: 0.25rem; font-weight: 600">{{ entry.key }}</label>
+                  <InputText v-model="entry.value" style="width: 100%; max-width: 500px" />
+                  <div v-if="selectedProviderData?.config_description?.[entry.key]" style="font-size: 12px; opacity: 0.5; margin-top: 0.25rem">
+                    {{ selectedProviderData.config_description[entry.key] }}
                   </div>
-                  <div style="flex: 1">
-                    <label style="display: block; font-size: 12px; margin-bottom: 0.25rem">Value</label>
-                    <InputText v-model="entry.value" placeholder="config_value" style="width: 100%" />
-                  </div>
-                  <Button icon="pi pi-trash" severity="danger" text size="small" @click="removeConfigEntry(i)" />
                 </div>
                 <div>
-                  <Button label="Add entry" icon="pi pi-plus" text size="small" @click="addConfigEntry" />
+                  <Button label="Add custom entry" icon="pi pi-plus" text size="small" @click="addConfigEntry" />
                 </div>
               </div>
 
@@ -247,7 +239,7 @@ onMounted(async () => {
 
           <!-- Step 5: Review -->
           <StepPanel v-slot="{ activateCallback }" value="5">
-            <div style="padding: 1.5rem 0; min-height: 300px">
+            <div style="padding: 1.5rem; min-height: 300px">
               <h3 style="margin-bottom: 1rem">Review &amp; Create</h3>
 
               <Card style="margin-bottom: 1rem">

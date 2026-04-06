@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   getSubscription, getRunHistory,
   activateSubscription, deactivateSubscription, deleteSubscription,
+  runSubscription, subscribeRunEvents,
 } from '@/lib/api'
 import RevoGrid from '@revolist/vue3-datagrid'
 import Tag from 'primevue/tag'
@@ -17,7 +18,9 @@ import TabPanel from 'primevue/tabpanel'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import ProgressSpinner from 'primevue/progressspinner'
+import ProgressBar from 'primevue/progressbar'
 import Message from 'primevue/message'
+import Menu from 'primevue/menu'
 import RunHistoryChart from '@/components/RunHistoryChart.vue'
 import DataBrowser from '@/components/DataBrowser.vue'
 import SubscriptionForm from '@/components/SubscriptionForm.vue'
@@ -38,6 +41,53 @@ const runsOffset = ref(0)
 const runsLimit = 20
 const activeTab = ref('0')
 const deleteConfirmText = ref('')
+
+const runStatus = ref<'idle' | 'running' | 'completed' | 'failed'>('idle')
+const runRecordCount = ref(0)
+const runRecords = ref<{ type: string; summary: string }[]>([])
+const maxRunRecords = 200
+const runLookback = ref('14d')
+const runLogRef = ref<HTMLElement | null>(null)
+const runMenuRef = ref()
+const showCustomLookback = ref(false)
+const customLookbackInput = ref('')
+const runMenuItems = [
+  { label: 'Last 1 day', command: () => { runLookback.value = '1d'; triggerRun() } },
+  { label: 'Last 7 days', command: () => { runLookback.value = '7d'; triggerRun() } },
+  { label: 'Last 14 days', command: () => { runLookback.value = '14d'; triggerRun() } },
+  { label: 'Last 30 days', command: () => { runLookback.value = '30d'; triggerRun() } },
+  { label: 'Last 90 days', command: () => { runLookback.value = '90d'; triggerRun() } },
+  { label: 'Last 365 days', command: () => { runLookback.value = '365d'; triggerRun() } },
+  { separator: true },
+  { label: 'Custom...', icon: 'pi pi-pencil', command: () => { customLookbackInput.value = runLookback.value; showCustomLookback.value = true } },
+]
+const actionsMenuRef = ref()
+const actionsMenuItems = computed(() => {
+  const items: any[] = []
+  if (subscription.value?.provider !== 'legacy') {
+    items.push({
+      label: subscription.value?.active ? 'Deactivate' : 'Activate',
+      icon: subscription.value?.active ? 'pi pi-pause' : 'pi pi-play',
+      command: toggleActive,
+    })
+  }
+  items.push({
+    label: editing.value ? 'Cancel Edit' : 'Edit',
+    icon: 'pi pi-pencil',
+    command: () => { editing.value = !editing.value },
+  })
+  items.push({
+    separator: true,
+  })
+  items.push({
+    label: 'Delete',
+    icon: 'pi pi-trash',
+    command: () => { showDeleteConfirm.value = true },
+    class: 'p-menuitem-danger',
+  })
+  return items
+})
+let eventSource: EventSource | null = null
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr || dateStr.startsWith('0001')) return '--'
@@ -119,7 +169,84 @@ function openSqlConsole() {
   router.push({ path: '/sql', query: { q: `SELECT * FROM ${table} LIMIT 100` } })
 }
 
+async function triggerRun() {
+  try {
+    runStatus.value = 'running'
+    runRecordCount.value = 0
+    runRecords.value = []
+    error.value = ''
+
+    await runSubscription(id.value, runLookback.value)
+
+    eventSource = await subscribeRunEvents(id.value)
+
+    eventSource.addEventListener('started', () => {
+      runStatus.value = 'running'
+    })
+
+    eventSource.addEventListener('record', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      runRecordCount.value = data.count
+      runRecords.value.push({ type: data.type, summary: data.summary })
+      if (runRecords.value.length > maxRunRecords) {
+        runRecords.value = runRecords.value.slice(-maxRunRecords)
+      }
+    })
+
+    eventSource.addEventListener('completed', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      runRecordCount.value = data.count
+      runStatus.value = 'completed'
+      eventSource?.close()
+      eventSource = null
+      loadSubscription()
+      loadRuns()
+    })
+
+    eventSource.addEventListener('failed', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      runRecordCount.value = data.count
+      runStatus.value = 'failed'
+      error.value = data.error || 'Run failed'
+      eventSource?.close()
+      eventSource = null
+      loadSubscription()
+      loadRuns()
+    })
+
+    eventSource.onerror = () => {
+      if (runStatus.value === 'running') {
+        runStatus.value = 'failed'
+        error.value = 'Lost connection to run event stream'
+      }
+      eventSource?.close()
+      eventSource = null
+    }
+  } catch (e: any) {
+    runStatus.value = 'failed'
+    error.value = e.message || 'Failed to start run'
+  }
+}
+
+function dismissRunPanel() {
+  runStatus.value = 'idle'
+  runRecords.value = []
+  runRecordCount.value = 0
+}
+
+watch(runRecords, () => {
+  nextTick(() => {
+    if (runLogRef.value) {
+      runLogRef.value.scrollTop = runLogRef.value.scrollHeight
+    }
+  })
+}, { deep: true })
+
 onMounted(() => { loadSubscription(); loadRuns() })
+
+onUnmounted(() => {
+  eventSource?.close()
+})
 </script>
 
 <template>
@@ -141,14 +268,27 @@ onMounted(() => { loadSubscription(); loadRuns() })
             <Tag :value="subscription.active ? 'Active' : 'Inactive'" :severity="subscription.active ? 'success' : 'secondary'" />
           </div>
         </div>
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
-          <Button v-if="subscription.provider !== 'legacy'" :label="subscription.active ? 'Deactivate' : 'Activate'" :icon="subscription.active ? 'pi pi-pause' : 'pi pi-play'" text @click="toggleActive" />
-          <Button :label="editing ? 'Cancel Edit' : 'Edit'" icon="pi pi-pencil" severity="secondary" @click="editing = !editing" />
-          <Button label="Delete" icon="pi pi-trash" severity="danger" @click="showDeleteConfirm = true" />
+        <div style="display: flex; gap: 0.5rem; align-items: center">
+          <div v-if="subscription.provider !== 'legacy'" style="display: flex; align-items: center">
+            <Button :label="'Run ' + runLookback" icon="pi pi-bolt" :disabled="runStatus === 'running'" @click="triggerRun" style="border-top-right-radius: 0; border-bottom-right-radius: 0" />
+            <Button icon="pi pi-chevron-down" :disabled="runStatus === 'running'" @click="(e: any) => runMenuRef.toggle(e)" style="border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255,255,255,0.2)" />
+            <Menu ref="runMenuRef" :model="runMenuItems" :popup="true" />
+          </div>
+          <Button icon="pi pi-ellipsis-v" text severity="secondary" @click="(e: any) => actionsMenuRef.toggle(e)" />
+          <Menu ref="actionsMenuRef" :model="actionsMenuItems" :popup="true" />
         </div>
       </div>
 
       <Message v-if="error" severity="error" :closable="true" style="margin-bottom: 1rem" @close="error = ''">{{ error }}</Message>
+
+      <Dialog v-model:visible="showCustomLookback" header="Custom Lookback" :modal="true" :style="{ width: '20rem' }">
+        <div style="margin-bottom: 0.5rem">Enter lookback period (e.g. 500d):</div>
+        <InputText v-model="customLookbackInput" placeholder="14d" style="width: 100%" @keyup.enter="runLookback = customLookbackInput; showCustomLookback = false; triggerRun()" />
+        <template #footer>
+          <Button label="Cancel" severity="secondary" @click="showCustomLookback = false" />
+          <Button label="Run" icon="pi pi-bolt" :disabled="!customLookbackInput.trim()" @click="runLookback = customLookbackInput; showCustomLookback = false; triggerRun()" />
+        </template>
+      </Dialog>
 
       <Dialog v-model:visible="showDeleteConfirm" header="Delete Subscription" :modal="true" :style="{ width: '30rem' }">
         <p>This will permanently delete <strong>{{ subscription.name || subscription.id }}</strong> and all its data tables. This cannot be undone.</p>
@@ -168,6 +308,38 @@ onMounted(() => { loadSubscription(); loadRuns() })
         </Card>
       </div>
 
+      <div v-if="runStatus !== 'idle'" style="margin-bottom: 1rem; border: 1px solid var(--p-content-border-color); border-radius: 8px; overflow: hidden">
+        <div :style="{
+          padding: '0.75rem 1rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          background: runStatus === 'completed' ? 'var(--p-green-900)' : runStatus === 'failed' ? 'var(--p-red-900)' : 'var(--p-surface-800)',
+        }">
+          <div style="display: flex; align-items: center; gap: 0.5rem">
+            <i v-if="runStatus === 'running'" class="pi pi-spin pi-spinner" />
+            <i v-else-if="runStatus === 'completed'" class="pi pi-check-circle" />
+            <i v-else class="pi pi-times-circle" />
+            <span style="font-weight: 600">
+              {{ runStatus === 'running' ? 'Running...' : runStatus === 'completed' ? 'Completed' : 'Failed' }}
+            </span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 1rem">
+            <span>Records: {{ runRecordCount.toLocaleString() }}</span>
+            <Button v-if="runStatus !== 'running'" icon="pi pi-times" text size="small" @click="dismissRunPanel" />
+          </div>
+        </div>
+        <div v-if="runStatus === 'running'" style="height: 2px">
+          <ProgressBar mode="indeterminate" style="height: 2px" />
+        </div>
+        <div ref="runLogRef" style="max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; padding: 0.5rem; background: var(--p-surface-900)">
+          <div v-for="(rec, i) in runRecords" :key="i" style="padding: 1px 0; white-space: nowrap">
+            <span style="opacity: 0.5; margin-right: 0.5rem">{{ rec.type }}</span>
+            <span>{{ rec.summary }}</span>
+          </div>
+        </div>
+      </div>
+
       <div v-if="!editing" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem">
         <Card><template #content><small>TOTAL RECORDS</small><h3>{{ formatNumber(subscription.total_records) }}</h3></template></Card>
         <Card><template #content><small>LAST IMPORT</small><h3>{{ formatDate(subscription.last_run) }}</h3></template></Card>
@@ -179,7 +351,7 @@ onMounted(() => { loadSubscription(); loadRuns() })
         <Tabs v-model:value="activeTab">
           <TabList>
             <Tab value="0">Run History</Tab>
-            <Tab v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(idx + 1)">{{ dt }}</Tab>
+            <Tab v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(Number(idx) + 1)">{{ dt }}</Tab>
           </TabList>
           <TabPanels>
             <TabPanel value="0">
@@ -195,7 +367,7 @@ onMounted(() => { loadSubscription(); loadRuns() })
                 <Button label="Load more" text @click="runsOffset = runs.length; loadRuns(true)" />
               </div>
             </TabPanel>
-            <TabPanel v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(idx + 1)">
+            <TabPanel v-for="(dt, idx) in (subscription.data_types || [])" :key="dt" :value="String(Number(idx) + 1)">
               <DataBrowser :subscription-id="id" :datatype="dt" />
             </TabPanel>
           </TabPanels>

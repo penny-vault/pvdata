@@ -7,20 +7,14 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
-	"github.com/go-co-op/gocron/v2"
-	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/penny-vault/pvdata/tui"
-	"github.com/penny-vault/pvdata/web"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -53,217 +47,44 @@ provided then each subscription will execute sequentially.`,
 			log.Fatal().Err(err).Msg("could not connect to library")
 		}
 
-		daemon := viper.GetBool("daemon")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not determine home directory")
+		}
 
-		if daemon {
-			// Daemon mode: schedule subscriptions on their cron schedules, no TUI
-			consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
-			log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
+		logFile := filepath.Join(home, ".pvdata.log")
 
-			runDaemon(ctx, myLibrary, args)
-		} else {
-			// TUI mode
-			home, err := os.UserHomeDir()
-			if err != nil {
-				log.Fatal().Err(err).Msg("could not determine home directory")
-			}
+		logWriter, err := tui.NewDualWriter(logFile)
+		if err != nil {
+			log.Fatal().Err(err).Str("LogFile", logFile).Msg("could not create log writer")
+		}
+		defer logWriter.Close()
 
-			logFile := filepath.Join(home, ".pvdata.log")
+		consoleWriter := zerolog.ConsoleWriter{Out: logWriter}
+		log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
 
-			logWriter, err := tui.NewDualWriter(logFile)
-			if err != nil {
-				log.Fatal().Err(err).Str("LogFile", logFile).Msg("could not create log writer")
-			}
-			defer logWriter.Close()
+		result, err := tui.RunPreflight(ctx, myLibrary, args)
+		if err != nil {
+			log.Fatal().Err(err).Msg("pre-flight validation failed")
+		}
 
-			consoleWriter := zerolog.ConsoleWriter{Out: logWriter}
-			log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
+		runManager := tui.NewRunManager(myLibrary, result.Subscriptions)
 
-			result, err := tui.RunPreflight(ctx, myLibrary, args)
-			if err != nil {
-				log.Fatal().Err(err).Msg("pre-flight validation failed")
-			}
-
-			runManager := tui.NewRunManager(myLibrary, result.Subscriptions)
-
-			if err := tui.Run(ctx, myLibrary, runManager, logWriter); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
+		if err := tui.Run(ctx, myLibrary, runManager, logWriter); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
 	},
 }
 
 func init() {
 	runCmd.Flags().StringP("lookback", "l", "", "Override data lookback period (e.g. 14d, 4w, 6m, 1y)")
-	runCmd.Flags().BoolP("daemon", "d", false, "Run without TUI, logging to stderr")
 
 	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind lookback flag")
 	}
 
-	if err := viper.BindPFlag("daemon", runCmd.Flags().Lookup("daemon")); err != nil {
-		log.Fatal().Err(err).Msg("could not bind daemon flag")
-	}
-
 	rootCmd.AddCommand(runCmd)
-}
-
-func runDaemon(ctx context.Context, myLibrary *library.Library, filterIDs []string) {
-	nyc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		log.Fatal().Err(err).Msg("could not load timezone")
-	}
-
-	scheduler, err := gocron.NewScheduler(gocron.WithLocation(nyc))
-	if err != nil {
-		log.Fatal().Err(err).Msg("could not create scheduler")
-	}
-
-	allSubs, err := myLibrary.Subscriptions(ctx)
-	if err != nil {
-		log.Fatal().Err(err).Msg("could not load subscriptions")
-	}
-
-	// Filter to requested subscription IDs, or use all active ones
-	filterSet := make(map[string]bool, len(filterIDs))
-	for _, id := range filterIDs {
-		filterSet[id] = true
-	}
-
-	var subscriptions []*library.Subscription
-
-	for _, sub := range allSubs {
-		if !sub.Active {
-			continue
-		}
-
-		if len(filterSet) > 0 && !filterSet[sub.ID.String()] {
-			continue
-		}
-
-		subscriptions = append(subscriptions, sub)
-	}
-
-	if len(subscriptions) == 0 {
-		log.Fatal().Msg("no active subscriptions to schedule")
-	}
-
-	// Schedule each subscription on its cron schedule
-	for _, sub := range subscriptions {
-		sub := sub // capture loop variable
-
-		_, err := scheduler.NewJob(
-			gocron.CronJob(sub.Schedule, false),
-			gocron.NewTask(func() {
-				runSubscription(ctx, myLibrary, sub)
-			}),
-		)
-		if err != nil {
-			log.Fatal().Err(err).Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("could not schedule subscription")
-		}
-
-		log.Info().Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("scheduled subscription")
-	}
-
-	// Start the web server in a goroutine
-	port := viper.GetString("web.port")
-	if port == "" {
-		port = "3000"
-	}
-
-	app := web.CreateFiberApp(myLibrary)
-
-	go func() {
-		log.Info().Str("port", port).Msg("starting web server")
-
-		if err := app.Listen(":" + port); err != nil {
-			log.Error().Err(err).Msg("web server failed")
-		}
-	}()
-
-	scheduler.Start()
-	log.Info().Int("count", len(subscriptions)).Msg("daemon started, waiting for scheduled runs")
-
-	// Block until signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-
-	log.Info().Msg("shutting down daemon")
-
-	if err := app.Shutdown(); err != nil {
-		log.Error().Err(err).Msg("error shutting down web server")
-	}
-
-	if err := scheduler.Shutdown(); err != nil {
-		log.Error().Err(err).Msg("error shutting down scheduler")
-	}
-}
-
-func runSubscription(ctx context.Context, myLibrary *library.Library, subscription *library.Subscription) {
-	logger := log.With().Str("subscription", subscription.Name).Logger()
-	logger.Info().Msg("starting subscription run")
-
-	// Manage partitions and migrations
-	if err := subscription.ManagePartitions(ctx); err != nil {
-		logger.Error().Err(err).Msg("ManagePartitions failed")
-	}
-
-	if err := subscription.RunMigrations(ctx); err != nil {
-		logger.Error().Err(err).Msg("RunMigrations failed")
-	}
-
-	subProvider, ok := provider.Map[subscription.Provider]
-	if !ok {
-		logger.Error().Str("provider", subscription.Provider).Msg("provider not found")
-		return
-	}
-
-	subDataset, ok := subProvider.Datasets()[subscription.Dataset]
-	if !ok {
-		logger.Error().Str("dataset", subscription.Dataset).Msg("dataset not found")
-		return
-	}
-
-	outChan := make(chan *data.Observation, 1000)
-	exitChan := make(chan data.RunSummary, 1)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go myLibrary.SaveObservations(outChan, &wg)
-
-	fetchLogger := logger.With().Str("SubscriptionID", subscription.ID.String()).Logger()
-	fetchCtx := fetchLogger.WithContext(ctx)
-
-	subDataset.Fetch(fetchCtx, subscription, outChan, exitChan)
-
-	summary := <-exitChan
-
-	close(outChan)
-	wg.Wait()
-
-	// Persist run history
-	if err := myLibrary.SaveRunHistory(ctx, summary); err != nil {
-		logger.Error().Err(err).Msg("failed to save run history")
-	}
-
-	// Run post-fetch hooks
-	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
-		for _, hook := range subDataset.PostFetch {
-			if err := hook(ctx, subscription); err != nil {
-				logger.Error().Err(err).Msg("post-fetch hook failed")
-				break
-			}
-		}
-	}
-
-	if summary.Status == data.RunFailed {
-		logger.Error().Int("observations", summary.NumObservations).Msg("subscription run failed")
-	} else {
-		logger.Info().Int("observations", summary.NumObservations).Msg("subscription run completed")
-	}
 }
 
 // parseLookback parses a human-friendly duration string with suffixes:

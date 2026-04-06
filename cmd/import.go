@@ -6,9 +6,11 @@ import (
 	"os"
 	"sync"
 
+	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/penny-vault/pvdata/provider/sharadar"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -67,9 +69,9 @@ Examples:
 				log.Fatal().Str("file", f).Msg("file does not exist")
 			}
 
-			detected, detectErr := provider.DetectSharadarDataset(f)
+			detected, detectErr := sharadar.DetectSharadarDataset(f)
 			if detectErr != nil {
-				log.Warn().Err(detectErr).Str("file", f).Msg("could not detect dataset from filename, proceeding anyway")
+				log.Warn().Err(detectErr).Str("file", f).Msg("could not detect dataset from file headers, proceeding anyway")
 			} else if detected != sub.Dataset {
 				log.Fatal().
 					Str("file", f).
@@ -93,7 +95,7 @@ Examples:
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		go myLibrary.SaveObservations(outChan, &wg)
+		go myLibrary.SaveObservations(outChan, &wg, checks.NewInlineValidator(checks.InlineChecks()))
 
 		fetchLogger := log.With().Str("SubscriptionID", sub.ID.String()).Logger()
 		fetchCtx := fetchLogger.WithContext(ctx)
