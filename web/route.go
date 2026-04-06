@@ -39,4 +39,7 @@ func SetupRoutes(app *fiber.App) {
 
 	api.Post("/sql", ExecuteSQL)
 	api.Post("/sql/export", ExportSQL)
+
+	api.Get("/quality/issues", GetQualityIssues)
+	api.Get("/quality/summary", GetQualitySummary)
 }
