@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
@@ -162,7 +163,7 @@ func executeRun(myLibrary *library.Library, sub *library.Subscription, run *acti
 
 	wg.Add(1)
 
-	go myLibrary.SaveObservations(saveChan, &wg)
+	go myLibrary.SaveObservations(saveChan, &wg, checks.NewInlineValidator(checks.InlineChecks()))
 
 	// Send started event
 	startedData, _ := json.Marshal(map[string]string{

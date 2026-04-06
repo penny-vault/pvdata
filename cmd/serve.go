@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/db"
 	"github.com/penny-vault/pvdata/library"
@@ -164,7 +165,7 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	go myLibrary.SaveObservations(outChan, &wg)
+	go myLibrary.SaveObservations(outChan, &wg, checks.NewInlineValidator(checks.InlineChecks()))
 
 	fetchLogger := logger.With().Str("SubscriptionID", subscription.ID.String()).Logger()
 	fetchCtx := fetchLogger.WithContext(ctx)

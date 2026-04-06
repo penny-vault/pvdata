@@ -24,9 +24,11 @@ import (
 // RequiredFields checks that revenues, total_assets, and equity are non-zero.
 type RequiredFields struct{}
 
-func (c *RequiredFields) Name() string        { return "required_fields" }
-func (c *RequiredFields) Description() string { return "revenues, total_assets, and equity must be non-zero" }
-func (c *RequiredFields) Phase() CheckPhase   { return PhaseInline }
+func (c *RequiredFields) Name() string { return "required_fields" }
+func (c *RequiredFields) Description() string {
+	return "revenues, total_assets, and equity must be non-zero"
+}
+func (c *RequiredFields) Phase() CheckPhase { return PhaseInline }
 func (c *RequiredFields) Severity() CheckSeverity {
 	return SeverityError
 }

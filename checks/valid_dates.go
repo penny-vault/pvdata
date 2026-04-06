@@ -24,9 +24,11 @@ import (
 // ValidDates checks that EventDate, ReportPeriod, and DateKey are not in the future.
 type ValidDates struct{}
 
-func (c *ValidDates) Name() string        { return "valid_dates" }
-func (c *ValidDates) Description() string { return "EventDate, ReportPeriod, and DateKey must not be in the future" }
-func (c *ValidDates) Phase() CheckPhase   { return PhaseInline }
+func (c *ValidDates) Name() string { return "valid_dates" }
+func (c *ValidDates) Description() string {
+	return "EventDate, ReportPeriod, and DateKey must not be in the future"
+}
+func (c *ValidDates) Phase() CheckPhase { return PhaseInline }
 func (c *ValidDates) Severity() CheckSeverity {
 	return SeverityCritical
 }
