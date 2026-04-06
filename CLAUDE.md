@@ -29,6 +29,8 @@ Integration tests use build tag: `ginkgo run -race --tags=integration ./...`
 
 **Web UI**: Vue 3 + Carbon Design System (`@carbon/vue`) in `web/ui/`. Go backend uses Fiber v2 in `web/`. Frontend is built with Vite and embedded into the Go binary via `go:embed`. Run `make build-ui` to build the frontend, or `make build` to build everything. Start the web server and subscription scheduler with `pvdata serve`.
 
+**Data quality**: `checks/` defines a check registry with inline checks (run during imports in `SaveObservations`) and audit checks (run via `pvdata check`). Checks self-register in `checks/register.go` init(). Findings are written to the `data_quality_issues` table. The web UI has a Data Quality page at `/data-quality`. Key config: `healthchecks.data_quality_id` (optional healthcheck ping for `pvdata check`).
+
 **Web scraping**: `playwright_helpers/` wraps playwright-go with stealth evasion injection. To update stealth JS: `npx extract-stealth-evasions@latest` then copy `stealth.min.js` into `playwright_helpers/`.
 
 ## Conventions
