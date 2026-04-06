@@ -70,7 +70,7 @@ Examples:
 
 			detected, detectErr := sharadar.DetectSharadarDataset(f)
 			if detectErr != nil {
-				log.Warn().Err(detectErr).Str("file", f).Msg("could not detect dataset from filename, proceeding anyway")
+				log.Warn().Err(detectErr).Str("file", f).Msg("could not detect dataset from file headers, proceeding anyway")
 			} else if detected != sub.Dataset {
 				log.Fatal().
 					Str("file", f).

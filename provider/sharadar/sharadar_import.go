@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -49,22 +48,161 @@ const (
 	fileFormatCSVZip
 )
 
-// DetectSharadarDataset returns the Sharadar dataset name based on the filename.
-// It does a case-insensitive match on the base filename.
-func DetectSharadarDataset(path string) (string, error) {
-	base := strings.ToLower(filepath.Base(path))
-	switch {
-	case strings.Contains(base, "sf1"):
-		return "Fundamentals", nil
-	case strings.Contains(base, "metrics") || strings.Contains(base, "daily"):
-		return "Metrics", nil
-	case strings.Contains(base, "tickers"):
-		return "Stock Tickers", nil
-	case strings.Contains(base, "sp500"):
-		return "SP500", nil
-	default:
-		return "", fmt.Errorf("cannot detect Sharadar dataset from filename: %q", path)
+// parseCSVHeaders reads only the header row from a CSV reader and returns
+// the column names normalized to lowercase.
+func parseCSVHeaders(r io.Reader) ([]string, error) {
+	cr := csv.NewReader(r)
+
+	headers, err := cr.Read()
+	if err != nil {
+		return nil, fmt.Errorf("read CSV headers: %w", err)
 	}
+
+	for i, h := range headers {
+		headers[i] = strings.ToLower(strings.TrimSpace(h))
+	}
+
+	return headers, nil
+}
+
+// ReadFileHeaders returns the column names from a data file without reading
+// the full contents. For CSV-based formats it reads only the header row; for
+// parquet it inspects the schema. All names are normalized to lowercase.
+func ReadFileHeaders(path string) ([]string, error) {
+	format, err := detectFileFormat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	switch format {
+	case fileFormatCSV:
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("open CSV %s: %w", path, err)
+		}
+		defer f.Close()
+
+		return parseCSVHeaders(f)
+
+	case fileFormatCSVZst:
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("open CSV.zst %s: %w", path, err)
+		}
+		defer f.Close()
+
+		zr, err := zstd.NewReader(f)
+		if err != nil {
+			return nil, fmt.Errorf("create zstd reader for %s: %w", path, err)
+		}
+		defer zr.Close()
+
+		return parseCSVHeaders(zr)
+
+	case fileFormatCSVZip:
+		zr, err := zip.OpenReader(path)
+		if err != nil {
+			return nil, fmt.Errorf("open ZIP %s: %w", path, err)
+		}
+		defer zr.Close()
+
+		for _, f := range zr.File {
+			if strings.HasSuffix(strings.ToLower(f.Name), ".csv") {
+				rc, err := f.Open()
+				if err != nil {
+					return nil, fmt.Errorf("open CSV entry %s in ZIP %s: %w", f.Name, path, err)
+				}
+				defer rc.Close()
+
+				return parseCSVHeaders(rc)
+			}
+		}
+
+		return nil, fmt.Errorf("no CSV entry found in ZIP %s", path)
+
+	case fileFormatParquet:
+		fr, err := local.NewLocalFileReader(path)
+		if err != nil {
+			return nil, fmt.Errorf("open parquet %s: %w", path, err)
+		}
+		defer fr.Close()
+
+		pr, err := reader.NewParquetReader(fr, nil, 1)
+		if err != nil {
+			return nil, fmt.Errorf("create parquet reader for %s: %w", path, err)
+		}
+		defer pr.ReadStop()
+
+		if pr.GetNumRows() == 0 {
+			return nil, fmt.Errorf("parquet file %s has no rows", path)
+		}
+
+		batch, err := pr.ReadByNumber(1)
+		if err != nil {
+			return nil, fmt.Errorf("read parquet schema row from %s: %w", path, err)
+		}
+
+		if len(batch) == 0 {
+			return nil, fmt.Errorf("parquet file %s returned empty batch", path)
+		}
+
+		val := reflect.ValueOf(batch[0])
+		if val.Kind() == reflect.Ptr {
+			val = val.Elem()
+		}
+
+		if val.Kind() != reflect.Struct {
+			return nil, fmt.Errorf("unexpected parquet row type in %s: %s", path, val.Kind())
+		}
+
+		typ := val.Type()
+		headers := make([]string, typ.NumField())
+
+		for i := 0; i < typ.NumField(); i++ {
+			headers[i] = strings.ToLower(typ.Field(i).Name)
+		}
+
+		return headers, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported file format for %q", path)
+	}
+}
+
+// DetectSharadarDataset returns the Sharadar dataset name by reading the
+// column headers from the file. Each dataset has at least one unique column:
+//   - SP500: "action"
+//   - Fundamentals: "dimension"
+//   - Stock Tickers: "permaticker"
+//   - Metrics: "ev" (with none of the above)
+func DetectSharadarDataset(path string) (string, error) {
+	headers, err := ReadFileHeaders(path)
+	if err != nil {
+		return "", fmt.Errorf("detect dataset for %s: %w", path, err)
+	}
+
+	headerSet := make(map[string]struct{}, len(headers))
+	for _, h := range headers {
+		headerSet[h] = struct{}{}
+	}
+
+	if _, ok := headerSet["action"]; ok {
+		return "SP500", nil
+	}
+
+	if _, ok := headerSet["dimension"]; ok {
+		return "Fundamentals", nil
+	}
+
+	if _, ok := headerSet["permaticker"]; ok {
+		return "Stock Tickers", nil
+	}
+
+	if _, ok := headerSet["ev"]; ok {
+		return "Metrics", nil
+	}
+
+	return "", fmt.Errorf("cannot detect Sharadar dataset from columns in %q: no recognized column signature found", path)
 }
 
 // detectFileFormat returns the file format based on the file extension.

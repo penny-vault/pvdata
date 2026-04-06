@@ -24,62 +24,65 @@ import (
 )
 
 var _ = Describe("DetectSharadarDataset", func() {
-	It("detects Fundamentals from sf1 filename", func() {
-		dataset, err := DetectSharadarDataset("SHARADAR_SF1_20231228.parquet")
+	writeCSV := func(dir, name, headers string) string {
+		path := filepath.Join(dir, name)
+		Expect(os.WriteFile(path, []byte(headers+"\n"), 0600)).To(Succeed())
+
+		return path
+	}
+
+	It("detects Fundamentals from dimension column", func() {
+		dir := GinkgoT().TempDir()
+		path := writeCSV(dir, "data.csv", "Ticker,Dimension,CalendarDate,DateKey,ReportPeriod,LastUpdated,Assets,Revenue")
+		dataset, err := DetectSharadarDataset(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dataset).To(Equal("Fundamentals"))
 	})
 
-	It("detects Fundamentals case-insensitively", func() {
-		dataset, err := DetectSharadarDataset("sharadar_SF1_data.csv")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(dataset).To(Equal("Fundamentals"))
-	})
-
-	It("detects Metrics from metrics filename", func() {
-		dataset, err := DetectSharadarDataset("sharadar_metrics_20231228.parquet")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(dataset).To(Equal("Metrics"))
-	})
-
-	It("detects Metrics from daily filename", func() {
-		dataset, err := DetectSharadarDataset("sharadar_daily_20231228.csv")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(dataset).To(Equal("Metrics"))
-	})
-
-	It("detects Stock Tickers from tickers filename", func() {
-		dataset, err := DetectSharadarDataset("sharadar_tickers.parquet")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(dataset).To(Equal("Stock Tickers"))
-	})
-
-	It("detects Stock Tickers case-insensitively", func() {
-		dataset, err := DetectSharadarDataset("SHARADAR_TICKERS_20231228.csv")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(dataset).To(Equal("Stock Tickers"))
-	})
-
-	It("handles full paths by using only the base filename", func() {
-		dataset, err := DetectSharadarDataset("/home/user/downloads/SHARADAR_SF1_20231228.parquet")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(dataset).To(Equal("Fundamentals"))
-	})
-
-	It("detects SP500 from sp500 filename", func() {
-		dataset, err := DetectSharadarDataset("sharadar_sp500_20231228.parquet")
+	It("detects SP500 from action column", func() {
+		dir := GinkgoT().TempDir()
+		path := writeCSV(dir, "data.csv", "Date,Action,Ticker,Name,ContraTicker,Note")
+		dataset, err := DetectSharadarDataset(path)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(dataset).To(Equal("SP500"))
 	})
 
-	It("detects SP500 case-insensitively", func() {
-		dataset, err := DetectSharadarDataset("SHARADAR_SP500_data.csv")
+	It("detects Stock Tickers from permaticker column", func() {
+		dir := GinkgoT().TempDir()
+		path := writeCSV(dir, "data.csv", "PermaTicker,Ticker,Name,Exchange,IsDelisted,Category,CUSIPs")
+		dataset, err := DetectSharadarDataset(path)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(dataset).To(Equal("SP500"))
+		Expect(dataset).To(Equal("Stock Tickers"))
 	})
 
-	It("returns error for unrecognized filenames", func() {
-		_, err := DetectSharadarDataset("unknown_data.parquet")
+	It("detects Metrics from ev column", func() {
+		dir := GinkgoT().TempDir()
+		path := writeCSV(dir, "data.csv", "Ticker,Date,LastUpdated,EV,EVEBIT,EVEBITDA,MarketCap,PB,PE,PS")
+		dataset, err := DetectSharadarDataset(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset).To(Equal("Metrics"))
+	})
+
+	It("normalizes headers to lowercase", func() {
+		dir := GinkgoT().TempDir()
+		path := writeCSV(dir, "data.csv", "TICKER,DIMENSION,CALENDARDATE")
+		dataset, err := DetectSharadarDataset(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dataset).To(Equal("Fundamentals"))
+	})
+
+	It("returns error for unrecognized columns", func() {
+		dir := GinkgoT().TempDir()
+		path := writeCSV(dir, "data.csv", "Foo,Bar,Baz")
+		_, err := DetectSharadarDataset(path)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("returns error for unsupported file format", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "data.xlsx")
+		Expect(os.WriteFile(path, []byte("stuff"), 0600)).To(Succeed())
+		_, err := DetectSharadarDataset(path)
 		Expect(err).To(HaveOccurred())
 	})
 })
