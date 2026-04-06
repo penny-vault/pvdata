@@ -82,6 +82,58 @@ key in the `.pvdata.toml` configuration file.
 apikey = '<my api key>'
 ```
 
+## Data Quality Checks
+
+pv-data includes a data validation system that detects quality problems in your library.
+Checks run in two modes:
+
+**Inline (during imports):** Observations are validated before being saved to the database.
+Critical issues (e.g., negative total assets, future dates) block the write. Warnings and
+errors are recorded but data still flows. Issues are logged and stored in the
+`data_quality_issues` table.
+
+**Audit (on demand):** Run `pvdata check` to scan the database for problems that can only
+be detected by comparing across records (outliers, missing quarters, cross-type
+inconsistencies).
+
+```bash
+pvdata check                          # incremental (only new data since last check)
+pvdata check --lookback 2y            # check last 2 years
+pvdata check --full                   # check everything
+pvdata check --data-type fundamental  # only fundamentals
+pvdata check --check balance-sheet-identity  # run a specific check
+```
+
+The check command prints a grouped summary and exits non-zero if critical or error
+severity issues are found.
+
+### Check Layers
+
+| Layer | Phase | Description |
+|-------|-------|-------------|
+| Basic Sanity | Inline + Audit | Positive assets, revenue, shares; valid dates; required fields |
+| Cross-Field Consistency | Inline + Audit | Balance sheet identity, gross profit calc, EPS consistency, cash flow sum |
+| Statistical Outliers | Audit | Revenue/assets changed >10x/5x QoQ, PE/margin out of range |
+| Coverage & Staleness | Audit | Missing quarters, stale data, EOD without fundamentals |
+| Cross-Type | Audit | Metric vs fundamental agreement, duplicate observations |
+
+### Web UI
+
+The Data Quality page (accessible from the navigation menu) shows a summary dashboard
+with severity counts, and a filterable, paginated issues table.
+
+### Healthcheck Integration
+
+To monitor scheduled quality checks, configure a healthcheck ID in `.pvdata.toml`:
+
+```toml
+[healthchecks]
+data_quality_id = '<healthcheck uuid>'
+```
+
+If configured, `pvdata check` pings the healthcheck on completion (success if no
+critical/error issues, failure otherwise). If not configured, the ping is skipped.
+
 ## Updating stealth evasions
 
 Some data providers require browser-based scraping. To avoid bot detection, pages are
