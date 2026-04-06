@@ -181,6 +181,30 @@ func runSubscription(ctx context.Context, myLibrary *library.Library, subscripti
 		logger.Error().Err(err).Msg("failed to save run history")
 	}
 
+	// Log data quality summary for this run
+	qualityConn, qErr := myLibrary.Pool.Acquire(ctx)
+	if qErr == nil {
+		var critCount, errCount, warnCount int
+
+		_ = qualityConn.QueryRow(ctx,
+			`SELECT
+				coalesce(sum(case when severity='critical' then 1 else 0 end), 0),
+				coalesce(sum(case when severity='error' then 1 else 0 end), 0),
+				coalesce(sum(case when severity='warning' then 1 else 0 end), 0)
+			FROM data_quality_issues
+			WHERE subscription_id = $1 AND detected_at > $2`,
+			subscription.ID, summary.StartTime).Scan(&critCount, &errCount, &warnCount)
+		qualityConn.Release()
+
+		if critCount+errCount+warnCount > 0 {
+			logger.Warn().
+				Int("critical", critCount).
+				Int("errors", errCount).
+				Int("warnings", warnCount).
+				Msg("data quality issues detected (run `pvdata check` for details)")
+		}
+	}
+
 	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
 		for _, hook := range subDataset.PostFetch {
 			if err := hook(ctx, subscription); err != nil {
