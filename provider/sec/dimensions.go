@@ -22,6 +22,15 @@ import (
 	"github.com/penny-vault/pvdata/data"
 )
 
+// TTM span limits: a valid trailing-twelve-month aggregation should cover roughly
+// one calendar year. We allow some slack for fiscal calendar variations (53-week
+// retailers, leap years, fiscal-year boundary shifts) but reject anything that
+// could not plausibly represent twelve months of activity.
+const (
+	ttmMinSpanDays = 270
+	ttmMaxSpanDays = 410
+)
+
 // Period represents a unique reporting period identified from CompanyFacts.
 type Period struct {
 	PeriodEnd   time.Time // End date of the fiscal period
@@ -79,25 +88,81 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 
 // NormalizeEventDate converts a raw period end date to a normalized calendar date,
 // matching Sharadar's EventDate convention:
-// - Quarterly: snaps to the nearest calendar quarter end (3/31, 6/30, 9/30, 12/31)
-// - Annual: snaps to the calendar year end (12/31)
+//   - Quarterly (10-Q, ARQ/MRQ/ART/MRT): snaps to the *nearest* calendar quarter end
+//     (3/31, 6/30, 9/30, 12/31). For example, 2018-07-24 maps to 2018-06-30 (closer
+//     to the previous quarter end than the next), and 2018-09-29 maps to 2018-09-30
+//     (Apple's fiscal Q-end). Ties are broken by snapping forward.
+//   - Annual (10-K, ARY/MRY): always snaps to the calendar year end (12/31), so a
+//     fiscal year ending 2015-09-26 (Apple's FY2015) is reported as 2015-12-31.
 func NormalizeEventDate(periodEnd time.Time, formType string) time.Time {
 	if formType == "10-K" {
 		return time.Date(periodEnd.Year(), 12, 31, 0, 0, 0, 0, time.UTC)
 	}
 
-	// Quarterly: snap to nearest quarter end
-	month := periodEnd.Month()
-	switch {
-	case month <= 3:
-		return time.Date(periodEnd.Year(), 3, 31, 0, 0, 0, 0, time.UTC)
-	case month <= 6:
-		return time.Date(periodEnd.Year(), 6, 30, 0, 0, 0, 0, time.UTC)
-	case month <= 9:
-		return time.Date(periodEnd.Year(), 9, 30, 0, 0, 0, 0, time.UTC)
-	default:
-		return time.Date(periodEnd.Year(), 12, 31, 0, 0, 0, 0, time.UTC)
+	// Quarterly: snap to the nearest calendar quarter end. Build the candidate
+	// quarter ends bracketing the period end and pick whichever is closer.
+	candidates := quarterEndCandidates(periodEnd)
+
+	// Truncate the period end to a date so the comparison is purely calendar-based.
+	day := time.Date(periodEnd.Year(), periodEnd.Month(), periodEnd.Day(), 0, 0, 0, 0, time.UTC)
+
+	best := candidates[0]
+	bestDist := absDuration(day.Sub(best))
+
+	for _, c := range candidates[1:] {
+		dist := absDuration(day.Sub(c))
+		// Strictly less so that ties (equal distance) prefer the earlier "best",
+		// which is the *forward* candidate because we iterate from latest to earliest.
+		if dist < bestDist {
+			best = c
+			bestDist = dist
+		}
 	}
+
+	return best
+}
+
+// quarterEndCandidates returns the calendar quarter ends that bracket the given date,
+// ordered from latest (forward) to earliest (backward) so that tie-breaking favors
+// snapping forward.
+func quarterEndCandidates(periodEnd time.Time) []time.Time {
+	year := periodEnd.Year()
+	allEnds := []time.Time{
+		time.Date(year-1, 12, 31, 0, 0, 0, 0, time.UTC),
+		time.Date(year, 3, 31, 0, 0, 0, 0, time.UTC),
+		time.Date(year, 6, 30, 0, 0, 0, 0, time.UTC),
+		time.Date(year, 9, 30, 0, 0, 0, 0, time.UTC),
+		time.Date(year, 12, 31, 0, 0, 0, 0, time.UTC),
+		time.Date(year+1, 3, 31, 0, 0, 0, 0, time.UTC),
+	}
+
+	day := time.Date(periodEnd.Year(), periodEnd.Month(), periodEnd.Day(), 0, 0, 0, 0, time.UTC)
+
+	// Find the first quarter end that is >= day; the candidates are it and the one before.
+	var forwardIdx int
+
+	for i, qe := range allEnds {
+		if !qe.Before(day) {
+			forwardIdx = i
+			break
+		}
+	}
+
+	if forwardIdx == 0 {
+		forwardIdx = 1
+	}
+
+	// Return [forward, backward] so tie-breaking (strict <) keeps the forward one.
+	return []time.Time{allEnds[forwardIdx], allEnds[forwardIdx-1]}
+}
+
+// absDuration returns the absolute value of a duration.
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+
+	return d
 }
 
 // ResolveFieldsForFiling resolves all fields using only facts filed on or before

@@ -288,6 +288,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		q := quarters[i]
 		eventDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
 
+		// Verify the 4 quarters span roughly 12 months. If a 10-Q is missing
+		// from the sequence (or fiscal-year boundaries shifted), the span will
+		// be too short or too long and the resulting TTM would be misleading.
+		spanStart := quarters[i-3].period.PeriodEnd
+		spanEnd := q.period.PeriodEnd
+		spanDays := int(spanEnd.Sub(spanStart).Hours() / 24)
+
+		if spanDays < ttmMinSpanDays || spanDays > ttmMaxSpanDays {
+			log.Warn().
+				Str("ticker", asset.Ticker).
+				Time("span_start", spanStart).
+				Time("span_end", spanEnd).
+				Int("span_days", spanDays).
+				Msg("skipping TTM computation: 4-quarter span outside expected range")
+
+			continue
+		}
+
 		// ART
 		arQSlice := make([]map[string]float64, 4)
 		for j := 0; j < 4; j++ {
