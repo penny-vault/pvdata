@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -190,6 +191,11 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 	processed := 0
 	processErrors := 0
 
+	// Track the latest-period coverage (number of resolved fields) for each
+	// company so we can report a coverage distribution in the run summary.
+	// Companies with no periods emitted are not included.
+	coverageSamples := make([]int, 0, len(cikMap))
+
 	err := DownloadCompanyFactsZip(ctx, client, func(cik int, jsonData []byte) error {
 		asset, ok := cikMap[cik]
 		if !ok {
@@ -217,7 +223,10 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			return nil
 		}
 
-		emitFundamentals(cf, asset, sub, time.Time{}, out, numObservations)
+		latestCoverage, periodsEmitted := emitFundamentals(cf, asset, sub, time.Time{}, out, numObservations)
+		if periodsEmitted > 0 {
+			coverageSamples = append(coverageSamples, latestCoverage)
+		}
 
 		processed++
 		if processed%1000 == 0 {
@@ -239,12 +248,53 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			Msg("backfill completed with processing errors")
 	}
 
+	logCoverageDistribution(coverageSamples)
+
 	log.Info().
 		Int("total_processed", processed).
 		Int("process_errors", processErrors).
 		Msg("backfill complete")
 
 	return nil
+}
+
+// logCoverageDistribution logs percentile statistics of per-company
+// latest-period coverage over the full backfill. This helps surface XBRL
+// mapping gaps: a low p50 signals a systemic mapping problem, while a large
+// gap between p50 and p99 typically reflects companies reporting only a
+// subset of the expected tags (e.g. funds or shell companies).
+func logCoverageDistribution(samples []int) {
+	if len(samples) == 0 {
+		return
+	}
+
+	sort.Ints(samples)
+
+	sum := 0
+	for _, v := range samples {
+		sum += v
+	}
+
+	percentile := func(p float64) int {
+		if len(samples) == 0 {
+			return 0
+		}
+
+		idx := int(float64(len(samples)-1) * p)
+
+		return samples[idx]
+	}
+
+	log.Info().
+		Int("companies", len(samples)).
+		Int("total_mappings", len(FieldMappings)).
+		Int("min", samples[0]).
+		Int("p50", percentile(0.50)).
+		Int("p90", percentile(0.90)).
+		Int("p99", percentile(0.99)).
+		Int("max", samples[len(samples)-1]).
+		Int("avg", sum/len(samples)).
+		Msg("sec backfill field coverage distribution")
 }
 
 // fetchEDGARFeed fetches a single page of the EDGAR ATOM filing feed starting
@@ -357,6 +407,13 @@ pageLoop:
 	return nil
 }
 
+// coverageWarnThresholdPct is the minimum percentage of FieldMappings that
+// should resolve for a company's most recent period before emitFundamentals
+// logs a warning. Most healthy filers resolve well above this line; dropping
+// below it usually indicates a company with non-standard XBRL tags that are
+// missing from our fallback list.
+const coverageWarnThresholdPct = 50
+
 // emitFundamentals processes a CompanyFacts into data.Fundamental observations
 // for all 6 dimensions and sends them to the output channel.
 //
@@ -364,8 +421,18 @@ pageLoop:
 // Pass time.Time{} (zero value) to emit every period without filtering.
 // MRFiledDate is used for the comparison so that restatements filed after
 // since are re-emitted even if the period itself is older.
-func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) {
+//
+// Returns the number of fields resolved for the company's most recent period
+// and the count of non-TTM periods emitted (ARQ + ARY). The caller uses these
+// to track coverage statistics across the run. latestPeriodCoverage is zero if
+// no periods were identified.
+func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) (latestPeriodCoverage, periodsEmitted int) {
 	periods := IdentifyPeriods(cf)
+
+	// Track coverage for the chronologically most recent period. We record
+	// coverage regardless of the since filter so incremental runs still see
+	// the true latest-period coverage for the company.
+	var latestPeriodEnd time.Time
 
 	// Collect quarterly periods for TTM computation, keyed by normalized event date.
 	// All quarters are kept (even those filtered out below) so TTM windows can
@@ -402,6 +469,14 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			quarters = append(quarters, quarterData{period: p, arFields: arFields, mrFields: mrFields})
 		}
 
+		// Track the chronologically latest period's coverage. Done before the
+		// since filter so the reported coverage reflects the true most recent
+		// period, not just the newest period emitted this run.
+		if p.PeriodEnd.After(latestPeriodEnd) {
+			latestPeriodEnd = p.PeriodEnd
+			latestPeriodCoverage = len(arFields)
+		}
+
 		// Skip emitting per-period observations for periods filed before since.
 		// MRFiledDate is used so that restatements filed after since are re-emitted.
 		if !since.IsZero() && p.MRFiledDate.Before(since) {
@@ -432,6 +507,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 
 			*numObservations++
+
+			periodsEmitted++
 		}
 
 		if p.FormType == "10-K" {
@@ -458,6 +535,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 
 			*numObservations++
+
+			periodsEmitted++
 		}
 	}
 
@@ -558,4 +637,40 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			*numObservations++
 		}
 	}
+
+	// Log per-company coverage. We use Debug for healthy companies (most of
+	// the universe) to avoid flooding logs during a 10,000+ company backfill,
+	// and escalate to Warn when coverage is concerning so mapping gaps are
+	// surfaced. Companies with no periods identified are skipped: there's
+	// nothing to compare against and the upstream parser already logs them.
+	if len(periods) > 0 {
+		totalMappings := len(FieldMappings)
+		coveragePct := 0
+
+		if totalMappings > 0 {
+			coveragePct = 100 * latestPeriodCoverage / totalMappings
+		}
+
+		if coveragePct < coverageWarnThresholdPct {
+			log.Warn().
+				Str("ticker", asset.Ticker).
+				Int("cik", asset.CIK).
+				Int("periods_emitted", periodsEmitted).
+				Int("resolved", latestPeriodCoverage).
+				Int("total", totalMappings).
+				Int("pct", coveragePct).
+				Msg("sec coverage for company")
+		} else {
+			log.Debug().
+				Str("ticker", asset.Ticker).
+				Int("cik", asset.CIK).
+				Int("periods_emitted", periodsEmitted).
+				Int("resolved", latestPeriodCoverage).
+				Int("total", totalMappings).
+				Int("pct", coveragePct).
+				Msg("sec coverage for company")
+		}
+	}
+
+	return latestPeriodCoverage, periodsEmitted
 }
