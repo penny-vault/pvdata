@@ -284,10 +284,14 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "InterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		// Do NOT add InterestIncomeExpenseNet here: it is a signed net value
+		// (positive when net expense, negative when net income) and feeds
+		// directly into EBIT = NetIncome + IncomeTaxExpense + InterestExpense.
+		// For cash-rich companies with interest income > expense, using the
+		// net value would incorrectly subtract from EBIT.
 		XBRLTags: []string{
 			"InterestExpense",
 			"InterestExpenseDebt",
-			"InterestIncomeExpenseNet",
 		},
 	},
 	{
