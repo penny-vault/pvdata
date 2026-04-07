@@ -16,10 +16,28 @@
 package sec
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
+	"golang.org/x/time/rate"
+)
+
+const (
+	companyFactsURL    = "https://data.sec.gov/api/xbrl/companyfacts/"
+	companyFactsZipURL = "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
+	companyTickersURL  = "https://www.sec.gov/files/company_tickers.json"
+	edgarFeedURL       = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K%2C10-Q&dateb=&owner=include&count=100&search_text=&start=0&output=atom"
 )
 
 // Fact represents a single XBRL fact value from an SEC filing.
@@ -153,4 +171,107 @@ func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 	})
 
 	return cf, nil
+}
+
+// FetchCompanyFacts downloads the companyfacts JSON for a single CIK from SEC EDGAR.
+func FetchCompanyFacts(ctx context.Context, client *resty.Client, cik int) (*CompanyFacts, error) {
+	url := companyFactsURL + FormatCIK(cik) + ".json"
+
+	resp, err := client.R().
+		SetContext(ctx).
+		Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetching companyfacts for CIK %d: %w", cik, err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("SEC returned status %d for CIK %d", resp.StatusCode(), cik)
+	}
+
+	return ParseCompanyFacts(resp.Body())
+}
+
+// DownloadCompanyFactsZip downloads and extracts the bulk companyfacts.zip file,
+// calling processFn for each individual CIK JSON file. This streams the zip
+// rather than writing to disk.
+func DownloadCompanyFactsZip(ctx context.Context, client *resty.Client, processFn func(cik int, jsonData []byte) error) error {
+	log.Info().Msg("downloading companyfacts.zip from SEC (this may take several minutes)")
+
+	resp, err := client.R().
+		SetContext(ctx).
+		Get(companyFactsZipURL)
+	if err != nil {
+		return fmt.Errorf("downloading companyfacts.zip: %w", err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return fmt.Errorf("SEC returned status %d for companyfacts.zip", resp.StatusCode())
+	}
+
+	body := resp.Body()
+
+	reader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		return fmt.Errorf("opening companyfacts.zip: %w", err)
+	}
+
+	for _, f := range reader.File {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if filepath.Ext(f.Name) != ".json" {
+			continue
+		}
+
+		// Extract CIK from filename (e.g., "CIK0000320193.json")
+		base := strings.TrimSuffix(filepath.Base(f.Name), ".json")
+		base = strings.TrimPrefix(base, "CIK")
+
+		cik, err := strconv.Atoi(base)
+		if err != nil {
+			continue
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			log.Warn().Err(err).Str("file", f.Name).Msg("error opening file in zip")
+			continue
+		}
+
+		jsonData, err := io.ReadAll(rc)
+
+		if closeErr := rc.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("file", f.Name).Msg("error closing file in zip")
+		}
+
+		if err != nil {
+			log.Warn().Err(err).Str("file", f.Name).Msg("error reading file in zip")
+			continue
+		}
+
+		if err := processFn(cik, jsonData); err != nil {
+			log.Warn().Err(err).Int("cik", cik).Msg("error processing companyfacts")
+		}
+	}
+
+	return nil
+}
+
+// NewSECClient creates a resty HTTP client configured for SEC EDGAR API access.
+func NewSECClient(userAgent string, limiter *rate.Limiter) *resty.Client {
+	client := resty.New().
+		SetHeader("User-Agent", userAgent).
+		SetHeader("Accept", "application/json").
+		SetTimeout(60 * time.Second).
+		SetRetryCount(3).
+		SetRetryWaitTime(5 * time.Second).
+		AddRetryCondition(func(r *resty.Response, err error) bool {
+			return r != nil && (r.StatusCode() == http.StatusTooManyRequests || r.StatusCode() >= 500)
+		}).
+		OnBeforeRequest(func(_ *resty.Client, r *resty.Request) error {
+			return limiter.Wait(r.Context())
+		})
+
+	return client
 }

@@ -17,7 +17,12 @@ package sec
 
 import (
 	"context"
+	"strconv"
 	"time"
+
+	"github.com/go-resty/resty/v2"
+	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
@@ -59,7 +64,223 @@ func (s *SEC) Datasets() map[string]provider.Dataset {
 	}
 }
 
-func fetchFundamentals(_ context.Context, _ *library.Subscription, _ chan<- *data.Observation, exit chan<- data.RunSummary) {
-	// stub -- will be implemented in Task 8
-	exit <- data.RunSummary{}
+func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<- *data.Observation, exit chan<- data.RunSummary) {
+	runSummary := data.RunSummary{
+		StartTime:        time.Now(),
+		SubscriptionID:   sub.ID,
+		SubscriptionName: sub.Name,
+	}
+
+	defer func() { exit <- runSummary }()
+
+	userAgent := sub.Config["userAgent"]
+	if userAgent == "" {
+		log.Error().Msg("SEC provider requires userAgent config")
+		return
+	}
+
+	reqPerSec := 10
+
+	if rateStr, ok := sub.Config["rateLimit"]; ok {
+		if r, err := strconv.Atoi(rateStr); err == nil && r > 0 {
+			reqPerSec = r
+		}
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(reqPerSec), 1)
+	client := NewSECClient(userAgent, limiter)
+
+	// Load CIK -> asset map from database
+	cikMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
+	if err != nil {
+		log.Error().Err(err).Msg("error loading CIK map from database")
+		return
+	}
+
+	log.Info().Int("known_ciks", len(cikMap)).Msg("loaded CIK map from database")
+
+	isBackfill := sub.LastObsDate.IsZero()
+	if isBackfill {
+		runBackfill(ctx, client, cikMap, sub, out)
+	} else {
+		runIncremental(ctx, client, cikMap, sub, sub.LastObsDate, out)
+	}
+}
+
+func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation) {
+	processed := 0
+
+	err := DownloadCompanyFactsZip(ctx, client, func(cik int, jsonData []byte) error {
+		asset, ok := cikMap[cik]
+		if !ok {
+			return nil // Unknown company, skip
+		}
+
+		cf, err := ParseCompanyFacts(jsonData)
+		if err != nil {
+			return err
+		}
+
+		emitFundamentals(cf, asset, sub, out)
+
+		processed++
+		if processed%1000 == 0 {
+			log.Info().Int("processed", processed).Msg("backfill progress")
+		}
+
+		return nil
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("error during backfill")
+	}
+
+	log.Info().Int("total_processed", processed).Msg("backfill complete")
+}
+
+func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation) {
+	// Fetch recent filings from EDGAR feed
+	resp, err := client.R().SetContext(ctx).Get(edgarFeedURL)
+	if err != nil {
+		log.Error().Err(err).Msg("error fetching EDGAR filing feed")
+		return
+	}
+
+	filings, err := ParseFilingFeed(resp.Body())
+	if err != nil {
+		log.Error().Err(err).Msg("error parsing EDGAR filing feed")
+		return
+	}
+
+	// Deduplicate CIKs and filter to known assets
+	seen := make(map[int]bool)
+	for _, filing := range filings {
+		if filing.Filed.Before(since) || seen[filing.CIK] {
+			continue
+		}
+
+		seen[filing.CIK] = true
+
+		asset, ok := cikMap[filing.CIK]
+		if !ok {
+			continue
+		}
+
+		cf, err := FetchCompanyFacts(ctx, client, filing.CIK)
+		if err != nil {
+			log.Warn().Err(err).Int("cik", filing.CIK).Msg("error fetching companyfacts")
+			continue
+		}
+
+		emitFundamentals(cf, asset, sub, out)
+	}
+}
+
+// emitFundamentals processes a CompanyFacts into data.Fundamental observations
+// for all 6 dimensions and sends them to the output channel.
+func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, out chan<- *data.Observation) {
+	periods := IdentifyPeriods(cf)
+
+	// Collect quarterly periods for TTM computation, keyed by normalized event date
+	type quarterData struct {
+		period   Period
+		arFields map[string]float64
+		mrFields map[string]float64
+	}
+
+	var quarters []quarterData
+
+	for _, p := range periods {
+		eventDate := NormalizeEventDate(p.PeriodEnd, p.FormType)
+
+		// AR: resolve using only facts available at the earliest filing date
+		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
+		// MR: resolve using all facts including restatements
+		mrFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.MRFiledDate)
+
+		if p.FormType == "10-Q" {
+			quarters = append(quarters, quarterData{period: p, arFields: arFields, mrFields: mrFields})
+
+			// ARQ
+			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARQ",
+				eventDate, p.ARFiledDate, p.PeriodEnd)
+			out <- &data.Observation{
+				Fundamental:      fundamental,
+				ObservationDate:  eventDate,
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+
+			// MRQ
+			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRQ",
+				eventDate, p.PeriodEnd, p.PeriodEnd)
+			out <- &data.Observation{
+				Fundamental:      fundamental,
+				ObservationDate:  eventDate,
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+		}
+
+		if p.FormType == "10-K" {
+			// ARY
+			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARY",
+				eventDate, p.ARFiledDate, p.PeriodEnd)
+			out <- &data.Observation{
+				Fundamental:      fundamental,
+				ObservationDate:  eventDate,
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+
+			// MRY
+			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRY",
+				eventDate, p.PeriodEnd, p.PeriodEnd)
+			out <- &data.Observation{
+				Fundamental:      fundamental,
+				ObservationDate:  eventDate,
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+		}
+	}
+
+	// Compute TTM for each quarter that has 4 preceding quarters
+	for i := 3; i < len(quarters); i++ {
+		q := quarters[i]
+		eventDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
+
+		// ART
+		arQSlice := make([]map[string]float64, 4)
+		for j := 0; j < 4; j++ {
+			arQSlice[j] = quarters[i-3+j].arFields
+		}
+
+		if ttm := ComputeTTM(arQSlice); ttm != nil {
+			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "ART",
+				eventDate, q.period.ARFiledDate, q.period.PeriodEnd)
+			out <- &data.Observation{
+				Fundamental:      fundamental,
+				ObservationDate:  eventDate,
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+		}
+
+		// MRT
+		mrQSlice := make([]map[string]float64, 4)
+		for j := 0; j < 4; j++ {
+			mrQSlice[j] = quarters[i-3+j].mrFields
+		}
+
+		if ttm := ComputeTTM(mrQSlice); ttm != nil {
+			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "MRT",
+				eventDate, q.period.PeriodEnd, q.period.PeriodEnd)
+			out <- &data.Observation{
+				Fundamental:      fundamental,
+				ObservationDate:  eventDate,
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+		}
+	}
 }
