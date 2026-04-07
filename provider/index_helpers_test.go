@@ -196,3 +196,81 @@ var _ = Describe("currentIndexMembers", func() {
 		Expect(result).To(BeEmpty())
 	})
 })
+
+var _ = Describe("diffSnapshotsWithThreshold", func() {
+	It("matches DiffSnapshots when only AbsoluteThreshold is set", func() {
+		current := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.06},
+		}
+		previous := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.04},
+		}
+		adds, removes, weightChanges := DiffSnapshotsWithThreshold(current, previous, DiffOptions{AbsoluteThreshold: 0.01})
+		Expect(adds).To(BeEmpty())
+		Expect(removes).To(BeEmpty())
+		Expect(weightChanges).To(HaveLen(1))
+		Expect(weightChanges).To(HaveKey("MSFT"))
+	})
+
+	It("uses relative threshold when set", func() {
+		// AAPL prev=0.0003, current=0.00040. delta=0.0001, prev*0.25 = 0.000075
+		// 0.0001 >= 0.000075 -> CHANGED
+		// MSFT prev=0.0003, current=0.00031. delta=0.00001, prev*0.25 = 0.000075
+		// 0.00001 < 0.000075 -> NOT changed
+		current := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.00040},
+			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.00031},
+		}
+		previous := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.00030},
+			"MSFT": {CompositeFigi: "BBG000BPH459", Weight: 0.00030},
+		}
+		adds, removes, weightChanges := DiffSnapshotsWithThreshold(current, previous, DiffOptions{RelativeThreshold: 0.25})
+		Expect(adds).To(BeEmpty())
+		Expect(removes).To(BeEmpty())
+		Expect(weightChanges).To(HaveLen(1))
+		Expect(weightChanges).To(HaveKey("AAPL"))
+		Expect(weightChanges).NotTo(HaveKey("MSFT"))
+	})
+
+	It("uses max(absolute, prev*relative) when both are set", func() {
+		// prev=0.10, current=0.108. delta=0.008.
+		// abs=0.01, prev*rel=0.10*0.25=0.025. max=0.025. 0.008 < 0.025 -> NOT changed.
+		current := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.108},
+		}
+		previous := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.10},
+		}
+		_, _, weightChanges := DiffSnapshotsWithThreshold(current, previous, DiffOptions{AbsoluteThreshold: 0.01, RelativeThreshold: 0.25})
+		Expect(weightChanges).To(BeEmpty())
+	})
+
+	It("detects adds and removes regardless of threshold mode", func() {
+		current := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"NEW1": {CompositeFigi: "BBG000NEW001", Weight: 0.01},
+		}
+		previous := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+			"OLD1": {CompositeFigi: "BBG000OLD001", Weight: 0.02},
+		}
+		adds, removes, _ := DiffSnapshotsWithThreshold(current, previous, DiffOptions{RelativeThreshold: 0.25})
+		Expect(adds).To(HaveKey("NEW1"))
+		Expect(removes).To(HaveKey("OLD1"))
+	})
+
+	It("treats prev.Weight=0 as falling back to absolute threshold", func() {
+		// prev weight is 0, so prev*rel = 0. max(abs, 0) = abs. delta must clear absolute.
+		current := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.005},
+		}
+		previous := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.0},
+		}
+		_, _, weightChanges := DiffSnapshotsWithThreshold(current, previous, DiffOptions{AbsoluteThreshold: 0.01, RelativeThreshold: 0.25})
+		Expect(weightChanges).To(BeEmpty())
+	})
+})
