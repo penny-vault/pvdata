@@ -85,7 +85,8 @@ var _ = Describe("Integration", func() {
 			observations := make(chan *data.Observation, 1000)
 
 			go func() {
-				emitFundamentals(cf, asset, sub, observations)
+				numObs := 0
+				emitFundamentals(cf, asset, sub, observations, &numObs)
 				close(observations)
 			}()
 

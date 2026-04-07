@@ -165,15 +165,6 @@ var FieldMappings = []FieldMapping{
 		},
 	},
 	{
-		FieldName: "TotalDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{
-			"DebtCurrent",
-			"LongTermDebtAndCapitalLeaseObligations",
-			"LongTermDebt",
-		},
-		// Often needs to be computed as DebtCurrent + LongTermDebt
-	},
-	{
 		FieldName: "DebtCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"ShortTermBorrowings",
@@ -191,6 +182,11 @@ var FieldMappings = []FieldMapping{
 		},
 	},
 	{
+		FieldName: "TotalDebt", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		Op:       OpAdd,
+		Operands: []string{"DebtCurrent", "DebtNonCurrent"},
+	},
+	{
 		FieldName: "DeferredRevenue", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"DeferredRevenue",
@@ -200,7 +196,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "TotalLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"Liabilities", "LiabilitiesAndStockholdersEquity"},
+		XBRLTags: []string{"Liabilities"},
 	},
 	{
 		FieldName: "CurrentLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -530,18 +526,11 @@ var FieldMappings = []FieldMapping{
 		Op:       OpSubtract,
 		Operands: []string{"TotalAssets", "Intangibles"},
 	},
-	// InvestedCapital = TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
-	// Simplified: TotalDebt + Equity - CashAndEquivalents (alternative definition)
-	// Using Sharadar's definition: Debt + Assets - Intangibles - CashnEq - LiabilitiesC
-	// This is complex -- we compute: TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
-	{
-		FieldName: "InvestedCapital", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:       OpAdd,
-		Operands: []string{"TotalDebt", "TotalAssets"},
-		// Note: Full formula needs subtraction of multiple fields. This will need
-		// custom handling in the engine (see Task 4). The engine will recognize
-		// InvestedCapital as a special case.
-	},
+	// InvestedCapital is intentionally omitted: the proper formula is
+	//   TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
+	// which requires multi-term subtract support that the derivation engine does
+	// not yet have. Add it back in a follow-up once the engine can express that
+	// formula correctly; computing only TotalDebt + TotalAssets would be wrong.
 
 	// ==================== RATIO METRICS (derived) ====================
 

@@ -71,11 +71,25 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		SubscriptionName: sub.Name,
 	}
 
-	defer func() { exit <- runSummary }()
+	numObservations := 0
+
+	defer func() {
+		runSummary.EndTime = time.Now().UTC()
+		runSummary.NumObservations = numObservations
+
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
+
+		exit <- runSummary
+	}()
 
 	userAgent := sub.Config["userAgent"]
 	if userAgent == "" {
 		log.Error().Msg("SEC provider requires userAgent config")
+
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -94,6 +108,9 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	cikMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading CIK map from database")
+
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -101,13 +118,19 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 
 	isBackfill := sub.LastObsDate.IsZero()
 	if isBackfill {
-		runBackfill(ctx, client, cikMap, sub, out)
+		if err := runBackfill(ctx, client, cikMap, sub, out, &numObservations); err != nil {
+			runSummary.Status = data.RunFailed
+			return
+		}
 	} else {
-		runIncremental(ctx, client, cikMap, sub, sub.LastObsDate, out)
+		if err := runIncremental(ctx, client, cikMap, sub, sub.LastObsDate, out, &numObservations); err != nil {
+			runSummary.Status = data.RunFailed
+			return
+		}
 	}
 }
 
-func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation) {
+func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations *int) error {
 	processed := 0
 
 	err := DownloadCompanyFactsZip(ctx, client, func(cik int, jsonData []byte) error {
@@ -121,7 +144,7 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			return err
 		}
 
-		emitFundamentals(cf, asset, sub, out)
+		emitFundamentals(cf, asset, sub, out, numObservations)
 
 		processed++
 		if processed%1000 == 0 {
@@ -132,23 +155,29 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error during backfill")
+
+		return err
 	}
 
 	log.Info().Int("total_processed", processed).Msg("backfill complete")
+
+	return nil
 }
 
-func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation) {
+func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) error {
 	// Fetch recent filings from EDGAR feed
 	resp, err := client.R().SetContext(ctx).Get(edgarFeedURL)
 	if err != nil {
 		log.Error().Err(err).Msg("error fetching EDGAR filing feed")
-		return
+
+		return err
 	}
 
 	filings, err := ParseFilingFeed(resp.Body())
 	if err != nil {
 		log.Error().Err(err).Msg("error parsing EDGAR filing feed")
-		return
+
+		return err
 	}
 
 	// Deduplicate CIKs and filter to known assets
@@ -171,13 +200,15 @@ func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]As
 			continue
 		}
 
-		emitFundamentals(cf, asset, sub, out)
+		emitFundamentals(cf, asset, sub, out, numObservations)
 	}
+
+	return nil
 }
 
 // emitFundamentals processes a CompanyFacts into data.Fundamental observations
 // for all 6 dimensions and sends them to the output channel.
-func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, out chan<- *data.Observation) {
+func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations *int) {
 	periods := IdentifyPeriods(cf)
 
 	// Collect quarterly periods for TTM computation, keyed by normalized event date
@@ -210,6 +241,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				SubscriptionName: sub.Name,
 			}
 
+			*numObservations++
+
 			// MRQ
 			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRQ",
 				eventDate, p.PeriodEnd, p.PeriodEnd)
@@ -219,6 +252,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
+
+			*numObservations++
 		}
 
 		if p.FormType == "10-K" {
@@ -232,6 +267,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				SubscriptionName: sub.Name,
 			}
 
+			*numObservations++
+
 			// MRY
 			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRY",
 				eventDate, p.PeriodEnd, p.PeriodEnd)
@@ -241,6 +278,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
+
+			*numObservations++
 		}
 	}
 
@@ -264,6 +303,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
+
+			*numObservations++
 		}
 
 		// MRT
@@ -281,6 +322,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
+
+			*numObservations++
 		}
 	}
 }

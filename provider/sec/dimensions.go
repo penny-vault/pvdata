@@ -502,9 +502,5 @@ func BuildFundamental(fields map[string]float64, ticker, compositeFigi, dimensio
 		f.TangibleAssetValue = int64(v)
 	}
 
-	if v, ok := fields["InvestedCapital"]; ok {
-		f.InvestedCapital = int64(v)
-	}
-
 	return f
 }
