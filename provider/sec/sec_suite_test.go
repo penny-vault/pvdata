@@ -12,18 +12,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package cmd
 
-// Blank imports to trigger init() registration for provider sub-packages.
+package sec
+
 import (
-	_ "github.com/penny-vault/pvdata/provider/fred"
-	_ "github.com/penny-vault/pvdata/provider/ishares"
-	_ "github.com/penny-vault/pvdata/provider/legacy"
-	_ "github.com/penny-vault/pvdata/provider/massive"
-	_ "github.com/penny-vault/pvdata/provider/nasdaq"
-	_ "github.com/penny-vault/pvdata/provider/sec"
-	_ "github.com/penny-vault/pvdata/provider/sharadar"
-	_ "github.com/penny-vault/pvdata/provider/tiingo"
-	_ "github.com/penny-vault/pvdata/provider/tradingview"
-	_ "github.com/penny-vault/pvdata/provider/zacks"
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
+
+func TestSEC(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "SEC Suite")
+}
