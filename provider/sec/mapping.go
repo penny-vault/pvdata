@@ -21,11 +21,29 @@ import (
 
 // ResolveDirect attempts to find a value for a direct field mapping by searching
 // the CompanyFacts for matching XBRL tags. Tags are tried in order; the first
-// match for the given period end date and form type wins.
+// tag with at least one matching fact wins, and within that tag's matching
+// facts the one with the latest Filed date is selected.
 //
 // For instant (balance sheet) concepts, matches facts where End == periodEnd.
 // For duration (income/cash flow) concepts, matches facts where End == periodEnd
 // and the filing form matches.
+//
+// "Latest filed" semantics depend on the caller:
+//   - When called directly with a CompanyFacts containing all facts, this picks
+//     the most recently reported value across the entire history (i.e. an MR
+//     view).
+//   - When called via ResolveFieldsForFiling, the cf has already been filtered
+//     to facts with Filed <= filedDate, so this picks the latest fact within
+//     that window. For an AR resolution the caller passes ARFiledDate (the
+//     earliest filing date for the period) and the window collapses to the
+//     facts in the original 10-K/10-Q. For an MR resolution the caller passes
+//     MRFiledDate (the latest filing date for the period) and the window
+//     covers any subsequent restatements as well.
+//
+// Note that a 10-K/A amendment filed later than the original 10-K but still
+// before MRFiledDate will overwrite the AR value when the AR window happens
+// to extend to its filing date; this is the desired behavior because the
+// amendment is the authoritative record of the period as filed.
 func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) (float64, bool) {
 	tags := m.XBRLTags
 	if m.Type == MappingDerived {

@@ -51,11 +51,17 @@ type Fact struct {
 	Start time.Time // Period start date (present for duration concepts; zero for instant concepts)
 	Filed time.Time // Date the filing was submitted to SEC
 	Val   float64   // The reported value
-	Accn  string    // SEC accession number
-	Form  string    // Filing form type (10-K, 10-Q)
-	FP    string    // Fiscal period (FY, Q1, Q2, Q3, Q4)
-	Frame string    // XBRL frame identifier (e.g. CY2023Q3I)
-	FY    int       // Fiscal year
+	// Accn is the SEC accession number identifying the filing that reported
+	// this fact. It is currently parsed for completeness but not used for
+	// dedup or correlation. A future enhancement could key on Accn to detect
+	// "this exact filing was already processed" at the fact level, or to
+	// group facts reported together in the same filing for provenance
+	// tracking.
+	Accn  string // SEC accession number
+	Form  string // Filing form type (10-K, 10-Q)
+	FP    string // Fiscal period (FY, Q1, Q2, Q3, Q4)
+	Frame string // XBRL frame identifier (e.g. CY2023Q3I)
+	FY    int    // Fiscal year
 }
 
 // CompanyFacts holds parsed SEC EDGAR companyfacts data for a single entity.

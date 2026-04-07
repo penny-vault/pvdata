@@ -32,6 +32,19 @@ const (
 )
 
 // Period represents a unique reporting period identified from CompanyFacts.
+//
+// ARFiledDate is the earliest Filed date observed across every concept that
+// reported on this period. Because ParseCompanyFacts only retains facts from
+// 10-K and 10-Q filings, ARFiledDate is effectively "earliest 10-K or 10-Q
+// filing date that reported on this period" -- not a guarantee that the
+// filing on that date was the original 10-K. In practice, for most companies
+// the earliest filing for a fiscal year-end period IS the original 10-K, and
+// for a quarter-end period IS the original 10-Q, so ARFiledDate corresponds
+// to the "as-reported" view the names suggests.
+//
+// MRFiledDate is the latest Filed date observed across every concept for
+// this period, i.e. the most recent restatement or amendment that touched
+// any fact in the period.
 type Period struct {
 	PeriodEnd   time.Time // End date of the fiscal period
 	FormType    string    // "10-K" or "10-Q"
@@ -50,6 +63,12 @@ type Period struct {
 //     recently used canonical end date)
 //   - ARFiledDate is the earliest filing date across the group
 //   - MRFiledDate is the latest filing date across the group
+//
+// Invariant: because ParseCompanyFacts drops every fact whose form is not
+// 10-K or 10-Q, ARFiledDate is effectively "earliest 10-K or 10-Q filing
+// date that reported on this period". A 10-K/A amendment or other form
+// cannot contribute to ARFiledDate (or MRFiledDate) because its facts never
+// enter the CompanyFacts in the first place.
 //
 // The returned slice is sorted by PeriodEnd ascending.
 func IdentifyPeriods(cf *CompanyFacts) []Period {

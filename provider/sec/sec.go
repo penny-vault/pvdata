@@ -188,6 +188,7 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 
 func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
 	processed := 0
+	processErrors := 0
 
 	err := DownloadCompanyFactsZip(ctx, client, func(cik int, jsonData []byte) error {
 		asset, ok := cikMap[cik]
@@ -206,7 +207,14 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 
 		cf, err := ParseCompanyFacts(jsonData)
 		if err != nil {
-			return err
+			// Count parse errors but return nil so the loop continues
+			// processing the rest of the archive. The framework's
+			// idempotent upserts mean partial success is acceptable.
+			processErrors++
+
+			log.Warn().Err(err).Int("cik", cik).Msg("error parsing companyfacts in backfill")
+
+			return nil
 		}
 
 		emitFundamentals(cf, asset, sub, time.Time{}, out, numObservations)
@@ -224,7 +232,17 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 		return err
 	}
 
-	log.Info().Int("total_processed", processed).Msg("backfill complete")
+	if processErrors > 0 {
+		log.Warn().
+			Int("process_errors", processErrors).
+			Int("total_processed", processed).
+			Msg("backfill completed with processing errors")
+	}
+
+	log.Info().
+		Int("total_processed", processed).
+		Int("process_errors", processErrors).
+		Msg("backfill complete")
 
 	return nil
 }
