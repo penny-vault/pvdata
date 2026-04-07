@@ -16,7 +16,9 @@
 package sec
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -296,6 +298,31 @@ var _ = Describe("Dimensions", func() {
 			Expect(obs["MRQ"]).To(Equal(0))
 			Expect(obs["ART"]).To(Equal(0))
 			Expect(obs["MRT"]).To(Equal(0))
+		})
+	})
+
+	// BuildFundamental is a long manual switch over fields["X"] keys. Without
+	// this guard, adding a new entry to FieldMappings without a corresponding
+	// clause in BuildFundamental would silently drop the field from emitted
+	// observations. Catch that at test time by static-analyzing the source.
+	Describe("BuildFundamental coverage", func() {
+		It("references every FieldMappings entry", func() {
+			src, err := os.ReadFile("dimensions.go")
+			Expect(err).NotTo(HaveOccurred())
+
+			srcStr := string(src)
+
+			var missing []string
+
+			for _, m := range FieldMappings {
+				pattern := fmt.Sprintf(`fields[%q]`, m.FieldName)
+				if !strings.Contains(srcStr, pattern) {
+					missing = append(missing, m.FieldName)
+				}
+			}
+
+			Expect(missing).To(BeEmpty(),
+				"FieldMappings entries not referenced in BuildFundamental: %v", missing)
 		})
 	})
 })
