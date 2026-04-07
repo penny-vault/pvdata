@@ -66,6 +66,96 @@ var _ = Describe("Dimensions", func() {
 					"MR filed date should be >= AR filed date")
 			}
 		})
+
+		Describe("ghost period deduplication", func() {
+			It("collapses periods with end dates 1 day apart that normalize to the same quarter", func() {
+				// Two 10-Q filings for "Q3 2018" with end dates 2018-09-29 and
+				// 2018-09-30. Both normalize to 2018-09-30 and should collapse
+				// into a single canonical period.
+				ghostCF := &CompanyFacts{
+					CIK:        1,
+					EntityName: "Ghost Co",
+					Facts: map[string][]Fact{
+						"Revenues": {
+							{
+								Val:   100,
+								Start: time.Date(2018, 7, 1, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC),
+								Form:  "10-Q",
+								FY:    2018,
+								FP:    "Q3",
+								Filed: time.Date(2018, 11, 1, 0, 0, 0, 0, time.UTC),
+								Accn:  "0000000000-00-000001",
+							},
+							{
+								Val:   105,
+								Start: time.Date(2018, 7, 1, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2018, 9, 30, 0, 0, 0, 0, time.UTC),
+								Form:  "10-Q",
+								FY:    2018,
+								FP:    "Q3",
+								Filed: time.Date(2018, 11, 15, 0, 0, 0, 0, time.UTC),
+								Accn:  "0000000000-00-000002",
+							},
+						},
+					},
+				}
+
+				periods := IdentifyPeriods(ghostCF)
+
+				Expect(periods).To(HaveLen(1),
+					"two ghost periods within the same quarter should collapse to one")
+
+				p := periods[0]
+				Expect(p.FormType).To(Equal("10-Q"))
+				// Canonical PeriodEnd is the latest raw end date in the group.
+				Expect(p.PeriodEnd).To(Equal(time.Date(2018, 9, 30, 0, 0, 0, 0, time.UTC)))
+				// AR filed date is the earliest across the group.
+				Expect(p.ARFiledDate).To(Equal(time.Date(2018, 11, 1, 0, 0, 0, 0, time.UTC)))
+				// MR filed date is the latest across the group.
+				Expect(p.MRFiledDate).To(Equal(time.Date(2018, 11, 15, 0, 0, 0, 0, time.UTC)))
+			})
+
+			It("keeps distinct calendar quarters as separate periods", func() {
+				// Q2 2018 (2018-06-30) and Q3 2018 (2018-09-30) normalize to
+				// different calendar quarter ends and must remain separate.
+				distinctCF := &CompanyFacts{
+					CIK:        1,
+					EntityName: "Distinct Co",
+					Facts: map[string][]Fact{
+						"Revenues": {
+							{
+								Val:   100,
+								Start: time.Date(2018, 4, 1, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2018, 6, 30, 0, 0, 0, 0, time.UTC),
+								Form:  "10-Q",
+								FY:    2018,
+								FP:    "Q2",
+								Filed: time.Date(2018, 8, 1, 0, 0, 0, 0, time.UTC),
+								Accn:  "0000000000-00-000003",
+							},
+							{
+								Val:   200,
+								Start: time.Date(2018, 7, 1, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2018, 9, 30, 0, 0, 0, 0, time.UTC),
+								Form:  "10-Q",
+								FY:    2018,
+								FP:    "Q3",
+								Filed: time.Date(2018, 11, 1, 0, 0, 0, 0, time.UTC),
+								Accn:  "0000000000-00-000004",
+							},
+						},
+					},
+				}
+
+				periods := IdentifyPeriods(distinctCF)
+
+				Expect(periods).To(HaveLen(2),
+					"two distinct calendar quarters should remain separate")
+				Expect(periods[0].PeriodEnd).To(Equal(time.Date(2018, 6, 30, 0, 0, 0, 0, time.UTC)))
+				Expect(periods[1].PeriodEnd).To(Equal(time.Date(2018, 9, 30, 0, 0, 0, 0, time.UTC)))
+			})
+		})
 	})
 
 	Describe("NormalizeEventDate", func() {

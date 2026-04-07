@@ -41,19 +41,32 @@ type Period struct {
 
 // IdentifyPeriods scans all facts in a CompanyFacts to find unique reporting periods
 // and their earliest/latest filing dates.
+//
+// SEC XBRL filings frequently contain "ghost periods": the same logical fiscal
+// quarter is reported with subtly different end dates across filings (e.g.
+// 2018-09-29 in one 10-Q and 2018-09-30 in a later amendment). To collapse
+// these together, periods are deduplicated by (NormalizeEventDate, FormType):
+//   - PeriodEnd is the latest raw end date in the group (the company's most
+//     recently used canonical end date)
+//   - ARFiledDate is the earliest filing date across the group
+//   - MRFiledDate is the latest filing date across the group
+//
+// The returned slice is sorted by PeriodEnd ascending.
 func IdentifyPeriods(cf *CompanyFacts) []Period {
 	type periodKey struct {
 		end  time.Time
 		form string
 	}
 
-	periodMap := make(map[periodKey]*Period)
+	// First pass: group raw facts by exact (end, form) pair so we collect
+	// AR/MR filed dates per raw period end.
+	rawPeriods := make(map[periodKey]*Period)
 
 	for _, facts := range cf.Facts {
 		for _, f := range facts {
 			key := periodKey{end: f.End, form: f.Form}
 
-			p, exists := periodMap[key]
+			p, exists := rawPeriods[key]
 			if !exists {
 				p = &Period{
 					PeriodEnd:   f.End,
@@ -61,21 +74,59 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 					ARFiledDate: f.Filed,
 					MRFiledDate: f.Filed,
 				}
-				periodMap[key] = p
-			} else {
-				if f.Filed.Before(p.ARFiledDate) {
-					p.ARFiledDate = f.Filed
-				}
+				rawPeriods[key] = p
 
-				if f.Filed.After(p.MRFiledDate) {
-					p.MRFiledDate = f.Filed
-				}
+				continue
+			}
+
+			if f.Filed.Before(p.ARFiledDate) {
+				p.ARFiledDate = f.Filed
+			}
+
+			if f.Filed.After(p.MRFiledDate) {
+				p.MRFiledDate = f.Filed
 			}
 		}
 	}
 
-	periods := make([]Period, 0, len(periodMap))
-	for _, p := range periodMap {
+	// Second pass: collapse ghost periods by (NormalizeEventDate, FormType).
+	// NormalizeEventDate snaps mid-quarter ends to the nearest calendar quarter
+	// end (and annual ends to 12/31), so 2018-09-29 and 2018-09-30 fall into
+	// the same bucket but 2018-06-30 and 2018-09-30 do not.
+	dedupedPeriods := make(map[periodKey]*Period)
+
+	for _, p := range rawPeriods {
+		key := periodKey{
+			end:  NormalizeEventDate(p.PeriodEnd, p.FormType),
+			form: p.FormType,
+		}
+
+		canonical, exists := dedupedPeriods[key]
+		if !exists {
+			// Copy so we don't mutate the rawPeriods entry.
+			cp := *p
+			dedupedPeriods[key] = &cp
+
+			continue
+		}
+
+		// Use the latest raw period end as canonical PeriodEnd.
+		if p.PeriodEnd.After(canonical.PeriodEnd) {
+			canonical.PeriodEnd = p.PeriodEnd
+		}
+
+		// Aggregate filing date bounds across the group.
+		if p.ARFiledDate.Before(canonical.ARFiledDate) {
+			canonical.ARFiledDate = p.ARFiledDate
+		}
+
+		if p.MRFiledDate.After(canonical.MRFiledDate) {
+			canonical.MRFiledDate = p.MRFiledDate
+		}
+	}
+
+	periods := make([]Period, 0, len(dedupedPeriods))
+	for _, p := range dedupedPeriods {
 		periods = append(periods, *p)
 	}
 
