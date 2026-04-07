@@ -110,8 +110,8 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	limiter := rate.NewLimiter(rate.Limit(reqPerSec), 1)
 	client := NewSECClient(userAgent, limiter)
 
-	// Load CIK -> asset map from database
-	cikMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
+	// Load CIK -> asset map from database (primary lookup path)
+	dbCIKMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading CIK map from database")
 
@@ -120,29 +120,88 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		return
 	}
 
-	log.Info().Int("known_ciks", len(cikMap)).Msg("loaded CIK map from database")
+	// Fetch SEC's company_tickers.json as a fallback for CIKs not in the
+	// database. This file is fetched fresh on each run so we always pick up
+	// SEC's latest mappings (the file changes daily).
+	secTickers, err := FetchCompanyTickers(ctx, client)
+	if err != nil {
+		// Don't fail the whole run if the fallback fetch fails -- the DB map
+		// may still cover the universe we care about. Log and proceed.
+		log.Warn().Err(err).Msg("error fetching SEC company_tickers.json; proceeding with DB CIK map only")
+
+		secTickers = nil
+	}
+
+	cikMap := make(map[int]AssetInfo, len(dbCIKMap)+len(secTickers))
+	for cik, info := range dbCIKMap {
+		cikMap[cik] = info
+	}
+
+	fromSEC := 0
+
+	for cik, entry := range secTickers {
+		if _, ok := cikMap[cik]; ok {
+			continue
+		}
+
+		// CIK not in DB: add an entry with the SEC ticker but no FIGI.
+		// SaveDB drops fundamentals with empty CompositeFigi, so these
+		// observations will not be persisted -- emitFundamentals tracks
+		// the count and reports it in the run summary so users know
+		// there's a coverage gap.
+		cikMap[cik] = AssetInfo{
+			Ticker:        entry.Ticker,
+			CompositeFigi: "",
+			CIK:           cik,
+		}
+
+		fromSEC++
+	}
+
+	log.Info().
+		Int("total_ciks", len(cikMap)).
+		Int("from_db", len(dbCIKMap)).
+		Int("from_sec", fromSEC).
+		Msg("built combined CIK map")
+
+	skippedMissingFIGI := 0
 
 	isBackfill := sub.LastObsDate.IsZero()
 	if isBackfill {
-		if err := runBackfill(ctx, client, cikMap, sub, out, &numObservations); err != nil {
+		if err := runBackfill(ctx, client, cikMap, sub, out, &numObservations, &skippedMissingFIGI); err != nil {
 			runSummary.Status = data.RunFailed
 			return
 		}
 	} else {
-		if err := runIncremental(ctx, client, cikMap, sub, sub.LastObsDate, out, &numObservations); err != nil {
+		if err := runIncremental(ctx, client, cikMap, sub, sub.LastObsDate, out, &numObservations, &skippedMissingFIGI); err != nil {
 			runSummary.Status = data.RunFailed
 			return
 		}
 	}
+
+	if skippedMissingFIGI > 0 {
+		log.Warn().
+			Int("skipped_ciks_missing_figi", skippedMissingFIGI).
+			Msg("CIKs were resolved via SEC company_tickers.json but skipped because no composite FIGI is known; run OpenFIGI lookup to close coverage gap")
+	}
 }
 
-func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations *int) error {
+func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
 	processed := 0
 
 	err := DownloadCompanyFactsZip(ctx, client, func(cik int, jsonData []byte) error {
 		asset, ok := cikMap[cik]
 		if !ok {
 			return nil // Unknown company, skip
+		}
+
+		// Skip CIKs without a composite FIGI: SaveDB drops these records,
+		// so processing them would only waste work. Track the count so
+		// users see how big the coverage gap is.
+		if asset.CompositeFigi == "" {
+			*skippedMissingFIGI++
+
+			return nil
 		}
 
 		cf, err := ParseCompanyFacts(jsonData)
@@ -192,7 +251,7 @@ func fetchEDGARFeed(ctx context.Context, client *resty.Client, start int) ([]Fil
 	return filings, nil
 }
 
-func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) error {
+func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
 	// Paginate through the EDGAR feed, collecting unique CIKs filed on/after
 	// since. Stop when we hit a page containing entries older than since, or
 	// when we exhaust the hard page cap.
@@ -259,6 +318,14 @@ pageLoop:
 
 	for _, cik := range ciksToFetch {
 		asset := cikMap[cik]
+
+		// Skip CIKs without a composite FIGI: SaveDB drops these records,
+		// so fetching companyfacts would only waste an SEC API call.
+		if asset.CompositeFigi == "" {
+			*skippedMissingFIGI++
+
+			continue
+		}
 
 		cf, err := FetchCompanyFacts(ctx, client, cik)
 		if err != nil {

@@ -18,7 +18,9 @@ package sec
 import (
 	"context"
 	"fmt"
+	"net/http"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
@@ -64,6 +66,30 @@ func ParseCompanyTickers(jsonData []byte) (map[int]CIKEntry, error) {
 // FormatCIK formats a CIK integer as the zero-padded string used in SEC URLs.
 func FormatCIK(cik int) string {
 	return fmt.Sprintf("CIK%010d", cik)
+}
+
+// FetchCompanyTickers fetches the SEC's company_tickers.json file and parses
+// it into a CIK -> CIKEntry map. The file is ~10MB and is published by SEC at
+// companyTickersURL; SEC updates it daily so callers should not cache the
+// response between runs.
+func FetchCompanyTickers(ctx context.Context, client *resty.Client) (map[int]CIKEntry, error) {
+	resp, err := client.R().SetContext(ctx).Get(companyTickersURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetching SEC company_tickers.json: %w", err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("SEC returned status %d for company_tickers.json", resp.StatusCode())
+	}
+
+	entries, err := ParseCompanyTickers(resp.Body())
+	if err != nil {
+		return nil, fmt.Errorf("parsing SEC company_tickers.json: %w", err)
+	}
+
+	log.Info().Int("entries", len(entries)).Msg("fetched SEC company_tickers.json")
+
+	return entries, nil
 }
 
 // LoadCIKMapFromDB loads a CIK -> AssetInfo map from the assets in the database.
