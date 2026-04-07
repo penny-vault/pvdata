@@ -17,6 +17,8 @@ package sec
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -28,6 +30,10 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 )
+
+// edgarFeedMaxPages caps the number of EDGAR feed pages fetched in a single
+// incremental run. At edgarFeedPageSize=100 this allows up to 5,000 filings.
+const edgarFeedMaxPages = 50
 
 func init() {
 	provider.Register("sec", &SEC{})
@@ -144,7 +150,7 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			return err
 		}
 
-		emitFundamentals(cf, asset, sub, out, numObservations)
+		emitFundamentals(cf, asset, sub, time.Time{}, out, numObservations)
 
 		processed++
 		if processed%1000 == 0 {
@@ -164,43 +170,103 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 	return nil
 }
 
-func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) error {
-	// Fetch recent filings from EDGAR feed
-	resp, err := client.R().SetContext(ctx).Get(edgarFeedURL)
-	if err != nil {
-		log.Error().Err(err).Msg("error fetching EDGAR filing feed")
+// fetchEDGARFeed fetches a single page of the EDGAR ATOM filing feed starting
+// at the given offset. It returns the parsed filing entries for that page.
+func fetchEDGARFeed(ctx context.Context, client *resty.Client, start int) ([]FilingEntry, error) {
+	url := fmt.Sprintf(edgarFeedURLFormat, start)
 
-		return err
+	resp, err := client.R().SetContext(ctx).Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetching EDGAR feed page (start=%d): %w", start, err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("SEC returned status %d for EDGAR feed page (start=%d)", resp.StatusCode(), start)
 	}
 
 	filings, err := ParseFilingFeed(resp.Body())
 	if err != nil {
-		log.Error().Err(err).Msg("error parsing EDGAR filing feed")
-
-		return err
+		return nil, fmt.Errorf("parsing EDGAR feed page (start=%d): %w", start, err)
 	}
 
-	// Deduplicate CIKs and filter to known assets
+	return filings, nil
+}
+
+func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) error {
+	// Paginate through the EDGAR feed, collecting unique CIKs filed on/after
+	// since. Stop when we hit a page containing entries older than since, or
+	// when we exhaust the hard page cap.
 	seen := make(map[int]bool)
-	for _, filing := range filings {
-		if filing.Filed.Before(since) || seen[filing.CIK] {
-			continue
-		}
+	hitLimit := true
 
-		seen[filing.CIK] = true
+	var ciksToFetch []int
 
-		asset, ok := cikMap[filing.CIK]
-		if !ok {
-			continue
-		}
+pageLoop:
+	for page := 0; page < edgarFeedMaxPages; page++ {
+		start := page * edgarFeedPageSize
 
-		cf, err := FetchCompanyFacts(ctx, client, filing.CIK)
+		filings, err := fetchEDGARFeed(ctx, client, start)
 		if err != nil {
-			log.Warn().Err(err).Int("cik", filing.CIK).Msg("error fetching companyfacts")
+			log.Error().Err(err).Int("start", start).Msg("error fetching EDGAR filing feed page")
+
+			return err
+		}
+
+		if len(filings) == 0 {
+			hitLimit = false
+
+			break
+		}
+
+		reachedCutoff := false
+
+		for _, filing := range filings {
+			if filing.Filed.Before(since) {
+				// Once we see a filing older than since we've gone past the
+				// cutoff. Finish processing this page (in case ordering isn't
+				// strict) and stop paginating.
+				reachedCutoff = true
+				continue
+			}
+
+			if seen[filing.CIK] {
+				continue
+			}
+
+			seen[filing.CIK] = true
+
+			if _, ok := cikMap[filing.CIK]; !ok {
+				continue
+			}
+
+			ciksToFetch = append(ciksToFetch, filing.CIK)
+		}
+
+		if reachedCutoff {
+			hitLimit = false
+
+			break pageLoop
+		}
+	}
+
+	if hitLimit {
+		log.Warn().
+			Int("max_pages", edgarFeedMaxPages).
+			Int("page_size", edgarFeedPageSize).
+			Time("since", since).
+			Msg("EDGAR feed pagination hit hard page limit; some filings may have been missed")
+	}
+
+	for _, cik := range ciksToFetch {
+		asset := cikMap[cik]
+
+		cf, err := FetchCompanyFacts(ctx, client, cik)
+		if err != nil {
+			log.Warn().Err(err).Int("cik", cik).Msg("error fetching companyfacts")
 			continue
 		}
 
-		emitFundamentals(cf, asset, sub, out, numObservations)
+		emitFundamentals(cf, asset, sub, since, out, numObservations)
 	}
 
 	return nil
@@ -208,10 +274,18 @@ func runIncremental(ctx context.Context, client *resty.Client, cikMap map[int]As
 
 // emitFundamentals processes a CompanyFacts into data.Fundamental observations
 // for all 6 dimensions and sends them to the output channel.
-func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations *int) {
+//
+// The since parameter limits emission to periods filed on or after that time.
+// Pass time.Time{} (zero value) to emit every period without filtering.
+// MRFiledDate is used for the comparison so that restatements filed after
+// since are re-emitted even if the period itself is older.
+func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) {
 	periods := IdentifyPeriods(cf)
 
-	// Collect quarterly periods for TTM computation, keyed by normalized event date
+	// Collect quarterly periods for TTM computation, keyed by normalized event date.
+	// All quarters are kept (even those filtered out below) so TTM windows can
+	// still find their constituent quarters; the since check is reapplied per
+	// window when emitting TTM observations.
 	type quarterData struct {
 		period   Period
 		arFields map[string]float64
@@ -228,9 +302,18 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// MR: resolve using all facts including restatements
 		mrFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.MRFiledDate)
 
+		// Track all quarters regardless of since so TTM windows are complete.
 		if p.FormType == "10-Q" {
 			quarters = append(quarters, quarterData{period: p, arFields: arFields, mrFields: mrFields})
+		}
 
+		// Skip emitting per-period observations for periods filed before since.
+		// MRFiledDate is used so that restatements filed after since are re-emitted.
+		if !since.IsZero() && p.MRFiledDate.Before(since) {
+			continue
+		}
+
+		if p.FormType == "10-Q" {
 			// ARQ
 			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARQ",
 				eventDate, p.ARFiledDate, p.PeriodEnd)
@@ -304,6 +387,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				Msg("skipping TTM computation: 4-quarter span outside expected range")
 
 			continue
+		}
+
+		// Skip TTM windows where none of the 4 constituent quarters were
+		// filed/restated on or after since. If any constituent quarter was
+		// touched after since the TTM might have changed, so we re-emit.
+		if !since.IsZero() {
+			anyRecent := false
+
+			for j := 0; j < 4; j++ {
+				if !quarters[i-3+j].period.MRFiledDate.Before(since) {
+					anyRecent = true
+					break
+				}
+			}
+
+			if !anyRecent {
+				continue
+			}
 		}
 
 		// ART

@@ -37,7 +37,11 @@ const (
 	companyFactsURL    = "https://data.sec.gov/api/xbrl/companyfacts/"
 	companyFactsZipURL = "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
 	companyTickersURL  = "https://www.sec.gov/files/company_tickers.json"
-	edgarFeedURL       = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K%2C10-Q&dateb=&owner=include&count=100&search_text=&start=0&output=atom"
+	// edgarFeedPageSize is the number of entries returned per EDGAR feed page.
+	edgarFeedPageSize = 100
+	// edgarFeedURLFormat is a format string for the EDGAR ATOM feed; the %d
+	// placeholder is the start offset used for pagination.
+	edgarFeedURLFormat = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K%%2C10-Q&dateb=&owner=include&count=100&search_text=&start=%d&output=atom"
 )
 
 // Fact represents a single XBRL fact value from an SEC filing.

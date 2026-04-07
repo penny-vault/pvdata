@@ -86,7 +86,7 @@ var _ = Describe("Integration", func() {
 
 			go func() {
 				numObs := 0
-				emitFundamentals(cf, asset, sub, observations, &numObs)
+				emitFundamentals(cf, asset, sub, time.Time{}, observations, &numObs)
 				close(observations)
 			}()
 

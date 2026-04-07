@@ -238,6 +238,66 @@ var _ = Describe("Dimensions", func() {
 			Expect(obs["MRT"]).To(Equal(1))
 		})
 	})
+
+	Describe("emitFundamentals since filter", func() {
+		// Build 5 consecutive quarters so a TTM window can be computed for the
+		// last quarter. Each quarter is filed 30 days after its period end.
+		var (
+			cf    *CompanyFacts
+			asset AssetInfo
+		)
+
+		BeforeEach(func() {
+			cf = buildSyntheticQuarterlyFacts([]time.Time{
+				time.Date(2020, 3, 31, 0, 0, 0, 0, time.UTC),  // filed 2020-04-30
+				time.Date(2020, 6, 30, 0, 0, 0, 0, time.UTC),  // filed 2020-07-30
+				time.Date(2020, 9, 30, 0, 0, 0, 0, time.UTC),  // filed 2020-10-30
+				time.Date(2020, 12, 31, 0, 0, 0, 0, time.UTC), // filed 2021-01-30
+				time.Date(2021, 3, 31, 0, 0, 0, 0, time.UTC),  // filed 2021-04-30
+			})
+			asset = AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+		})
+
+		It("emits all periods when since is zero", func() {
+			obs := collectObservationsSince(cf, asset, time.Time{})
+
+			// 5 quarters -> 5 ARQ + 5 MRQ. Two TTM windows: one ending at
+			// 2020-12-31 (4 quarters of 2020) and one ending at 2021-03-31.
+			Expect(obs["ARQ"]).To(Equal(5))
+			Expect(obs["MRQ"]).To(Equal(5))
+			Expect(obs["ART"]).To(Equal(2))
+			Expect(obs["MRT"]).To(Equal(2))
+		})
+
+		It("skips periods filed before since", func() {
+			// since = 2021-01-01 -> only the 2020-12-31 (filed 2021-01-30)
+			// and 2021-03-31 (filed 2021-04-30) periods should be emitted.
+			since := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
+			obs := collectObservationsSince(cf, asset, since)
+
+			Expect(obs["ARQ"]).To(Equal(2))
+			Expect(obs["MRQ"]).To(Equal(2))
+
+			// Both TTM windows touch a quarter filed on/after since (the
+			// 2020-12-31 window includes 2020-12-31 itself; the 2021-03-31
+			// window includes 2020-12-31 and 2021-03-31), so both TTMs are
+			// re-emitted.
+			Expect(obs["ART"]).To(Equal(2))
+			Expect(obs["MRT"]).To(Equal(2))
+		})
+
+		It("skips TTM windows whose constituent quarters are all older than since", func() {
+			// since = 2021-06-01 -> nothing was filed on/after this date so
+			// nothing should be emitted.
+			since := time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC)
+			obs := collectObservationsSince(cf, asset, since)
+
+			Expect(obs["ARQ"]).To(Equal(0))
+			Expect(obs["MRQ"]).To(Equal(0))
+			Expect(obs["ART"]).To(Equal(0))
+			Expect(obs["MRT"]).To(Equal(0))
+		})
+	})
 })
 
 // buildSyntheticQuarterlyFacts constructs a minimal CompanyFacts containing one
@@ -282,6 +342,12 @@ func buildSyntheticQuarterlyFacts(periodEnds []time.Time) *CompanyFacts {
 
 // collectObservations runs emitFundamentals and returns a count per dimension.
 func collectObservations(cf *CompanyFacts, asset AssetInfo) map[string]int {
+	return collectObservationsSince(cf, asset, time.Time{})
+}
+
+// collectObservationsSince runs emitFundamentals with the given since cutoff
+// and returns a count per dimension.
+func collectObservationsSince(cf *CompanyFacts, asset AssetInfo, since time.Time) map[string]int {
 	out := make(chan *data.Observation, 256)
 	sub := &library.Subscription{Name: "test"}
 
@@ -296,7 +362,7 @@ func collectObservations(cf *CompanyFacts, asset AssetInfo) map[string]int {
 	}()
 
 	numObs := 0
-	emitFundamentals(cf, asset, sub, out, &numObs)
+	emitFundamentals(cf, asset, sub, since, out, &numObs)
 	close(out)
 	<-done
 
