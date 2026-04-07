@@ -219,25 +219,29 @@ func absDuration(d time.Duration) time.Duration {
 // ResolveFieldsForFiling resolves all fields using only facts filed on or before
 // a specific date. This allows producing AR (earliest filed) vs MR (latest filed)
 // views of the same period.
+//
+// Each concept's facts slice is pre-sorted by Filed ascending in
+// ParseCompanyFacts, so this uses sort.Search to find the prefix of facts
+// available at filedDate and re-uses the underlying array via slicing rather
+// than copying. The filtered CompanyFacts is read-only by ResolveAllFields, so
+// sharing the backing array is safe.
 func ResolveFieldsForFiling(cf *CompanyFacts, periodEnd time.Time, formType string, filedDate time.Time) map[string]float64 {
-	// Build a filtered CompanyFacts containing only facts filed on or before filedDate
 	filtered := &CompanyFacts{
 		CIK:        cf.CIK,
 		EntityName: cf.EntityName,
-		Facts:      make(map[string][]Fact),
+		Facts:      make(map[string][]Fact, len(cf.Facts)),
 	}
 
 	for concept, facts := range cf.Facts {
-		var kept []Fact
+		// Binary search for the index of the first fact whose Filed is
+		// strictly after filedDate; everything before that index was filed
+		// on or before filedDate.
+		idx := sort.Search(len(facts), func(i int) bool {
+			return facts[i].Filed.After(filedDate)
+		})
 
-		for _, f := range facts {
-			if !f.Filed.After(filedDate) {
-				kept = append(kept, f)
-			}
-		}
-
-		if len(kept) > 0 {
-			filtered.Facts[concept] = kept
+		if idx > 0 {
+			filtered.Facts[concept] = facts[:idx]
 		}
 	}
 
@@ -297,7 +301,14 @@ func ComputeTTM(quarters []map[string]float64) map[string]float64 {
 }
 
 // BuildFundamental converts a resolved field map into a data.Fundamental struct.
-func BuildFundamental(fields map[string]float64, ticker, compositeFigi, dimension string, eventDate, dateKey, reportPeriod time.Time) *data.Fundamental {
+//
+// lastUpdated is the timestamp the caller wants to record as the data's
+// freshness marker. SEC fundamentals use the underlying filing date so re-runs
+// of the provider produce stable LastUpdated values for the same source data:
+//   - AR observations pass the AR (earliest) filing date
+//   - MR observations pass the MR (latest) filing date
+//   - TTM observations pass the latest MR filing date among the constituent quarters
+func BuildFundamental(fields map[string]float64, ticker, compositeFigi, dimension string, eventDate, dateKey, reportPeriod, lastUpdated time.Time) *data.Fundamental {
 	f := &data.Fundamental{
 		EventDate:     eventDate,
 		Ticker:        ticker,
@@ -305,7 +316,7 @@ func BuildFundamental(fields map[string]float64, ticker, compositeFigi, dimensio
 		Dimension:     dimension,
 		DateKey:       dateKey,
 		ReportPeriod:  reportPeriod,
-		LastUpdated:   time.Now().UTC(),
+		LastUpdated:   lastUpdated,
 	}
 
 	// Map resolved values to Fundamental fields

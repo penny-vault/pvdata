@@ -366,8 +366,18 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		// AR: resolve using only facts available at the earliest filing date
 		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
-		// MR: resolve using all facts including restatements
-		mrFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.MRFiledDate)
+
+		// MR: resolve using all facts including restatements. When AR and MR
+		// filing dates are the same (no restatements -- the common case), the
+		// resolved field maps are identical, so reuse the AR map. The maps are
+		// treated as read-only after this point so sharing the reference is
+		// safe.
+		var mrFields map[string]float64
+		if p.ARFiledDate.Equal(p.MRFiledDate) {
+			mrFields = arFields
+		} else {
+			mrFields = ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.MRFiledDate)
+		}
 
 		// Track all quarters regardless of since so TTM windows are complete.
 		if p.FormType == "10-Q" {
@@ -383,7 +393,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if p.FormType == "10-Q" {
 			// ARQ
 			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARQ",
-				eventDate, p.ARFiledDate, p.PeriodEnd)
+				eventDate, p.ARFiledDate, p.PeriodEnd, p.ARFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  eventDate,
@@ -395,7 +405,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 			// MRQ
 			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRQ",
-				eventDate, p.PeriodEnd, p.PeriodEnd)
+				eventDate, p.PeriodEnd, p.PeriodEnd, p.MRFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  eventDate,
@@ -409,7 +419,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if p.FormType == "10-K" {
 			// ARY
 			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARY",
-				eventDate, p.ARFiledDate, p.PeriodEnd)
+				eventDate, p.ARFiledDate, p.PeriodEnd, p.ARFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  eventDate,
@@ -421,7 +431,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 			// MRY
 			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRY",
-				eventDate, p.PeriodEnd, p.PeriodEnd)
+				eventDate, p.PeriodEnd, p.PeriodEnd, p.MRFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  eventDate,
@@ -474,6 +484,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
+		// The TTM "lastUpdated" is the most recent filing date among the
+		// constituent quarters: any restatement to any quarter in the
+		// window invalidates the prior TTM, so the latest filing date is
+		// the freshness marker the data quality checks should compare
+		// against.
+		latestARFiled := quarters[i-3].period.ARFiledDate
+		latestMRFiled := quarters[i-3].period.MRFiledDate
+
+		for j := 1; j < 4; j++ {
+			if quarters[i-3+j].period.ARFiledDate.After(latestARFiled) {
+				latestARFiled = quarters[i-3+j].period.ARFiledDate
+			}
+
+			if quarters[i-3+j].period.MRFiledDate.After(latestMRFiled) {
+				latestMRFiled = quarters[i-3+j].period.MRFiledDate
+			}
+		}
+
 		// ART
 		arQSlice := make([]map[string]float64, 4)
 		for j := 0; j < 4; j++ {
@@ -482,7 +510,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		if ttm := ComputeTTM(arQSlice); ttm != nil {
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "ART",
-				eventDate, q.period.ARFiledDate, q.period.PeriodEnd)
+				eventDate, q.period.ARFiledDate, q.period.PeriodEnd, latestARFiled)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  eventDate,
@@ -501,7 +529,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		if ttm := ComputeTTM(mrQSlice); ttm != nil {
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "MRT",
-				eventDate, q.period.PeriodEnd, q.period.PeriodEnd)
+				eventDate, q.period.PeriodEnd, q.period.PeriodEnd, latestMRFiled)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  eventDate,

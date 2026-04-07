@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -168,6 +169,19 @@ func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 		})
 
 		if len(facts) > 0 {
+			// Sort facts by Filed ascending so ResolveFieldsForFiling can use
+			// binary search to slice the prefix of facts available at any
+			// given filing date. This is a one-time cost per concept that
+			// avoids O(N) scans on every (period, filing-date) lookup.
+			//
+			// Use a stable sort so facts filed on the same day preserve their
+			// JSON parse order; this keeps downstream resolution deterministic
+			// when multiple facts share a filing date (e.g. comparative
+			// balance-sheet entries reported in the same 10-K).
+			sort.SliceStable(facts, func(i, j int) bool {
+				return facts[i].Filed.Before(facts[j].Filed)
+			})
+
 			cf.Facts[conceptName.String()] = facts
 		}
 

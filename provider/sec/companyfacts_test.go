@@ -60,11 +60,15 @@ var _ = Describe("CompanyFacts Parser", func() {
 		assets := cf.Facts["Assets"]
 		Expect(assets).NotTo(BeEmpty())
 
-		// Find the 10-K FY2024 entry for Assets
+		// Find the specific Assets fact identified by accession number. The
+		// fact slice is sorted by Filed in ParseCompanyFacts, so we cannot
+		// rely on the parse order to disambiguate the (FY,FP,Form) triple
+		// when multiple period ends are reported under the same triple.
 		var found *Fact
 
 		for i := range assets {
-			if assets[i].FY == 2024 && assets[i].FP == "FY" && assets[i].Form == "10-K" {
+			if assets[i].Accn == "0000320193-24-000123" &&
+				assets[i].End.Equal(time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC)) {
 				found = &assets[i]
 
 				break
@@ -72,11 +76,13 @@ var _ = Describe("CompanyFacts Parser", func() {
 		}
 
 		Expect(found).NotTo(BeNil())
+		Expect(found.FY).To(Equal(2024))
+		Expect(found.FP).To(Equal("FY"))
+		Expect(found.Form).To(Equal("10-K"))
 		Expect(found.Val).To(Equal(352583000000.0))
 		Expect(found.End).To(Equal(time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC)))
 		Expect(found.Start.IsZero()).To(BeTrue(), "instant facts should have zero Start")
 		Expect(found.Filed).To(Equal(time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)))
-		Expect(found.Accn).To(Equal("0000320193-24-000123"))
 		Expect(found.Frame).To(Equal("CY2023Q3I"))
 	})
 
@@ -84,11 +90,15 @@ var _ = Describe("CompanyFacts Parser", func() {
 		netIncome := cf.Facts["NetIncomeLoss"]
 		Expect(netIncome).NotTo(BeEmpty())
 
-		// Find the 10-Q Q1 FY2024 entry
+		// Find the NetIncomeLoss fact for the period ending 2022-12-31. The
+		// fact slice is sorted by Filed in ParseCompanyFacts, so identify
+		// the fact by its (FY,FP,Form,End) tuple rather than relying on
+		// parse order.
 		var found *Fact
 
 		for i := range netIncome {
-			if netIncome[i].FY == 2024 && netIncome[i].FP == "Q1" && netIncome[i].Form == "10-Q" {
+			if netIncome[i].FY == 2024 && netIncome[i].FP == "Q1" && netIncome[i].Form == "10-Q" &&
+				netIncome[i].End.Equal(time.Date(2022, 12, 31, 0, 0, 0, 0, time.UTC)) {
 				found = &netIncome[i]
 
 				break
