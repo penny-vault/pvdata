@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/provider"
 )
 
@@ -43,5 +44,7 @@ var _ = Describe("pvindex Provider", func() {
 		p := provider.Map["pvindex"]
 		ds := p.Datasets()["US Tradable Universe"]
 		Expect(ds.DataTypes).To(HaveLen(2))
+		typeNames := []string{ds.DataTypes[0].Name, ds.DataTypes[1].Name}
+		Expect(typeNames).To(ConsistOf(data.IndexSnapshotKey, data.IndexChangelogKey))
 	})
 })
