@@ -99,7 +99,9 @@ func DiffSnapshots(current, previous map[string]IndexMember) (added, removed, we
 
 // DiffOptions configures DiffSnapshotsWithThreshold weight-change detection.
 // A weight is considered changed when |delta| >= max(AbsoluteThreshold, prev.Weight * RelativeThreshold).
-// If RelativeThreshold is 0, only the absolute threshold applies.
+// If RelativeThreshold is 0, only the absolute threshold applies. If both thresholds are
+// zero (the struct zero value), every non-zero weight delta is reported as a change —
+// callers should set at least one threshold explicitly.
 type DiffOptions struct {
 	AbsoluteThreshold float64 // absolute weight delta required (e.g., 0.01)
 	RelativeThreshold float64 // fraction of previous weight (e.g., 0.25 = 25%)
@@ -127,14 +129,14 @@ func DiffSnapshotsWithThreshold(current, previous map[string]IndexMember, opts D
 
 		threshold := opts.AbsoluteThreshold
 
-		relTh := prev.Weight * opts.RelativeThreshold
-		if relTh > threshold {
-			threshold = relTh
+		relThreshold := prev.Weight * opts.RelativeThreshold
+		if relThreshold > threshold {
+			threshold = relThreshold
 		}
 
-		if delta >= threshold-1e-12 && delta > 0 {
-			// Note: we keep the legacy >= behavior of DiffSnapshots; the -1e-12 avoids
-			// strict floating-point edge cases when threshold == 0 + delta == 0.
+		// Skip unchanged weights; the 1e-9 epsilon tolerates floating-point
+		// representation noise at the threshold boundary, matching DiffSnapshots.
+		if delta > 0 && delta >= threshold-1e-9 {
 			weightChanged[ticker] = member
 		}
 	}

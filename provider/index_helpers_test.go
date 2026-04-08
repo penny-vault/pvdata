@@ -262,6 +262,18 @@ var _ = Describe("diffSnapshotsWithThreshold", func() {
 		Expect(removes).To(HaveKey("OLD1"))
 	})
 
+	It("detects weight change exactly at the absolute threshold", func() {
+		// delta = 0.01 exactly; threshold = 0.01. Matches legacy DiffSnapshots boundary behavior.
+		current := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.06},
+		}
+		previous := map[string]IndexMember{
+			"AAPL": {CompositeFigi: "BBG000B9XRY4", Weight: 0.05},
+		}
+		_, _, weightChanges := DiffSnapshotsWithThreshold(current, previous, DiffOptions{AbsoluteThreshold: 0.01})
+		Expect(weightChanges).To(HaveKey("AAPL"))
+	})
+
 	It("treats prev.Weight=0 as falling back to absolute threshold", func() {
 		// prev weight is 0, so prev*rel = 0. max(abs, 0) = abs. delta must clear absolute.
 		current := map[string]IndexMember{
