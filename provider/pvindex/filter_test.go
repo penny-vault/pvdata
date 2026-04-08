@@ -216,3 +216,33 @@ var _ = Describe("assignCapWeights", func() {
 		Expect(assignCapWeights(caps)).To(BeEmpty())
 	})
 })
+
+var _ = Describe("percentileInt64", func() {
+	It("computes 25th percentile of a known distribution", func() {
+		vals := []int64{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
+		// 25th percentile of 10 values: rank = ceil(10 * 0.25) = ceil(2.5) = 3 -> sorted[2] = 30
+		Expect(percentileInt64(vals, 0.25)).To(Equal(int64(30)))
+	})
+
+	It("computes 80th percentile of a known distribution", func() {
+		vals := []int64{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
+		// 80th percentile of 10 values: rank = ceil(10 * 0.80) = ceil(8.0) = 8 -> sorted[7] = 80
+		Expect(percentileInt64(vals, 0.80)).To(Equal(int64(80)))
+	})
+
+	It("returns zero for empty input", func() {
+		Expect(percentileInt64(nil, 0.5)).To(Equal(int64(0)))
+		Expect(percentileInt64([]int64{}, 0.5)).To(Equal(int64(0)))
+	})
+
+	It("returns the only element for single-element input", func() {
+		Expect(percentileInt64([]int64{42}, 0.25)).To(Equal(int64(42)))
+		Expect(percentileInt64([]int64{42}, 0.80)).To(Equal(int64(42)))
+	})
+
+	It("does not modify the input slice", func() {
+		vals := []int64{50, 10, 30, 20, 40}
+		_ = percentileInt64(vals, 0.5)
+		Expect(vals).To(Equal([]int64{50, 10, 30, 20, 40}))
+	})
+})

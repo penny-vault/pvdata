@@ -15,6 +15,8 @@
 package pvindex
 
 import (
+	"math"
+	"sort"
 	"strings"
 
 	"github.com/penny-vault/pvdata/data"
@@ -157,4 +159,32 @@ func assignCapWeights(caps map[string]int64) map[string]float64 {
 	}
 
 	return weights
+}
+
+// percentileInt64 returns the value at the given percentile (0..1) of the input slice.
+// Uses the "nearest rank" method: for n values, the rank index = ceil(n*p), clamped
+// to [1, n]. The returned value is sorted[rank-1]. Does not modify the input slice.
+// Returns 0 for empty input.
+func percentileInt64(values []int64, p float64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+
+	if len(values) == 1 {
+		return values[0]
+	}
+
+	sorted := make([]int64, len(values))
+	copy(sorted, values)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	rank := int(math.Ceil(float64(len(sorted)) * p))
+	if rank < 1 {
+		rank = 1
+	}
+	if rank > len(sorted) {
+		rank = len(sorted)
+	}
+
+	return sorted[rank-1]
 }
