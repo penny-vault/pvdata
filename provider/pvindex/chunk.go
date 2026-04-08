@@ -359,7 +359,7 @@ func loadTrailingWindow(ctx context.Context, pool *pgxpool.Pool, asOf time.Time,
 
 	rows, err := conn.Query(ctx,
 		`SELECT dt FROM (
-		   SELECT dt FROM trading_days($1::date - INTERVAL '400 days', $1::date - INTERVAL '1 day') AS t(dt)
+		   SELECT dt FROM trading_days(($1::date - INTERVAL '400 days')::date, ($1::date - INTERVAL '1 day')::date) AS t(dt)
 		   ORDER BY dt DESC
 		   LIMIT $2
 		 ) sub

@@ -47,7 +47,7 @@ func computeDateRange(ctx context.Context, pool *pgxpool.Pool) (time.Time, time.
 	// Find the 200th trading day after minMetric.
 	var startDate time.Time
 	if err := conn.QueryRow(ctx,
-		`SELECT dt FROM trading_days($1::date, $1::date + INTERVAL '400 days') AS t(dt)
+		`SELECT dt FROM trading_days($1::date, ($1::date + INTERVAL '400 days')::date) AS t(dt)
 		 ORDER BY dt LIMIT 1 OFFSET 199`,
 		minMetric,
 	).Scan(&startDate); err != nil {
