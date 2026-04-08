@@ -33,7 +33,7 @@ type FilingEntry struct {
 	CIK         int
 	FormType    string
 	Filed       time.Time
-	AccnNum     string
+	Accn        string // SEC accession number, matches Fact.Accn naming
 	CompanyName string
 }
 
@@ -117,7 +117,7 @@ func ParseFilingFeed(xmlData []byte) ([]FilingEntry, error) {
 			CIK:         cik,
 			FormType:    formType,
 			Filed:       filed,
-			AccnNum:     accn,
+			Accn:        accn,
 			CompanyName: extractCompanyName(entry.Title),
 		})
 	}

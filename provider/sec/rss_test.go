@@ -61,7 +61,7 @@ var _ = Describe("RSS Feed", func() {
 
 		It("extracts the accession number from the index link", func() {
 			for _, f := range filings {
-				Expect(f.AccnNum).To(MatchRegexp(`^[0-9]{10}-[0-9]{2}-[0-9]{6}$`))
+				Expect(f.Accn).To(MatchRegexp(`^[0-9]{10}-[0-9]{2}-[0-9]{6}$`))
 			}
 		})
 
@@ -80,7 +80,7 @@ var _ = Describe("RSS Feed", func() {
 
 					Expect(f.FormType).To(Equal("10-K"))
 					Expect(f.CompanyName).To(ContainSubstring("Shepherd"))
-					Expect(f.AccnNum).To(Equal("0001493152-26-015327"))
+					Expect(f.Accn).To(Equal("0001493152-26-015327"))
 				}
 			}
 
