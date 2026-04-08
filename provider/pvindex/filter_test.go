@@ -119,3 +119,63 @@ var _ = Describe("filterAssetMaster", func() {
 		Expect(out).To(BeEmpty())
 	})
 })
+
+var _ = Describe("dedupShareClasses", func() {
+	mkAssetWithCIK := func(ticker, cik, figi string) *data.Asset {
+		return &data.Asset{
+			Ticker:        ticker,
+			CompositeFigi: figi,
+			CIK:           cik,
+		}
+	}
+
+	It("keeps the highest-DV share class within a CIK group", func() {
+		assets := []*data.Asset{
+			mkAssetWithCIK("GOOGL", "0001652044", "BBG009S39JX6"),
+			mkAssetWithCIK("GOOG", "0001652044", "BBG009S3NB30"),
+		}
+		dvByFigi := map[string]float64{
+			"BBG009S39JX6": 1_500_000_000, // GOOGL
+			"BBG009S3NB30": 2_500_000_000, // GOOG (higher)
+		}
+		out := dedupShareClasses(assets, dvByFigi)
+		Expect(out).To(HaveLen(1))
+		Expect(out[0].Ticker).To(Equal("GOOG"))
+	})
+
+	It("treats null CIK rows as singleton groups", func() {
+		assets := []*data.Asset{
+			mkAssetWithCIK("XYZ", "", "BBGXYZ00001"),
+			mkAssetWithCIK("ABC", "", "BBGABC00001"),
+		}
+		dvByFigi := map[string]float64{
+			"BBGXYZ00001": 100,
+			"BBGABC00001": 200,
+		}
+		out := dedupShareClasses(assets, dvByFigi)
+		Expect(out).To(HaveLen(2))
+	})
+
+	It("breaks ties by ticker for determinism", func() {
+		assets := []*data.Asset{
+			mkAssetWithCIK("AAA", "0001234567", "BBGAAA00001"),
+			mkAssetWithCIK("BBB", "0001234567", "BBGBBB00001"),
+		}
+		dvByFigi := map[string]float64{
+			"BBGAAA00001": 1000,
+			"BBGBBB00001": 1000,
+		}
+		out := dedupShareClasses(assets, dvByFigi)
+		Expect(out).To(HaveLen(1))
+		Expect(out[0].Ticker).To(Equal("AAA"))
+	})
+
+	It("handles assets with zero dollar volume", func() {
+		assets := []*data.Asset{
+			mkAssetWithCIK("ZERO", "0001111111", "BBGZERO0001"),
+		}
+		out := dedupShareClasses(assets, map[string]float64{})
+		Expect(out).To(HaveLen(1))
+		Expect(out[0].Ticker).To(Equal("ZERO"))
+	})
+})

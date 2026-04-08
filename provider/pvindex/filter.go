@@ -93,3 +93,41 @@ func filterAssetMaster(assets []*data.Asset) []*data.Asset {
 
 	return out
 }
+
+// dedupShareClasses groups assets by CIK (or composite_figi as fallback for null CIK)
+// and keeps the row with the highest median dollar volume per group. Ties are broken
+// alphabetically by ticker for deterministic output.
+func dedupShareClasses(assets []*data.Asset, dvByFigi map[string]float64) []*data.Asset {
+	type bestRow struct {
+		asset *data.Asset
+		dv    float64
+	}
+
+	groups := make(map[string]bestRow, len(assets))
+
+	for _, a := range assets {
+		key := a.CIK
+		if key == "" {
+			key = a.CompositeFigi
+		}
+
+		dv := dvByFigi[a.CompositeFigi]
+
+		current, exists := groups[key]
+		if !exists {
+			groups[key] = bestRow{asset: a, dv: dv}
+			continue
+		}
+
+		if dv > current.dv || (dv == current.dv && a.Ticker < current.asset.Ticker) {
+			groups[key] = bestRow{asset: a, dv: dv}
+		}
+	}
+
+	out := make([]*data.Asset, 0, len(groups))
+	for _, b := range groups {
+		out = append(out, b.asset)
+	}
+
+	return out
+}
