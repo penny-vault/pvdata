@@ -15,10 +15,15 @@
 package pvindex
 
 import (
+	"context"
+	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -194,4 +199,188 @@ func mostRecentClose(rows []eodRow, asOf time.Time) float64 {
 	}
 
 	return bestClose
+}
+
+// processChunk executes the universe computation for one chunk of trading days.
+// It loads source data once, iterates days, computes the universe, diffs against the
+// prior state, and emits observations to `out`. The prior state is loaded from the DB
+// at chunk start and maintained in memory across the chunk's days.
+func processChunk(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	sub *library.Subscription,
+	indexTicker string,
+	tradingDays []time.Time,
+	candidates []*data.Asset,
+	out chan<- *data.Observation,
+) error {
+	if len(tradingDays) == 0 {
+		return nil
+	}
+
+	logger := zerolog.Ctx(ctx)
+
+	chunkStart := tradingDays[0]
+	chunkEnd := tradingDays[len(tradingDays)-1]
+
+	// 200 trading days of EOD prefix before the chunk start (~400 calendar days
+	// covers 200 trading days comfortably).
+	loadStart := chunkStart.AddDate(0, 0, -400)
+
+	figis := make([]string, len(candidates))
+	for i, a := range candidates {
+		figis[i] = a.CompositeFigi
+	}
+
+	logger.Info().
+		Time("chunk_start", chunkStart).
+		Time("chunk_end", chunkEnd).
+		Int("trading_days", len(tradingDays)).
+		Int("candidate_assets", len(candidates)).
+		Msg("loading chunk data")
+
+	eodByFigi, err := loadEodChunk(ctx, pool, figis, loadStart, chunkEnd)
+	if err != nil {
+		return fmt.Errorf("load eod chunk: %w", err)
+	}
+
+	// Reconstruct prior state from DB at chunk start.
+	prevState := provider.CurrentIndexMembers(
+		ctx,
+		pool,
+		sub.DataTablesMap[data.IndexSnapshotKey],
+		sub.DataTablesMap[data.IndexChangelogKey],
+		indexTicker,
+		chunkStart.AddDate(0, 0, -1),
+	)
+
+	for _, d := range tradingDays {
+		// Determine the trailing 200-trading-day window ending d-1.
+		windowDays, err := loadTrailingWindow(ctx, pool, d, minDayCountStandard)
+		if err != nil {
+			return fmt.Errorf("load trailing window for %s: %w", d.Format("2006-01-02"), err)
+		}
+
+		if len(windowDays) < minDayCountEarlyEntry {
+			logger.Warn().Time("date", d).Msg("insufficient trading days for window; skipping")
+			continue
+		}
+
+		windowStart := windowDays[0]
+		windowEnd := windowDays[len(windowDays)-1]
+
+		mcapByFigi, err := loadMarketCapAsOf(ctx, pool, figis, d)
+		if err != nil {
+			return fmt.Errorf("load market cap for %s: %w", d.Format("2006-01-02"), err)
+		}
+
+		broadMcaps, err := loadBroadMarketCaps(ctx, pool, d)
+		if err != nil {
+			return fmt.Errorf("load broad mcaps for %s: %w", d.Format("2006-01-02"), err)
+		}
+
+		input := perDayInput{
+			Date:            d,
+			WindowStart:     windowStart,
+			WindowEnd:       windowEnd,
+			TradingDayCount: len(windowDays),
+			Assets:          candidates,
+			EodByFigi:       eodByFigi,
+			MarketCapByFigi: mcapByFigi,
+			BroadMarketCaps: broadMcaps,
+		}
+
+		newState := computeUniverseForDate(input)
+
+		adds, removes, weightChanges := provider.DiffSnapshotsWithThreshold(
+			newState,
+			prevState,
+			provider.DiffOptions{RelativeThreshold: 0.25},
+		)
+
+		obsTemplate := &data.Observation{
+			ObservationDate:  d,
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		provider.EmitChangelog(adds, removes, indexTicker, d, obsTemplate, out)
+		provider.EmitWeightChanges(weightChanges, indexTicker, d, obsTemplate, out)
+
+		// Emit annual snapshot if a year has elapsed since the last in-DB snapshot,
+		// or if no snapshot has ever been taken (cold start).
+		lastSnapshot := provider.LastSnapshotDate(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], indexTicker)
+		if provider.ShouldTakeSnapshot(lastSnapshot, d, "yearly") {
+			constituents := make([]data.IndexConstituent, 0, len(newState))
+			for tk, m := range newState {
+				constituents = append(constituents, data.IndexConstituent{
+					Ticker:        tk,
+					CompositeFigi: m.CompositeFigi,
+					Weight:        m.Weight,
+				})
+			}
+
+			out <- &data.Observation{
+				IndexSnapshot: &data.IndexSnapshot{
+					IndexTicker:  indexTicker,
+					SnapshotDate: d,
+					Constituents: constituents,
+				},
+				ObservationDate:  d,
+				SubscriptionID:   sub.ID,
+				SubscriptionName: sub.Name,
+			}
+		}
+
+		// Apply emitted changes to prevState in memory for the next day's diff.
+		for tk := range removes {
+			delete(prevState, tk)
+		}
+
+		for tk, m := range adds {
+			prevState[tk] = m
+		}
+
+		for tk, m := range weightChanges {
+			prevState[tk] = m
+		}
+	}
+
+	return nil
+}
+
+// loadTrailingWindow returns the trailing N trading days ending at (asOf - 1 trading day).
+func loadTrailingWindow(ctx context.Context, pool *pgxpool.Pool, asOf time.Time, n int) ([]time.Time, error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire conn for loadTrailingWindow: %w", err)
+	}
+	defer conn.Release()
+
+	rows, err := conn.Query(ctx,
+		`SELECT dt FROM (
+		   SELECT dt FROM trading_days($1::date - INTERVAL '400 days', $1::date - INTERVAL '1 day') AS t(dt)
+		   ORDER BY dt DESC
+		   LIMIT $2
+		 ) sub
+		 ORDER BY dt`,
+		asOf, n,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query trailing window: %w", err)
+	}
+	defer rows.Close()
+
+	var out []time.Time
+
+	for rows.Next() {
+		var dt time.Time
+		if err := rows.Scan(&dt); err != nil {
+			return nil, fmt.Errorf("scan trailing window day: %w", err)
+		}
+
+		out = append(out, dt)
+	}
+
+	return out, nil
 }

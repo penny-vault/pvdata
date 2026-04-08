@@ -16,11 +16,18 @@ package pvindex
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/rs/zerolog"
+)
+
+const (
+	defaultIndexTicker = "us-tradable"
+	defaultChunkSize   = 63
 )
 
 // Pvindex is a derived provider that computes investable universes by reading from
@@ -67,13 +74,84 @@ func (p *Pvindex) Datasets() map[string]provider.Dataset {
 	}
 }
 
-// fetchTradableUniverse is the dataset Fetch entry point. Real implementation lands in Task 12.
 func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out chan<- *data.Observation, exit chan<- data.RunSummary) {
-	exit <- data.RunSummary{
+	logger := zerolog.Ctx(ctx)
+	pool := sub.Library.Pool
+
+	runSummary := data.RunSummary{
 		StartTime:        time.Now(),
-		EndTime:          time.Now(),
 		SubscriptionID:   sub.ID,
 		SubscriptionName: sub.Name,
 		Status:           data.RunSuccess,
 	}
+
+	defer func() {
+		runSummary.EndTime = time.Now()
+		exit <- runSummary
+	}()
+
+	indexTicker := defaultIndexTicker
+	if v := sub.Config["index_ticker"]; v != "" {
+		indexTicker = v
+	}
+
+	chunkSize := defaultChunkSize
+	if v := sub.Config["chunk_size_days"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			chunkSize = n
+		}
+	}
+
+	startDate, endDate, err := computeDateRange(ctx, pool)
+	if err != nil {
+		logger.Error().Err(err).Msg("compute date range failed")
+		runSummary.Status = data.RunFailed
+		return
+	}
+
+	// Honor start_date_override.
+	if v := sub.Config["start_date_override"]; v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil && t.After(startDate) {
+			startDate = t
+		}
+	}
+
+	// Incremental: skip dates already covered.
+	highWater := provider.LastSnapshotDate(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], indexTicker)
+	if !highWater.IsZero() && highWater.After(startDate) {
+		startDate = highWater.AddDate(0, 0, 1)
+	}
+
+	if startDate.After(endDate) {
+		logger.Info().Msg("no new dates to process")
+		return
+	}
+
+	candidates, err := loadCandidateAssets(ctx, pool)
+	if err != nil {
+		logger.Error().Err(err).Msg("load candidate assets failed")
+		runSummary.Status = data.RunFailed
+		return
+	}
+
+	chunks, err := chunkTradingDays(ctx, pool, startDate, endDate, chunkSize)
+	if err != nil {
+		logger.Error().Err(err).Msg("chunk trading days failed")
+		runSummary.Status = data.RunFailed
+		return
+	}
+
+	totalObs := 0
+	for _, chunk := range chunks {
+		if err := processChunk(ctx, pool, sub, indexTicker, chunk, candidates, out); err != nil {
+			logger.Error().Err(err).Time("chunk_start", chunk[0]).Msg("process chunk failed")
+			runSummary.Status = data.RunFailed
+
+			return
+		}
+
+		totalObs += len(chunk)
+	}
+
+	runSummary.NumObservations = totalObs
 }
