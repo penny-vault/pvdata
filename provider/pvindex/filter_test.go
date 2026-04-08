@@ -179,3 +179,40 @@ var _ = Describe("dedupShareClasses", func() {
 		Expect(out[0].Ticker).To(Equal("ZERO"))
 	})
 })
+
+var _ = Describe("assignCapWeights", func() {
+	It("normalizes weights to sum to 1.0", func() {
+		caps := map[string]int64{
+			"BBG000A": 1_000_000_000,
+			"BBG000B": 2_000_000_000,
+			"BBG000C": 7_000_000_000,
+		}
+		weights := assignCapWeights(caps)
+		Expect(weights).To(HaveLen(3))
+		Expect(weights["BBG000A"]).To(BeNumerically("~", 0.10, 1e-9))
+		Expect(weights["BBG000B"]).To(BeNumerically("~", 0.20, 1e-9))
+		Expect(weights["BBG000C"]).To(BeNumerically("~", 0.70, 1e-9))
+	})
+
+	It("returns weights summing to 1.0 within float tolerance", func() {
+		caps := map[string]int64{
+			"A": 333, "B": 333, "C": 333, "D": 1,
+		}
+		weights := assignCapWeights(caps)
+		var sum float64
+		for _, w := range weights {
+			sum += w
+		}
+		Expect(sum).To(BeNumerically("~", 1.0, 1e-9))
+	})
+
+	It("returns empty map for empty input", func() {
+		Expect(assignCapWeights(nil)).To(BeEmpty())
+		Expect(assignCapWeights(map[string]int64{})).To(BeEmpty())
+	})
+
+	It("returns empty map when total cap is zero", func() {
+		caps := map[string]int64{"A": 0, "B": 0}
+		Expect(assignCapWeights(caps)).To(BeEmpty())
+	})
+})

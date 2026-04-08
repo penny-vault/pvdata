@@ -131,3 +131,30 @@ func dedupShareClasses(assets []*data.Asset, dvByFigi map[string]float64) []*dat
 
 	return out
 }
+
+// assignCapWeights computes market-cap-weighted weights from a map of composite_figi
+// to market_cap. Weights are normalized to sum to 1.0. Returns an empty map if the
+// input is empty or the total market cap is zero.
+func assignCapWeights(caps map[string]int64) map[string]float64 {
+	if len(caps) == 0 {
+		return map[string]float64{}
+	}
+
+	var total int64
+	for _, c := range caps {
+		total += c
+	}
+
+	if total <= 0 {
+		return map[string]float64{}
+	}
+
+	weights := make(map[string]float64, len(caps))
+
+	totalF := float64(total)
+	for figi, c := range caps {
+		weights[figi] = float64(c) / totalF
+	}
+
+	return weights
+}
