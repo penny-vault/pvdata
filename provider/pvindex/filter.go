@@ -16,6 +16,8 @@ package pvindex
 
 import (
 	"strings"
+
+	"github.com/penny-vault/pvdata/data"
 )
 
 // lpSuffixes is the list of legal-form suffixes that identify a limited partnership.
@@ -44,4 +46,50 @@ func isLPName(name string) bool {
 	}
 
 	return false
+}
+
+// allowedExchanges is the whitelist of US-listed common stock exchanges.
+// Both display-name and MIC code formats are accepted, because the assets table
+// currently contains a mix of both. See "Known limitation: exchange field inconsistency"
+// in the design spec.
+var allowedExchanges = map[data.Exchange]struct{}{
+	"NASDAQ":    {},
+	"XNAS":      {},
+	"NYSE":      {},
+	"XNYS":      {},
+	"NYSE MKT":  {},
+	"XASE":      {},
+	"AMEX":      {},
+	"NYSE ARCA": {},
+	"ARCX":      {},
+	"BATS":      {},
+}
+
+// filterAssetMaster returns the subset of assets passing the structural filter:
+// active = true, asset_type = CS, primary_exchange in whitelist, name does not match
+// an LP suffix.
+func filterAssetMaster(assets []*data.Asset) []*data.Asset {
+	out := make([]*data.Asset, 0, len(assets))
+
+	for _, a := range assets {
+		if !a.Active {
+			continue
+		}
+
+		if a.AssetType != data.CommonStock {
+			continue
+		}
+
+		if _, ok := allowedExchanges[a.PrimaryExchange]; !ok {
+			continue
+		}
+
+		if isLPName(a.Name) {
+			continue
+		}
+
+		out = append(out, a)
+	}
+
+	return out
 }
