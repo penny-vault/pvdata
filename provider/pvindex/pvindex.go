@@ -96,6 +96,7 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 	}
 
 	chunkSize := defaultChunkSize
+
 	if v := sub.Config["chunk_size_days"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			chunkSize = n
@@ -105,7 +106,9 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 	startDate, endDate, err := computeDateRange(ctx, pool)
 	if err != nil {
 		logger.Error().Err(err).Msg("compute date range failed")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -130,21 +133,27 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 	candidates, err := loadCandidateAssets(ctx, pool)
 	if err != nil {
 		logger.Error().Err(err).Msg("load candidate assets failed")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
 	chunks, err := chunkTradingDays(ctx, pool, startDate, endDate, chunkSize)
 	if err != nil {
 		logger.Error().Err(err).Msg("chunk trading days failed")
+
 		runSummary.Status = data.RunFailed
+
 		return
 	}
 
 	totalObs := 0
+
 	for _, chunk := range chunks {
 		if err := processChunk(ctx, pool, sub, indexTicker, chunk, candidates, out); err != nil {
 			logger.Error().Err(err).Time("chunk_start", chunk[0]).Msg("process chunk failed")
+
 			runSummary.Status = data.RunFailed
 
 			return

@@ -182,6 +182,7 @@ func percentileInt64(values []int64, p float64) int64 {
 	if rank < 1 {
 		rank = 1
 	}
+
 	if rank > len(sorted) {
 		rank = len(sorted)
 	}
