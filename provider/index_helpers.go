@@ -97,6 +97,59 @@ func DiffSnapshots(current, previous map[string]IndexMember) (added, removed, we
 	return
 }
 
+// DiffOptions configures DiffSnapshotsWithThreshold weight-change detection.
+// A weight is considered changed when |delta| >= max(AbsoluteThreshold, prev.Weight * RelativeThreshold).
+// If RelativeThreshold is 0, only the absolute threshold applies. If both thresholds are
+// zero (the struct zero value), every non-zero weight delta is reported as a change —
+// callers should set at least one threshold explicitly.
+type DiffOptions struct {
+	AbsoluteThreshold float64 // absolute weight delta required (e.g., 0.01)
+	RelativeThreshold float64 // fraction of previous weight (e.g., 0.25 = 25%)
+}
+
+// DiffSnapshotsWithThreshold compares current holdings against previous holdings using
+// configurable thresholds for weight-change detection. Adds and removes are reported
+// regardless of threshold settings.
+func DiffSnapshotsWithThreshold(current, previous map[string]IndexMember, opts DiffOptions) (added, removed, weightChanged map[string]IndexMember) {
+	added = make(map[string]IndexMember)
+	removed = make(map[string]IndexMember)
+	weightChanged = make(map[string]IndexMember)
+
+	for ticker, member := range current {
+		prev, ok := previous[ticker]
+		if !ok {
+			added[ticker] = member
+			continue
+		}
+
+		delta := member.Weight - prev.Weight
+		if delta < 0 {
+			delta = -delta
+		}
+
+		threshold := opts.AbsoluteThreshold
+
+		relThreshold := prev.Weight * opts.RelativeThreshold
+		if relThreshold > threshold {
+			threshold = relThreshold
+		}
+
+		// Skip unchanged weights; the 1e-9 epsilon tolerates floating-point
+		// representation noise at the threshold boundary, matching DiffSnapshots.
+		if delta > 0 && delta >= threshold-1e-9 {
+			weightChanged[ticker] = member
+		}
+	}
+
+	for ticker, member := range previous {
+		if _, ok := current[ticker]; !ok {
+			removed[ticker] = member
+		}
+	}
+
+	return
+}
+
 // LastSnapshotDate queries the database for the most recent snapshot date for the given index.
 func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string) time.Time {
 	conn, err := pool.Acquire(ctx)

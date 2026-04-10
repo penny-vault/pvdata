@@ -29,11 +29,11 @@ type stubAuditCheck struct {
 	results []checks.CheckResult
 }
 
-func (s *stubAuditCheck) Name() string                  { return "stub-audit" }
-func (s *stubAuditCheck) Description() string           { return "stub" }
-func (s *stubAuditCheck) Phase() checks.CheckPhase      { return checks.PhaseAudit }
+func (s *stubAuditCheck) Name() string                   { return "stub-audit" }
+func (s *stubAuditCheck) Description() string            { return "stub" }
+func (s *stubAuditCheck) Phase() checks.CheckPhase       { return checks.PhaseAudit }
 func (s *stubAuditCheck) Severity() checks.CheckSeverity { return checks.SeverityWarning }
-func (s *stubAuditCheck) DataTypes() []string           { return []string{"fundamental"} }
+func (s *stubAuditCheck) DataTypes() []string            { return []string{"fundamental"} }
 func (s *stubAuditCheck) Audit(_ context.Context, _ *pgxpool.Pool, _ string, _ *time.Time, _ *time.Duration) ([]checks.CheckResult, error) {
 	return s.results, nil
 }

@@ -21,6 +21,7 @@ import (
 	_ "github.com/penny-vault/pvdata/provider/legacy"
 	_ "github.com/penny-vault/pvdata/provider/massive"
 	_ "github.com/penny-vault/pvdata/provider/nasdaq"
+	_ "github.com/penny-vault/pvdata/provider/pvindex"
 	_ "github.com/penny-vault/pvdata/provider/sec"
 	_ "github.com/penny-vault/pvdata/provider/sharadar"
 	_ "github.com/penny-vault/pvdata/provider/tiingo"
