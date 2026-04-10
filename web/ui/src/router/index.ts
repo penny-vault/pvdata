@@ -27,6 +27,21 @@ const routes = [
     component: () => import('@/pages/DataQualityPage.vue'),
   },
   {
+    path: '/publications',
+    name: 'publications',
+    component: () => import('@/pages/PublicationsPage.vue'),
+  },
+  {
+    path: '/publications/new',
+    name: 'new-publication',
+    component: () => import('@/pages/NewPublicationPage.vue'),
+  },
+  {
+    path: '/publications/:id',
+    name: 'publication-detail',
+    component: () => import('@/pages/PublicationDetailPage.vue'),
+  },
+  {
     path: '/auth/callback',
     name: 'auth-callback',
     component: () => import('@/pages/SubscriptionsPage.vue'),

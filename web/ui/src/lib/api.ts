@@ -161,3 +161,49 @@ export async function getQualitySummary() {
   const res = await authFetch('/quality/summary')
   return handleResponse<any[]>(res)
 }
+
+// ---------- Publications ----------
+
+export async function getPublications() {
+  const res = await authFetch('/publications')
+  return handleResponse<any[]>(res)
+}
+
+export async function createPublication(body: { data_type_key: string }) {
+  const res = await authFetch('/publications', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return handleResponse<any>(res)
+}
+
+export async function getPublication(id: string) {
+  const res = await authFetch(`/publications/${id}`)
+  return handleResponse<any>(res)
+}
+
+export async function updatePublication(id: string, body: { sources: any[] }) {
+  const res = await authFetch(`/publications/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+  return handleResponse<any>(res)
+}
+
+export async function deletePublication(id: string) {
+  const res = await authFetch(`/publications/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
+}
+
+export async function getPublicationCandidates(id: string) {
+  const res = await authFetch(`/publications/${id}/candidates`)
+  return handleResponse<any[]>(res)
+}
+
+export async function getAvailablePublicationTypes() {
+  const res = await authFetch('/publications/available-types')
+  return handleResponse<any[]>(res)
+}
