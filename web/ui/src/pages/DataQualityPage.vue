@@ -203,7 +203,7 @@ onMounted(() => {
   min-width: 140px;
   border-radius: 8px;
   padding: 1rem 1.5rem;
-  background: var(--p-surface-100, rgba(255, 255, 255, 0.05));
+  background: var(--p-surface-800, rgba(255, 255, 255, 0.05));
   border: 1px solid var(--p-content-border-color);
 }
 
