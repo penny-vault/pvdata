@@ -42,6 +42,8 @@ func SetupRoutes(app *fiber.App) {
 
 	api.Get("/quality/issues", GetQualityIssues)
 	api.Get("/quality/summary", GetQualitySummary)
+	api.Post("/quality/run", TriggerQualityCheck)
+	api.Get("/quality/run/events", QualityCheckEvents)
 
 	api.Get("/publications", GetPublications)
 	api.Get("/publications/available-types", GetAvailablePublicationTypes)

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Select from 'primevue/select'
 import InputText from 'primevue/inputtext'
 import Tag from 'primevue/tag'
-import { getQualityIssues, getQualitySummary } from '@/lib/api'
+import Button from 'primevue/button'
+import ProgressBar from 'primevue/progressbar'
+import { getQualityIssues, getQualitySummary, runQualityCheck, subscribeQualityCheckEvents } from '@/lib/api'
 
 // ----- Filter state -----
 const severityOptions = [
@@ -112,15 +114,112 @@ watch([selectedSeverity, filterDataType, filterTicker], () => {
   onFilterChange()
 })
 
+// ----- Run checks -----
+const checkStatus = ref<'idle' | 'running' | 'completed' | 'failed'>('idle')
+const checkMessage = ref('')
+const checkError = ref('')
+let eventSource: EventSource | null = null
+
+async function triggerCheck() {
+  checkStatus.value = 'running'
+  checkMessage.value = ''
+  checkError.value = ''
+  try {
+    await runQualityCheck()
+    eventSource = await subscribeQualityCheckEvents()
+
+    eventSource.addEventListener('checking', (e: MessageEvent) => {
+      const d = JSON.parse(e.data)
+      checkMessage.value = `Checking ${d.subscription} / ${d.data_type}...`
+    })
+
+    eventSource.addEventListener('checked', (e: MessageEvent) => {
+      const d = JSON.parse(e.data)
+      checkMessage.value = `${d.subscription} / ${d.data_type}: ${d.issues} issue(s) (${d.total_issues} total)`
+    })
+
+    eventSource.addEventListener('completed', (e: MessageEvent) => {
+      const d = JSON.parse(e.data)
+      checkStatus.value = 'completed'
+      checkMessage.value = `Done. ${d.total_issues} issue(s) found.`
+      eventSource?.close()
+      eventSource = null
+      loadSummary()
+      loadIssues(0)
+    })
+
+    eventSource.addEventListener('failed', (e: MessageEvent) => {
+      const d = JSON.parse(e.data)
+      checkStatus.value = 'failed'
+      checkError.value = d.error || 'Check failed'
+      eventSource?.close()
+      eventSource = null
+    })
+
+    eventSource.onerror = () => {
+      if (checkStatus.value === 'running') {
+        checkStatus.value = 'failed'
+        checkError.value = 'Lost connection to check event stream'
+      }
+      eventSource?.close()
+      eventSource = null
+    }
+  } catch (e: any) {
+    checkStatus.value = 'failed'
+    checkError.value = e.message || 'Failed to start check'
+  }
+}
+
+function dismissCheckPanel() {
+  checkStatus.value = 'idle'
+  checkMessage.value = ''
+  checkError.value = ''
+}
+
 onMounted(() => {
   loadSummary()
   loadIssues(0)
+})
+
+onUnmounted(() => {
+  eventSource?.close()
 })
 </script>
 
 <template>
   <div>
-    <h2 style="margin-bottom: 1.5rem">Data Quality</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem">
+      <h2>Data Quality</h2>
+      <Button label="Run Checks" icon="pi pi-play" :disabled="checkStatus === 'running'" @click="triggerCheck" />
+    </div>
+
+    <!-- Check progress -->
+    <div v-if="checkStatus !== 'idle'" style="margin-bottom: 1rem; border: 1px solid var(--p-content-border-color); border-radius: 8px; overflow: hidden">
+      <div :style="{
+        padding: '0.75rem 1rem',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        background: checkStatus === 'completed' ? 'var(--p-green-900)' : checkStatus === 'failed' ? 'var(--p-red-900)' : 'var(--p-surface-800)',
+      }">
+        <div style="display: flex; align-items: center; gap: 0.5rem">
+          <i v-if="checkStatus === 'running'" class="pi pi-spin pi-spinner" />
+          <i v-else-if="checkStatus === 'completed'" class="pi pi-check-circle" />
+          <i v-else class="pi pi-times-circle" />
+          <span style="font-weight: 600">
+            {{ checkStatus === 'running' ? 'Running checks...' : checkStatus === 'completed' ? 'Completed' : 'Failed' }}
+          </span>
+        </div>
+        <Button v-if="checkStatus !== 'running'" icon="pi pi-times" text size="small" @click="dismissCheckPanel" />
+      </div>
+      <div v-if="checkStatus === 'running'" style="height: 2px">
+        <ProgressBar mode="indeterminate" style="height: 2px" />
+      </div>
+      <div style="padding: 0.5rem 1rem; font-size: 0.875rem">
+        <span v-if="checkError" style="color: var(--p-red-400)">{{ checkError }}</span>
+        <span v-else>{{ checkMessage }}</span>
+      </div>
+    </div>
 
     <!-- Summary cards -->
     <div class="summary-cards" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap">

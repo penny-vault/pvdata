@@ -162,6 +162,20 @@ export async function getQualitySummary() {
   return handleResponse<any[]>(res)
 }
 
+export async function runQualityCheck(): Promise<void> {
+  const res = await authFetch('/quality/run', { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
+}
+
+export async function subscribeQualityCheckEvents(): Promise<EventSource> {
+  const token = await getAccessToken()
+  const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+  return new EventSource(`${BASE}/quality/run/events${qs}`)
+}
+
 // ---------- Publications ----------
 
 export async function getPublications() {
