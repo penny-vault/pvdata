@@ -22,11 +22,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PERange finds records where PE is non-zero and outside the range (0, 1000].
+// PERange finds records where PE is positive and exceeds 1000, which likely
+// indicates a data error. Negative PE (negative earnings) is normal and not flagged.
 type PERange struct{}
 
 func (c *PERange) Name() string        { return "pe_range" }
-func (c *PERange) Description() string { return "PE must be between 0 and 1000 (when non-zero)" }
+func (c *PERange) Description() string { return "PE must be <= 1000 (when positive)" }
 func (c *PERange) Phase() CheckPhase   { return PhaseAudit }
 func (c *PERange) Severity() CheckSeverity {
 	return SeverityInfo
@@ -44,7 +45,7 @@ func (c *PERange) Audit(ctx context.Context, pool *pgxpool.Pool, table string, l
 	baseQuery := fmt.Sprintf(`
 		SELECT ticker, composite_figi, dimension, event_date, pe
 		FROM %s
-		WHERE pe != 0 AND (pe < 0 OR pe > 1000)`, table)
+		WHERE pe > 1000`, table)
 
 	var args []any
 
@@ -84,8 +85,8 @@ func (c *PERange) Audit(ctx context.Context, pool *pgxpool.Pool, table string, l
 			Dimension:     dimension,
 			EventDate:     eventDate,
 			Field:         "pe",
-			Message:       "pe is outside expected range (0, 1000]",
-			Expected:      "0 < pe <= 1000",
+			Message:       "pe exceeds 1000, likely a data error",
+			Expected:      "pe <= 1000",
 			Actual:        fmt.Sprintf("%g", pe),
 			DataType:      "fundamental",
 		})

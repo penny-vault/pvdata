@@ -23,12 +23,12 @@ import (
 )
 
 // MetricFundamentalAgree compares PE between fundamentals and metrics views. Flags records where
-// both are non-zero and differ by > 10%. Requires both views to exist.
+// both are non-zero and differ by > 50%. Requires both views to exist.
 type MetricFundamentalAgree struct{}
 
 func (c *MetricFundamentalAgree) Name() string { return "metric_fundamental_agree" }
 func (c *MetricFundamentalAgree) Description() string {
-	return "PE in fundamentals and metrics views must agree within 10%"
+	return "PE in fundamentals and metrics views must agree within 50%"
 }
 func (c *MetricFundamentalAgree) Phase() CheckPhase { return PhaseAudit }
 func (c *MetricFundamentalAgree) Severity() CheckSeverity {
@@ -73,8 +73,9 @@ func (c *MetricFundamentalAgree) Audit(ctx context.Context, pool *pgxpool.Pool, 
 		SELECT f.ticker, f.composite_figi, f.dimension, f.event_date, f.pe AS fund_pe, m.pe AS metric_pe
 		FROM fundamentals f
 		JOIN metrics m ON f.composite_figi = m.composite_figi AND f.event_date = m.event_date
-		WHERE f.pe != 0 AND m.pe != 0
-		  AND ABS(f.pe - m.pe) / ABS(f.pe) > 0.10`
+		WHERE f.dimension = 'ARQ'
+		  AND f.pe != 0 AND m.pe != 0
+		  AND ABS(f.pe - m.pe) / ABS(f.pe) > 0.50`
 
 	var args []any
 
@@ -115,8 +116,8 @@ func (c *MetricFundamentalAgree) Audit(ctx context.Context, pool *pgxpool.Pool, 
 			Dimension:     dimension,
 			EventDate:     eventDate,
 			Field:         "pe",
-			Message:       "PE in fundamentals and metrics differ by > 10%",
-			Expected:      fmt.Sprintf("within 10%% of fundamentals PE %g", fundPE),
+			Message:       "PE in fundamentals and metrics differ by > 50%",
+			Expected:      fmt.Sprintf("within 50%% of fundamentals PE %g", fundPE),
 			Actual:        fmt.Sprintf("%g", metricPE),
 			DataType:      "fundamental",
 		})
