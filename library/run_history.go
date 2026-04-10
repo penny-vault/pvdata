@@ -16,7 +16,9 @@ package library
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
 )
@@ -47,7 +49,9 @@ type SparklineData struct {
 	NumObservations int    `json:"num_observations"`
 }
 
-// SaveRunHistory persists a RunSummary to the run_history table.
+// SaveRunHistory persists a RunSummary to the run_history table and updates
+// the subscription's stats (last_run, num_records_last_import, total_records,
+// first_obs_date, last_obs_date).
 func (myLibrary *Library) SaveRunHistory(ctx context.Context, summary data.RunSummary) error {
 	conn, err := myLibrary.Pool.Acquire(ctx)
 	if err != nil {
@@ -70,6 +74,53 @@ func (myLibrary *Library) SaveRunHistory(ctx context.Context, summary data.RunSu
 		Int("NumObservations", summary.NumObservations).
 		Str("Status", StatusToString(summary.Status)).
 		Msg("saved run history")
+
+	if summary.Status == data.RunSuccess {
+		if err := myLibrary.updateSubscriptionStats(ctx, conn, summary); err != nil {
+			log.Error().Err(err).Str("SubscriptionID", summary.SubscriptionID.String()).Msg("failed to update subscription stats")
+		}
+	}
+
+	return nil
+}
+
+// updateSubscriptionStats updates a subscription's stats after a successful run.
+func (myLibrary *Library) updateSubscriptionStats(ctx context.Context, conn *pgxpool.Conn, summary data.RunSummary) error {
+	sub, err := myLibrary.SubscriptionFromID(ctx, summary.SubscriptionID.String())
+	if err != nil {
+		return fmt.Errorf("load subscription for stats update: %w", err)
+	}
+
+	// Count total records and date range across all data tables.
+	var totalRecords int64
+
+	for _, tableName := range sub.DataTables {
+		var count int64
+
+		err := conn.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)).Scan(&count)
+		if err != nil {
+			log.Warn().Err(err).Str("table", tableName).Msg("could not count records in table")
+			continue
+		}
+
+		totalRecords += count
+	}
+
+	_, err = conn.Exec(ctx,
+		`UPDATE subscriptions
+		 SET last_run = $1, num_records_last_import = $2, total_records = $3
+		 WHERE id = $4`,
+		summary.EndTime, summary.NumObservations, totalRecords, summary.SubscriptionID,
+	)
+	if err != nil {
+		return fmt.Errorf("update subscription stats: %w", err)
+	}
+
+	log.Info().
+		Str("SubscriptionID", summary.SubscriptionID.String()).
+		Int64("TotalRecords", totalRecords).
+		Int("NumRecordsLastImport", summary.NumObservations).
+		Msg("updated subscription stats")
 
 	return nil
 }
