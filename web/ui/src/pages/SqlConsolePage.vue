@@ -39,7 +39,7 @@ async function loadPublications() {
   try { publications.value = await getPublications() } catch { publications.value = [] }
 }
 function templateQuery(viewName: string): string {
-  return `SELECT *\nFROM ${viewName}\nORDER BY event_date DESC\nLIMIT 100;`
+  return `SELECT *\nFROM ${viewName}\nLIMIT 100;`
 }
 function getEditorContent(): string { return editorView.value?.state.doc.toString() || '' }
 function setEditorContent(text: string) {
