@@ -447,7 +447,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	var quarters []quarterData
 
 	for _, p := range periods {
-		eventDate := NormalizeEventDate(p.PeriodEnd, p.FormType)
+		calendarDate := NormalizeEventDate(p.PeriodEnd, p.FormType)
 
 		// AR: resolve using only facts available at the earliest filing date
 		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
@@ -486,10 +486,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if p.FormType == "10-Q" {
 			// ARQ
 			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARQ",
-				eventDate, p.ARFiledDate, p.PeriodEnd, p.ARFiledDate)
+				p.ARFiledDate, calendarDate, p.PeriodEnd, p.ARFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
-				ObservationDate:  eventDate,
+				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
@@ -498,10 +498,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 			// MRQ
 			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRQ",
-				eventDate, p.PeriodEnd, p.PeriodEnd, p.MRFiledDate)
+				p.PeriodEnd, calendarDate, p.PeriodEnd, p.MRFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
-				ObservationDate:  eventDate,
+				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
@@ -514,10 +514,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if p.FormType == "10-K" {
 			// ARY
 			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARY",
-				eventDate, p.ARFiledDate, p.PeriodEnd, p.ARFiledDate)
+				p.ARFiledDate, calendarDate, p.PeriodEnd, p.ARFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
-				ObservationDate:  eventDate,
+				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
@@ -526,10 +526,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 			// MRY
 			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRY",
-				eventDate, p.PeriodEnd, p.PeriodEnd, p.MRFiledDate)
+				p.PeriodEnd, calendarDate, p.PeriodEnd, p.MRFiledDate)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
-				ObservationDate:  eventDate,
+				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
@@ -543,7 +543,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// Compute TTM for each quarter that has 4 preceding quarters
 	for i := 3; i < len(quarters); i++ {
 		q := quarters[i]
-		eventDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
+		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
 
 		// Verify the 4 quarters span roughly 12 months. If a 10-Q is missing
 		// from the sequence (or fiscal-year boundaries shifted), the span will
@@ -607,10 +607,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		if ttm := ComputeTTM(arQSlice); ttm != nil {
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "ART",
-				eventDate, q.period.ARFiledDate, q.period.PeriodEnd, latestARFiled)
+				q.period.ARFiledDate, calendarDate, q.period.PeriodEnd, latestARFiled)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
-				ObservationDate:  eventDate,
+				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
@@ -626,10 +626,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		if ttm := ComputeTTM(mrQSlice); ttm != nil {
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "MRT",
-				eventDate, q.period.PeriodEnd, q.period.PeriodEnd, latestMRFiled)
+				q.period.PeriodEnd, calendarDate, q.period.PeriodEnd, latestMRFiled)
 			out <- &data.Observation{
 				Fundamental:      fundamental,
-				ObservationDate:  eventDate,
+				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}

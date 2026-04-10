@@ -501,20 +501,20 @@ func (fundamental *sharadarFundamental) PvFundamental(figiMap map[string]string)
 		WorkingCapital:                          fundamental.WorkingCapital,
 	}
 
-	if fundamental.CalendarDate != "" {
-		ff.EventDate, err = time.Parse("2006-01-02", fundamental.CalendarDate)
+	if fundamental.DateKey != "" {
+		ff.EventDate, err = time.Parse("2006-01-02", fundamental.DateKey)
 		if err != nil {
-			log.Error().Err(err).Str("CalendarDate", fundamental.CalendarDate).Msg("could not parse date")
+			log.Error().Err(err).Str("DateKey", fundamental.DateKey).Msg("could not parse date")
 			return nil
 		}
 
 		ff.EventDate = time.Date(ff.EventDate.Year(), ff.EventDate.Month(), ff.EventDate.Day(), 0, 0, 0, 0, nyc)
 	}
 
-	if fundamental.DateKey != "" {
-		ff.DateKey, err = time.Parse("2006-01-02", fundamental.DateKey)
+	if fundamental.CalendarDate != "" {
+		ff.DateKey, err = time.Parse("2006-01-02", fundamental.CalendarDate)
 		if err != nil {
-			log.Error().Err(err).Str("DateKey", fundamental.CalendarDate).Msg("could not parse date")
+			log.Error().Err(err).Str("CalendarDate", fundamental.CalendarDate).Msg("could not parse date")
 			return nil
 		}
 

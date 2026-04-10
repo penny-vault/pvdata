@@ -373,7 +373,7 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
 	tangible_assets_book_value_per_share NUMERIC,
 	working_capital BIGINT,
 
-	PRIMARY KEY (composite_figi, dimension, event_date)
+	PRIMARY KEY (composite_figi, dimension, date_key)
 );
 
 CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker, dimension);

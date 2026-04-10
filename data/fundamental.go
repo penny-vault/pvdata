@@ -24,20 +24,10 @@ import (
 )
 
 type Fundamental struct {
-	// [Entity] The Event Date represents the normalized [ReportPeriod]. This
-	// provides a common date to query for which is necessary due to
-	// irregularity in report periods across companies. For example; if the
-	// report period is 2015-09-26; the event date will be 2015-09-30 for
-	// quarterly and trailing-twelve-month dimensions (ARQ;MRQ;ART;MRT); and
-	// 2015-12-31 for annual dimensions (ARY;MRY). We also employ offsets in
-	// order to maximise comparability of the period across companies. For
-	// example consider two companies: one with a quarter ending on 2018-07-24;
-	// and the other with a quarter ending on 2018-06-28. A naive normalization
-	// process would assign these to differing calendar quarters of 2018-09-30
-	// and 2018-06-30 respectively. However; we assign these both to the
-	// 2018-06-30 calendar quarter because this maximises the overlap in the
-	// report periods in question and therefore the comparability of this
-	// period.
+	// [Entity] The Event Date represents the SEC filing date for AR dimensions
+	// (ARQ;ART;ARY); and the [REPORTPERIOD] for MR dimensions (MRQ;MRT;MRY).
+	// In addition; this is the observation date used for [Price] based data
+	// such as [MarketCap]; [Price] and [PE].
 	EventDate time.Time
 
 	// [Entity] The ticker is a unique identifier for a security in the
@@ -60,10 +50,20 @@ type Fundamental struct {
 	// restatements.
 	Dimension string
 
-	// [Entity] The Date Key represents the SEC filing date for AR dimensions
-	// (ARQ;ART;ARY); and the [REPORTPERIOD] for MR dimensions (MRQ;MRT;MRY). In
-	// addition; this is the observation date used for [Price] based data such
-	// as [MarketCap]; [Price] and [PE].
+	// [Entity] The Date Key represents the normalized [ReportPeriod]. This
+	// provides a common date to query for which is necessary due to
+	// irregularity in report periods across companies. For example; if the
+	// report period is 2015-09-26; the date key will be 2015-09-30 for
+	// quarterly and trailing-twelve-month dimensions (ARQ;MRQ;ART;MRT); and
+	// 2015-12-31 for annual dimensions (ARY;MRY). We also employ offsets in
+	// order to maximise comparability of the period across companies. For
+	// example consider two companies: one with a quarter ending on 2018-07-24;
+	// and the other with a quarter ending on 2018-06-28. A naive normalization
+	// process would assign these to differing calendar quarters of 2018-09-30
+	// and 2018-06-30 respectively. However; we assign these both to the
+	// 2018-06-30 calendar quarter because this maximises the overlap in the
+	// report periods in question and therefore the comparability of this
+	// period.
 	DateKey time.Time
 
 	// [Entity] The Report Period represents the end date of the fiscal period.
@@ -762,7 +762,7 @@ func (fundamental *Fundamental) SaveDB(ctx context.Context, tbl string, dbConn *
 		$101, $102, $103, $104
 	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		ticker = EXCLUDED.ticker,
-		date_key = EXCLUDED.date_key,
+		event_date = EXCLUDED.event_date,
 		report_period = EXCLUDED.report_period,
 		last_updated = EXCLUDED.last_updated,
 		accumulated_other_comprehensive_income = EXCLUDED.accumulated_other_comprehensive_income,
