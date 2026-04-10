@@ -209,13 +209,9 @@ func ApplyPublishedView(ctx context.Context, q Querier, pv *PublishedView) error
 	return nil
 }
 
-// SavePublishedView validates the sources, upserts the published view to the
-// database, and applies the view.
+// SavePublishedView upserts the published view to the database and applies the view.
+// Overlapping date ranges are allowed; use CheckOverlaps to get warnings.
 func SavePublishedView(ctx context.Context, q Querier, pv *PublishedView) error {
-	if err := pv.ValidateSources(); err != nil {
-		return fmt.Errorf("validate sources: %w", err)
-	}
-
 	if err := ValidateSourceTables(ctx, q, pv); err != nil {
 		return fmt.Errorf("validate source tables: %w", err)
 	}
