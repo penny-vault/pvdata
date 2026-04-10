@@ -162,6 +162,8 @@ onMounted(() => {
         :columns="gridColumns"
         :source="gridRows"
         :resize="true"
+        :autoSizeColumn="true"
+        stretch="all"
         theme="darkCompact"
         style="height: 500px"
       />
