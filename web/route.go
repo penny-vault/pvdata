@@ -42,4 +42,12 @@ func SetupRoutes(app *fiber.App) {
 
 	api.Get("/quality/issues", GetQualityIssues)
 	api.Get("/quality/summary", GetQualitySummary)
+
+	api.Get("/publications", GetPublications)
+	api.Get("/publications/available-types", GetAvailablePublicationTypes)
+	api.Post("/publications", CreatePublication)
+	api.Get("/publications/:id", GetPublication)
+	api.Put("/publications/:id", UpdatePublication)
+	api.Delete("/publications/:id", DeletePublication)
+	api.Get("/publications/:id/candidates", GetPublicationCandidates)
 }
