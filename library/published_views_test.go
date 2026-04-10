@@ -154,4 +154,50 @@ var _ = Describe("PublishedViews", func() {
 			Expect(pv.ValidateSources()).To(Succeed())
 		})
 	})
+
+	Describe("CheckOverlaps", func() {
+		It("returns overlap info for overlapping date ranges", func() {
+			d1 := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+			d2 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			d3 := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+			pv := &library.PublishedView{
+				ViewName:    "eod",
+				DataTypeKey: "eod",
+				Sources: []library.ViewSource{
+					{TableName: "t1", FromDate: &d1, UntilDate: &d2},
+					{TableName: "t2", FromDate: &d3},
+				},
+			}
+			overlaps := pv.CheckOverlaps()
+			Expect(overlaps).To(HaveLen(1))
+			Expect(overlaps[0]).To(ContainSubstring("t1"))
+			Expect(overlaps[0]).To(ContainSubstring("t2"))
+		})
+
+		It("returns empty for non-overlapping sources", func() {
+			boundary := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+			pv := &library.PublishedView{
+				ViewName:    "eod",
+				DataTypeKey: "eod",
+				Sources: []library.ViewSource{
+					{TableName: "t1", UntilDate: &boundary},
+					{TableName: "t2", FromDate: &boundary},
+				},
+			}
+			overlaps := pv.CheckOverlaps()
+			Expect(overlaps).To(BeEmpty())
+		})
+
+		It("returns empty for single source", func() {
+			pv := &library.PublishedView{
+				ViewName:    "eod",
+				DataTypeKey: "eod",
+				Sources: []library.ViewSource{
+					{TableName: "t1"},
+				},
+			}
+			overlaps := pv.CheckOverlaps()
+			Expect(overlaps).To(BeEmpty())
+		})
+	})
 })

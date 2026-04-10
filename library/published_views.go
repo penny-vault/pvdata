@@ -107,9 +107,20 @@ func buildWhereClause(s ViewSource) string {
 }
 
 // ValidateSources checks that the date ranges of sources do not overlap.
-// It uses sentinel dates for nil bounds and verifies that when sorted by
-// from date, each source's from >= the previous source's until.
+// It delegates to CheckOverlaps and returns an error with the first overlap
+// message if any overlaps are found.
 func (pv *PublishedView) ValidateSources() error {
+	overlaps := pv.CheckOverlaps()
+	if len(overlaps) > 0 {
+		return fmt.Errorf("%s", overlaps[0])
+	}
+
+	return nil
+}
+
+// CheckOverlaps returns human-readable descriptions of any overlapping date
+// ranges between sources. Returns an empty slice when there are no overlaps.
+func (pv *PublishedView) CheckOverlaps() []string {
 	if len(pv.Sources) <= 1 {
 		return nil
 	}
@@ -141,17 +152,19 @@ func (pv *PublishedView) ValidateSources() error {
 		return items[i].from.Before(items[j].from)
 	})
 
+	var overlaps []string
+
 	for i := 1; i < len(items); i++ {
 		if items[i].from.Before(items[i-1].until) {
-			return fmt.Errorf(
+			overlaps = append(overlaps, fmt.Sprintf(
 				"overlapping date ranges: %s [until %s] and %s [from %s]",
 				items[i-1].name, items[i-1].until.Format("2006-01-02"),
 				items[i].name, items[i].from.Format("2006-01-02"),
-			)
+			))
 		}
 	}
 
-	return nil
+	return overlaps
 }
 
 // ValidateSourceTables checks that all source tables referenced by the published
@@ -280,6 +293,27 @@ func LoadPublishedView(ctx context.Context, q Querier, viewName string) (*Publis
 
 	if err := json.Unmarshal(sourcesJSON, &pv.Sources); err != nil {
 		return nil, fmt.Errorf("unmarshal sources for %s: %w", viewName, err)
+	}
+
+	return pv, nil
+}
+
+// LoadPublishedViewByID loads a single published view by its UUID.
+func LoadPublishedViewByID(ctx context.Context, q Querier, id uuid.UUID) (*PublishedView, error) {
+	pv := &PublishedView{}
+
+	var sourcesJSON []byte
+
+	err := q.QueryRow(ctx,
+		`SELECT id, view_name, data_type_key, sources FROM published_views WHERE id = $1`,
+		id,
+	).Scan(&pv.ID, &pv.ViewName, &pv.DataTypeKey, &sourcesJSON)
+	if err != nil {
+		return nil, fmt.Errorf("load published view %s: %w", id, err)
+	}
+
+	if err := json.Unmarshal(sourcesJSON, &pv.Sources); err != nil {
+		return nil, fmt.Errorf("unmarshal sources for %s: %w", id, err)
 	}
 
 	return pv, nil
