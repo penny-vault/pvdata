@@ -124,7 +124,6 @@ func executeQualityCheck(myLibrary *library.Library, run *activeRun, registry *R
 
 	runner := checks.NewAuditRunner(checks.AuditChecks(), myLibrary.Pool)
 	runID := uuid.New()
-	opts := checks.AuditOptions{}
 
 	var totalIssues int
 
@@ -137,6 +136,10 @@ func executeQualityCheck(myLibrary *library.Library, run *activeRun, registry *R
 
 		for idx, dt := range sub.DataTypes {
 			table := sub.DataTables[idx]
+
+			opts := checks.AuditOptions{
+				DataTypes: []string{dt},
+			}
 
 			emitQualityEvent(run, "checking", map[string]string{
 				"subscription": sub.Name,

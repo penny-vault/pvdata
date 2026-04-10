@@ -100,7 +100,10 @@ newer than the last audit. Use --lookback or --full to override.`,
 					Str("table", table).
 					Msg("running audit checks")
 
-				results, err := runner.Run(ctx, opts, table)
+				tableOpts := opts
+				tableOpts.DataTypes = []string{dt}
+
+				results, err := runner.Run(ctx, tableOpts, table)
 				if err != nil {
 					log.Error().Err(err).
 						Str("subscription", sub.Name).
