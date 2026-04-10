@@ -22,17 +22,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// MarginRange finds records where gross_margin, ebitda_margin, or profit_margin is outside [-1, 1]
-// (and non-zero).
+// MarginRange finds records where gross_margin, ebitda_margin, or profit_margin is outside [-10, 10]
+// (and non-zero). Margins outside this range likely indicate data errors. Values in [-10, -1] or
+// [1, 10] are common for pre-revenue startups and early-stage companies.
 type MarginRange struct{}
 
 func (c *MarginRange) Name() string { return "margin_range" }
 func (c *MarginRange) Description() string {
-	return "Margin fields must be within -1 to 1 range (when non-zero)"
+	return "Margin fields must be within -10 to 10 range (when non-zero)"
 }
 func (c *MarginRange) Phase() CheckPhase { return PhaseAudit }
 func (c *MarginRange) Severity() CheckSeverity {
-	return SeverityWarning
+	return SeverityInfo
 }
 func (c *MarginRange) DataTypes() []string { return []string{"fundamental"} }
 
@@ -57,9 +58,9 @@ func (c *MarginRange) Audit(ctx context.Context, pool *pgxpool.Pool, table strin
 	baseQuery := fmt.Sprintf(`
 		SELECT ticker, composite_figi, dimension, event_date, gross_margin, ebitda_margin, profit_margin
 		FROM %s
-		WHERE (gross_margin != 0 AND (gross_margin < -1 OR gross_margin > 1))
-		   OR (ebitda_margin != 0 AND (ebitda_margin < -1 OR ebitda_margin > 1))
-		   OR (profit_margin != 0 AND (profit_margin < -1 OR profit_margin > 1))`, table)
+		WHERE (gross_margin != 0 AND (gross_margin < -10 OR gross_margin > 10))
+		   OR (ebitda_margin != 0 AND (ebitda_margin < -10 OR ebitda_margin > 10))
+		   OR (profit_margin != 0 AND (profit_margin < -10 OR profit_margin > 10))`, table)
 
 	var args []any
 
@@ -103,17 +104,17 @@ func (c *MarginRange) Audit(ctx context.Context, pool *pgxpool.Pool, table strin
 		}
 
 		for _, mf := range marginFields {
-			if mf.value != 0 && (mf.value < -1 || mf.value > 1) {
+			if mf.value != 0 && (mf.value < -10 || mf.value > 10) {
 				results = append(results, CheckResult{
 					CheckName:     c.Name(),
-					Severity:      SeverityWarning,
+					Severity:      SeverityInfo,
 					Ticker:        row.ticker,
 					CompositeFigi: row.compositeFigi,
 					Dimension:     row.dimension,
 					EventDate:     row.eventDate,
 					Field:         mf.name,
-					Message:       fmt.Sprintf("%s is outside expected range [-1, 1]", mf.name),
-					Expected:      "-1 <= value <= 1",
+					Message:       fmt.Sprintf("%s is outside expected range [-10, 10]", mf.name),
+					Expected:      "-10 <= value <= 10",
 					Actual:        fmt.Sprintf("%g", mf.value),
 					DataType:      "fundamental",
 				})
