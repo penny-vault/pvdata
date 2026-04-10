@@ -73,7 +73,7 @@ function formatCell(value: any): string {
 }
 
 const gridColumns = computed(() =>
-  columns.value.map(col => ({ prop: col, name: col, sortable: true }))
+  columns.value.map(col => ({ prop: col, name: col, sortable: true, size: 150 }))
 )
 
 const gridRows = computed(() =>
@@ -161,6 +161,7 @@ onMounted(() => {
       <RevoGrid
         :columns="gridColumns"
         :source="gridRows"
+        :resize="true"
         theme="darkCompact"
         style="height: 500px"
       />
