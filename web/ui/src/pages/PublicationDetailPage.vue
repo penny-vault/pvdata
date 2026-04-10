@@ -325,7 +325,8 @@ onMounted(load)
         </template>
       </Dialog>
 
-      <div style="margin-top: 2rem">
+      <div style="margin-top: 2rem; display: flex; gap: 0.5rem">
+        <Button label="Open in SQL Console" icon="pi pi-code" text @click="router.push({ path: '/sql', query: { q: `SELECT *\nFROM ${publication.view_name}\nORDER BY event_date DESC\nLIMIT 100;` } })" />
         <Button label="Delete View" icon="pi pi-trash" severity="danger" outlined @click="showDeleteView = true" />
       </div>
     </template>

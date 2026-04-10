@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, shallowRef } from 'vue'
 import { useRoute } from 'vue-router'
-import { executeSQL, exportSQL } from '@/lib/api'
+import { executeSQL, exportSQL, getPublications } from '@/lib/api'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { PostgreSQL } from '@codemirror/lang-sql'
@@ -21,6 +21,8 @@ const rowCount = ref(0)
 const executing = ref(false)
 const error = ref('')
 const showHistory = ref(false)
+const showTemplates = ref(false)
+const publications = ref<any[]>([])
 const history = ref<string[]>([])
 const HISTORY_KEY = 'pvdata-sql-history'
 
@@ -33,6 +35,12 @@ function saveHistory(query: string) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
 }
 function clearHistory() { history.value = []; localStorage.removeItem(HISTORY_KEY) }
+async function loadPublications() {
+  try { publications.value = await getPublications() } catch { publications.value = [] }
+}
+function templateQuery(viewName: string): string {
+  return `SELECT *\nFROM ${viewName}\nORDER BY event_date DESC\nLIMIT 100;`
+}
 function getEditorContent(): string { return editorView.value?.state.doc.toString() || '' }
 function setEditorContent(text: string) {
   if (!editorView.value) return
@@ -91,6 +99,7 @@ onMounted(() => {
     ],
   })
   if (editorContainer.value) editorView.value = new EditorView({ state: startState, parent: editorContainer.value })
+  loadPublications()
 })
 </script>
 
@@ -109,9 +118,26 @@ onMounted(() => {
         </div>
       </template>
       <template #end>
-        <Button :label="showHistory ? 'Hide History' : 'History'" :icon="showHistory ? 'pi pi-times' : 'pi pi-history'" text @click="showHistory = !showHistory" />
+        <div style="display: flex; gap: 0.5rem">
+          <Button :label="showTemplates ? 'Hide Templates' : 'Templates'" :icon="showTemplates ? 'pi pi-times' : 'pi pi-book'" text @click="showTemplates = !showTemplates; if (showTemplates) showHistory = false" />
+          <Button :label="showHistory ? 'Hide History' : 'History'" :icon="showHistory ? 'pi pi-times' : 'pi pi-history'" text @click="showHistory = !showHistory; if (showHistory) showTemplates = false" />
+        </div>
       </template>
     </Toolbar>
+
+    <Card v-if="showTemplates" style="margin-bottom: 1rem">
+      <template #title>Published Views</template>
+      <template #content>
+        <p v-if="publications.length === 0">No published views found.</p>
+        <div v-for="pub in publications" :key="pub.id" style="padding: 0.5rem; cursor: pointer; border-bottom: 1px solid var(--p-content-border-color); display: flex; justify-content: space-between; align-items: center" @click="setEditorContent(templateQuery(pub.view_name)); showTemplates = false">
+          <div>
+            <strong>{{ pub.view_name }}</strong>
+            <span style="opacity: 0.6; margin-left: 0.5rem">{{ pub.data_type_key }} &middot; {{ pub.source_count }} source{{ pub.source_count === 1 ? '' : 's' }}</span>
+          </div>
+          <code style="font-size: 0.8rem; opacity: 0.5">SELECT * FROM {{ pub.view_name }} ...</code>
+        </div>
+      </template>
+    </Card>
 
     <Card v-if="showHistory" style="margin-bottom: 1rem">
       <template #title>
