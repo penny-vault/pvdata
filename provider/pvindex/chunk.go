@@ -31,14 +31,34 @@ const (
 	minDayCountStandard = 200
 	// minDayCountEarlyEntry is the minimum data required for the IPO early-entry path.
 	minDayCountEarlyEntry = 30
-	// liquidityThresholdUSD is the minimum 200-day median dollar volume.
-	liquidityThresholdUSD = 2_500_000.0
-	// priceFloorUSD is the minimum prior-day close.
-	priceFloorUSD = 2.0
-	// sizePercentile is the 25th percentile cutoff for market cap.
-	sizePercentile = 0.25
+
+	// Entry thresholds: a stock must clear these to enter the universe.
+	liquidityTurnoverEntry = 0.0005 // median DV / market cap
+	priceFloorEntry        = 2.0    // prior-day close
+	sizePercentileEntry    = 0.25   // bottom quartile excluded
+
+	// Removal thresholds: a stock already in the universe is only removed
+	// when it falls below these more lenient levels. This hysteresis prevents
+	// churn from stocks oscillating near filter boundaries.
+	liquidityTurnoverRemoval = 0.0003
+	priceFloorRemoval        = 1.50
+	sizePercentileRemoval    = 0.15
+
 	// earlyEntryPercentile is the top quintile threshold (80th percentile).
 	earlyEntryPercentile = 0.80
+	// bufferDays is the number of consecutive trading days a stock must
+	// consistently qualify (or disqualify) before it is added to (or removed
+	// from) the universe. This prevents churn from stocks sitting right at a
+	// filter boundary.
+	bufferDays = 21
+	// hardDisqualifyPrice is the price threshold below which a stock is
+	// immediately removed from the universe, bypassing the buffer period.
+	hardDisqualifyPrice = 1.0
+
+	// snapshotMonth and snapshotDay define the annual snapshot anchor date
+	// (winter solstice, December 21).
+	snapshotMonth = time.December
+	snapshotDay   = 21
 )
 
 // perDayInput is the data needed to compute the universe for a single date.
@@ -54,9 +74,29 @@ type perDayInput struct {
 	BroadMarketCaps []int64 // all market caps in the broad CS pool on D, used for percentile thresholds
 }
 
-// computeUniverseForDate runs the full filter chain for a single trading day and
-// returns the resulting universe as map[ticker]IndexMember with cap-weights assigned.
-func computeUniverseForDate(in perDayInput) map[string]provider.IndexMember {
+// stockMetrics holds the per-stock filter values computed by the filter chain.
+// The caller applies entry or removal thresholds against these values.
+type stockMetrics struct {
+	Member     provider.IndexMember
+	Turnover   float64
+	PriorClose float64
+	MarketCap  int64
+	EarlyEntry bool
+}
+
+// universeResult holds the output of computeUniverseForDate.
+type universeResult struct {
+	// Candidates contains every stock that passes data availability, contiguity,
+	// and share-class dedup -- with filter metrics attached. No size, liquidity,
+	// or price filter has been applied.
+	Candidates map[string]stockMetrics
+}
+
+// computeUniverseForDate runs the data-availability and dedup stages of the
+// filter chain and returns per-stock metrics. Size, liquidity, and price
+// thresholds are NOT applied here -- the caller applies entry or removal
+// thresholds against the returned metrics.
+func computeUniverseForDate(in perDayInput) universeResult {
 	// Step 1 (asset master) is assumed to have already been applied to in.Assets.
 
 	// Step 3: rolling stats per FIGI.
@@ -68,7 +108,6 @@ func computeUniverseForDate(in perDayInput) map[string]provider.IndexMember {
 	}
 
 	// Step 4: percentile baseline (broad CS pool).
-	sizeCutoff := percentileInt64(in.BroadMarketCaps, sizePercentile)
 	earlyEntryCutoff := percentileInt64(in.BroadMarketCaps, earlyEntryPercentile)
 
 	// Step 5: data availability.
@@ -77,6 +116,7 @@ func computeUniverseForDate(in perDayInput) map[string]provider.IndexMember {
 		priorClose float64
 		marketCap  int64
 		medianDV   float64
+		earlyEntry bool
 	}
 
 	candidates := make([]candidate, 0, len(in.Assets))
@@ -110,6 +150,7 @@ func computeUniverseForDate(in perDayInput) map[string]provider.IndexMember {
 			priorClose: priorClose,
 			marketCap:  mcap,
 			medianDV:   st.medianDV,
+			earlyEntry: earlyEligible,
 		})
 	}
 
@@ -126,57 +167,66 @@ func computeUniverseForDate(in perDayInput) map[string]provider.IndexMember {
 
 	deduped := dedupShareClasses(assetsForDedup, dvByFigi)
 
-	// Step 7: market cap percentile filter.
-	survivors := make([]candidate, 0, len(deduped))
+	// Build per-stock metrics for the caller to threshold.
+	result := make(map[string]stockMetrics, len(deduped))
 
 	for _, a := range deduped {
 		c := candByFigi[a.CompositeFigi]
-		if c.marketCap < sizeCutoff {
+		turnover := c.medianDV / float64(c.marketCap)
+
+		result[c.asset.Ticker] = stockMetrics{
+			Member: provider.IndexMember{
+				CompositeFigi: c.asset.CompositeFigi,
+			},
+			Turnover:   turnover,
+			PriorClose: c.priorClose,
+			MarketCap:  c.marketCap,
+			EarlyEntry: c.earlyEntry,
+		}
+	}
+
+	return universeResult{Candidates: result}
+}
+
+// applyThresholds filters candidates by the given size, liquidity, and price
+// thresholds and assigns cap-weights. Returns the resulting universe.
+func applyThresholds(candidates map[string]stockMetrics, sizePercCutoff int64, liquidityMin, priceMin float64) (map[string]provider.IndexMember, map[string]bool) {
+	caps := make(map[string]int64)
+	survivors := make(map[string]stockMetrics)
+
+	for ticker, sm := range candidates {
+		if sm.MarketCap < sizePercCutoff {
 			continue
 		}
 
-		survivors = append(survivors, c)
-	}
-
-	// Step 8: liquidity filter.
-	liquidSurvivors := make([]candidate, 0, len(survivors))
-
-	for _, c := range survivors {
-		if c.medianDV < liquidityThresholdUSD {
+		if sm.Turnover < liquidityMin {
 			continue
 		}
 
-		liquidSurvivors = append(liquidSurvivors, c)
-	}
-
-	// Step 9: price guard rail.
-	priceSurvivors := make([]candidate, 0, len(liquidSurvivors))
-
-	for _, c := range liquidSurvivors {
-		if c.priorClose < priceFloorUSD {
+		if sm.PriorClose < priceMin {
 			continue
 		}
 
-		priceSurvivors = append(priceSurvivors, c)
-	}
-
-	// Step 10: cap weights.
-	caps := make(map[string]int64, len(priceSurvivors))
-	for _, c := range priceSurvivors {
-		caps[c.asset.CompositeFigi] = c.marketCap
+		survivors[ticker] = sm
+		caps[sm.Member.CompositeFigi] = sm.MarketCap
 	}
 
 	weights := assignCapWeights(caps)
+	universe := make(map[string]provider.IndexMember, len(survivors))
+	earlyEntry := make(map[string]bool)
 
-	universe := make(map[string]provider.IndexMember, len(priceSurvivors))
-	for _, c := range priceSurvivors {
-		universe[c.asset.Ticker] = provider.IndexMember{
-			CompositeFigi: c.asset.CompositeFigi,
-			Weight:        weights[c.asset.CompositeFigi],
+	for ticker, sm := range survivors {
+		universe[ticker] = provider.IndexMember{
+			CompositeFigi: sm.Member.CompositeFigi,
+			Weight:        weights[sm.Member.CompositeFigi],
+		}
+
+		if sm.EarlyEntry {
+			earlyEntry[ticker] = true
 		}
 	}
 
-	return universe
+	return universe, earlyEntry
 }
 
 // mostRecentClose returns the close price of the most recent EOD row at or before the
@@ -201,10 +251,48 @@ func mostRecentClose(rows []eodRow, asOf time.Time) float64 {
 	return bestClose
 }
 
+// graceExpiryDate returns the date 200 trading days after the given date.
+func graceExpiryDate(ctx context.Context, pool *pgxpool.Pool, from time.Time) time.Time {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return from.AddDate(0, 0, 280) // fallback
+	}
+	defer conn.Release()
+
+	var expiry time.Time
+
+	err = conn.QueryRow(ctx,
+		`SELECT dt FROM trading_days($1::date, ($1::date + INTERVAL '400 days')::date) AS t(dt)
+		 ORDER BY dt LIMIT 1 OFFSET $2`,
+		from, minDayCountStandard,
+	).Scan(&expiry)
+	if err != nil {
+		return from.AddDate(0, 0, 280) // fallback
+	}
+
+	return expiry
+}
+
+// chunkState carries state that must persist across chunk boundaries.
+type chunkState struct {
+	PendingAdd      map[string]int
+	PendingRemove   map[string]int
+	EarlyEntryGrace map[string]time.Time
+}
+
+func newChunkState() *chunkState {
+	return &chunkState{
+		PendingAdd:      make(map[string]int),
+		PendingRemove:   make(map[string]int),
+		EarlyEntryGrace: make(map[string]time.Time),
+	}
+}
+
 // processChunk executes the universe computation for one chunk of trading days.
 // It loads source data once, iterates days, computes the universe, diffs against the
 // prior state, and emits observations to `out`. The prior state is loaded from the DB
-// at chunk start and maintained in memory across the chunk's days.
+// at chunk start and maintained in memory across the chunk's days. The chunkState
+// carries pending add/remove counters and grace periods across chunk boundaries.
 func processChunk(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -212,6 +300,7 @@ func processChunk(
 	indexTicker string,
 	tradingDays []time.Time,
 	candidates []*data.Asset,
+	state *chunkState,
 	out chan<- *data.Observation,
 ) error {
 	if len(tradingDays) == 0 {
@@ -228,8 +317,13 @@ func processChunk(
 	loadStart := chunkStart.AddDate(0, 0, -400)
 
 	figis := make([]string, len(candidates))
+	figiByTicker := make(map[string]string, len(candidates))
+	activeByFigi := make(map[string]bool, len(candidates))
+
 	for i, a := range candidates {
 		figis[i] = a.CompositeFigi
+		figiByTicker[a.Ticker] = a.CompositeFigi
+		activeByFigi[a.CompositeFigi] = a.Active
 	}
 
 	logger.Info().
@@ -254,6 +348,14 @@ func processChunk(
 		chunkStart.AddDate(0, 0, -1),
 	)
 
+	pendingAdd := state.PendingAdd
+	pendingRemove := state.PendingRemove
+	earlyEntryGrace := state.EarlyEntryGrace
+
+	// prevMcap carries forward market caps across days so that FIGIs with
+	// gaps in metrics data retain their last known value.
+	prevMcap := make(map[string]int64)
+
 	for _, d := range tradingDays {
 		// Determine the trailing 200-trading-day window ending d-1.
 		windowDays, err := loadTrailingWindow(ctx, pool, d, minDayCountStandard)
@@ -269,10 +371,17 @@ func processChunk(
 		windowStart := windowDays[0]
 		windowEnd := windowDays[len(windowDays)-1]
 
-		mcapByFigi, err := loadMarketCapAsOf(ctx, pool, figis, d)
+		todayMcap, err := loadMarketCapAsOf(ctx, pool, figis, d)
 		if err != nil {
 			return fmt.Errorf("load market cap for %s: %w", d.Format("2006-01-02"), err)
 		}
+
+		// Merge today's values into the carry-forward map.
+		for figi, mc := range todayMcap {
+			prevMcap[figi] = mc
+		}
+
+		mcapByFigi := prevMcap
 
 		broadMcaps, err := loadBroadMarketCaps(ctx, pool, d)
 		if err != nil {
@@ -290,13 +399,138 @@ func processChunk(
 			BroadMarketCaps: broadMcaps,
 		}
 
-		newState := computeUniverseForDate(input)
+		// Single filter chain call -- returns per-stock metrics without
+		// applying size/liquidity/price thresholds.
+		result := computeUniverseForDate(input)
 
-		adds, removes, weightChanges := provider.DiffSnapshotsWithThreshold(
-			newState,
-			prevState,
-			provider.DiffOptions{RelativeThreshold: 0.25},
+		// The size cutoff is computed from the broad market; all candidates
+		// share the same value. Use entry percentile for the entry cutoff.
+		sizeCutoffEntry := percentileInt64(broadMcaps, sizePercentileEntry)
+		sizeCutoffRemoval := percentileInt64(broadMcaps, sizePercentileRemoval)
+
+		// Apply entry thresholds (strict) to determine new candidates.
+		entryState, earlyEntryFlags := applyThresholds(
+			result.Candidates,
+			sizeCutoffEntry,
+			liquidityTurnoverEntry,
+			priceFloorEntry,
 		)
+
+		// Apply removal thresholds (lenient) to determine retention.
+		retainState, _ := applyThresholds(
+			result.Candidates,
+			sizeCutoffRemoval,
+			liquidityTurnoverRemoval,
+			priceFloorRemoval,
+		)
+
+		// Update pending counters.
+		for ticker := range entryState {
+			if _, inPrev := prevState[ticker]; !inPrev {
+				pendingAdd[ticker]++
+				delete(pendingRemove, ticker)
+			} else {
+				delete(pendingRemove, ticker)
+				delete(pendingAdd, ticker)
+			}
+		}
+
+		for ticker := range prevState {
+			if _, inEntry := entryState[ticker]; inEntry {
+				continue
+			}
+
+			if _, inRetain := retainState[ticker]; inRetain {
+				delete(pendingRemove, ticker)
+				continue
+			}
+
+			if graceExpiry, ok := earlyEntryGrace[ticker]; ok && d.Before(graceExpiry) {
+				continue
+			}
+
+			pendingRemove[ticker]++
+			delete(pendingAdd, ticker)
+		}
+
+		// Promote pending adds that have reached the buffer threshold.
+		confirmedAdds := make(map[string]provider.IndexMember)
+
+		for ticker, count := range pendingAdd {
+			if count >= bufferDays {
+				confirmedAdds[ticker] = entryState[ticker]
+				prevState[ticker] = entryState[ticker]
+				delete(pendingAdd, ticker)
+
+				if earlyEntryFlags[ticker] {
+					earlyEntryGrace[ticker] = graceExpiryDate(ctx, pool, d)
+				}
+			}
+		}
+
+		// Promote pending removes that have reached the buffer threshold.
+		confirmedRemoves := make(map[string]provider.IndexMember)
+
+		for ticker, count := range pendingRemove {
+			if count >= bufferDays {
+				confirmedRemoves[ticker] = prevState[ticker]
+				delete(prevState, ticker)
+				delete(pendingRemove, ticker)
+			}
+		}
+
+		// Hard disqualification: bypass the buffer for stocks that are
+		// clearly no longer tradable (delisted or price collapse below $1).
+		for ticker := range pendingRemove {
+			figi := figiByTicker[ticker]
+
+			hardRemove := false
+			if !activeByFigi[figi] {
+				hardRemove = true
+			} else {
+				price := mostRecentClose(eodByFigi[figi], d)
+				if price > 0 && price < hardDisqualifyPrice {
+					hardRemove = true
+				}
+			}
+
+			if hardRemove {
+				confirmedRemoves[ticker] = prevState[ticker]
+				delete(prevState, ticker)
+				delete(pendingRemove, ticker)
+			}
+		}
+
+		// On the very first day, prevState is empty so seed it from entryState.
+		if len(prevState) == 0 && len(entryState) > 0 {
+			for ticker, m := range entryState {
+				prevState[ticker] = m
+
+				if earlyEntryFlags[ticker] {
+					earlyEntryGrace[ticker] = graceExpiryDate(ctx, pool, d)
+				}
+			}
+
+			pendingAdd = make(map[string]int)
+		}
+
+		// Recompute current-day cap weights for add entries.
+		// prevState already reflects the post-change universe (adds in, removes out).
+		if len(confirmedAdds) > 0 {
+			addCaps := make(map[string]int64, len(prevState))
+			for _, m := range prevState {
+				if mc, ok := mcapByFigi[m.CompositeFigi]; ok && mc > 0 {
+					addCaps[m.CompositeFigi] = mc
+				}
+			}
+
+			addWeights := assignCapWeights(addCaps)
+
+			for ticker, m := range confirmedAdds {
+				m.Weight = addWeights[m.CompositeFigi]
+				confirmedAdds[ticker] = m
+			}
+		}
 
 		obsTemplate := &data.Observation{
 			ObservationDate:  d,
@@ -304,19 +538,28 @@ func processChunk(
 			SubscriptionName: sub.Name,
 		}
 
-		provider.EmitChangelog(adds, removes, indexTicker, d, obsTemplate, out)
-		provider.EmitWeightChanges(weightChanges, indexTicker, d, obsTemplate, out)
+		provider.EmitChangelog(confirmedAdds, confirmedRemoves, indexTicker, d, obsTemplate, out)
 
-		// Emit annual snapshot if a year has elapsed since the last in-DB snapshot,
-		// or if no snapshot has ever been taken (cold start).
+		// Emit annual snapshot on the first trading day on or after December 21
+		// (winter solstice), or on cold start.
 		lastSnapshot := provider.LastSnapshotDate(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], indexTicker)
-		if provider.ShouldTakeSnapshot(lastSnapshot, d, "yearly") {
-			constituents := make([]data.IndexConstituent, 0, len(newState))
-			for tk, m := range newState {
+		if provider.ShouldTakeAnnualSnapshot(lastSnapshot, d, snapshotMonth, snapshotDay) {
+			// Recompute cap weights for all current members using today's market caps.
+			snapshotCaps := make(map[string]int64, len(prevState))
+			for _, m := range prevState {
+				if mc, ok := mcapByFigi[m.CompositeFigi]; ok && mc > 0 {
+					snapshotCaps[m.CompositeFigi] = mc
+				}
+			}
+
+			snapshotWeights := assignCapWeights(snapshotCaps)
+
+			constituents := make([]data.IndexConstituent, 0, len(prevState))
+			for tk, m := range prevState {
 				constituents = append(constituents, data.IndexConstituent{
 					Ticker:        tk,
 					CompositeFigi: m.CompositeFigi,
-					Weight:        m.Weight,
+					Weight:        snapshotWeights[m.CompositeFigi],
 				})
 			}
 
@@ -330,19 +573,6 @@ func processChunk(
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
-		}
-
-		// Apply emitted changes to prevState in memory for the next day's diff.
-		for tk := range removes {
-			delete(prevState, tk)
-		}
-
-		for tk, m := range adds {
-			prevState[tk] = m
-		}
-
-		for tk, m := range weightChanges {
-			prevState[tk] = m
 		}
 	}
 

@@ -55,7 +55,7 @@ var _ = Describe("computeUniverseForDate", func() {
 
 		assets := []*data.Asset{mkCSAsset("AAPL", "0000320193", "BBG000B9XRY4", "Apple Inc.")}
 		eodByFigi := map[string][]eodRow{
-			"BBG000B9XRY4": mkEodSeries("2024-06-14", 200, 100.0, 100_000), // dv = 10M
+			"BBG000B9XRY4": mkEodSeries("2024-06-14", 200, 100.0, 15_000_000), // dv = 1.5B, turnover = 0.05%
 		}
 		mcapByFigi := map[string]int64{
 			"BBG000B9XRY4": 3_000_000_000_000, // $3T
@@ -74,7 +74,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(HaveKey("AAPL"))
 		Expect(universe["AAPL"].Weight).To(BeNumerically("~", 1.0, 1e-9))
 	})
@@ -102,7 +104,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(BeEmpty())
 	})
 
@@ -114,7 +118,7 @@ var _ = Describe("computeUniverseForDate", func() {
 		assets := []*data.Asset{mkCSAsset("BIGIPO", "0002222222", "BBG000BIGIPO", "BigIPO Inc.")}
 		// 50 contiguous days ending day-1
 		eodByFigi := map[string][]eodRow{
-			"BBG000BIGIPO": mkEodSeries(evalDate.AddDate(0, 0, -50).Format("2006-01-02"), 50, 200.0, 100_000), // dv = 20M
+			"BBG000BIGIPO": mkEodSeries(evalDate.AddDate(0, 0, -50).Format("2006-01-02"), 50, 200.0, 500_000), // dv = 100M, turnover = 0.125%
 		}
 		mcapByFigi := map[string]int64{"BBG000BIGIPO": 80_000_000_000}
 		// Broad market cap pool: BIGIPO at $80B is in top 20% of [1B, 5B, 10B, 80B] (80th percentile).
@@ -131,7 +135,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(HaveKey("BIGIPO"))
 	})
 
@@ -159,7 +165,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(BeEmpty())
 	})
 
@@ -186,7 +194,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(BeEmpty())
 	})
 
@@ -213,7 +223,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(BeEmpty())
 	})
 
@@ -242,7 +254,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(BeEmpty())
 	})
 
@@ -278,7 +292,9 @@ var _ = Describe("computeUniverseForDate", func() {
 			BroadMarketCaps: broadMcaps,
 		}
 
-		universe := computeUniverseForDate(input)
+		result := computeUniverseForDate(input)
+		sizeCutoff := percentileInt64(input.BroadMarketCaps, sizePercentileEntry)
+		universe, _ := applyThresholds(result.Candidates, sizeCutoff, liquidityTurnoverEntry, priceFloorEntry)
 		Expect(universe).To(BeEmpty())
 	})
 })

@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/db"
@@ -45,10 +47,10 @@ The server runs until interrupted with Ctrl+C.`,
 
 		dbURL := viper.GetString("db.url")
 
-		// Verify database is at the expected migration version
+		// Run any pending database migrations
 		migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
-		if err := db.CheckVersion(migrateURL); err != nil {
-			log.Fatal().Err(err).Msg("database version check failed")
+		if err := db.Migrate(migrateURL); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			log.Fatal().Err(err).Msg("database migration failed")
 		}
 
 		myLibrary, err := library.NewFromDB(ctx, dbURL)

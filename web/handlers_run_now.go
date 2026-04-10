@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,27 +107,43 @@ func TriggerRun(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"status": "started"})
 }
 
-// parseLookback parses a duration string like "14d", "30d", "365d" into time.Duration.
+// parseLookback parses a human-friendly duration string with suffixes:
+// d (days), w (weeks), m (months), y (years). A bare number is treated as days.
 func parseLookback(s string) (time.Duration, error) {
-	if len(s) < 2 || s[len(s)-1] != 'd' {
-		return 0, fmt.Errorf("expected format like '14d', got %q", s)
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty lookback value")
 	}
 
-	days := 0
+	suffix := s[len(s)-1:]
+	numStr := s[:len(s)-1]
 
-	for _, c := range s[:len(s)-1] {
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("expected format like '14d', got %q", s)
-		}
-
-		days = days*10 + int(c-'0')
+	if suffix[0] >= '0' && suffix[0] <= '9' {
+		numStr = s
+		suffix = "d"
 	}
 
-	if days == 0 {
-		return 0, fmt.Errorf("lookback must be at least 1d")
+	n, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number in lookback %q: %w", s, err)
 	}
 
-	return time.Duration(days) * 24 * time.Hour, nil
+	if n <= 0 {
+		return 0, fmt.Errorf("lookback must be positive, got %d", n)
+	}
+
+	switch suffix {
+	case "d":
+		return time.Duration(n) * 24 * time.Hour, nil
+	case "w":
+		return time.Duration(n) * 7 * 24 * time.Hour, nil
+	case "m":
+		return time.Duration(n) * 30 * 24 * time.Hour, nil
+	case "y":
+		return time.Duration(n) * 365 * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("unknown lookback suffix %q; use d (days), w (weeks), m (months), or y (years)", suffix)
+	}
 }
 
 // executeRun runs the subscription fetch and feeds events into the activeRun channels.

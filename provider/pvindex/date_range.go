@@ -22,8 +22,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// minMetricsCoverage is the minimum number of distinct FIGIs with market cap
+// data on a single date before we consider the metrics data sufficient to
+// start computing the index. This avoids starting during the ramp-up period
+// when only a handful of stocks have coverage.
+const minMetricsCoverage = 1000
+
 // computeDateRange returns the [start, end] date range for the universe computation:
-// start = 200 trading days after MIN(metrics.event_date)
+// start = 200 trading days after the first date where metrics has >= minMetricsCoverage stocks
 // end = LEAST(MAX(eod.event_date), MAX(metrics.event_date))
 func computeDateRange(ctx context.Context, pool *pgxpool.Pool) (time.Time, time.Time, error) {
 	conn, err := pool.Acquire(ctx)
@@ -32,24 +38,36 @@ func computeDateRange(ctx context.Context, pool *pgxpool.Pool) (time.Time, time.
 	}
 	defer conn.Release()
 
-	var (
-		minMetric, maxMetric, maxEod time.Time
-	)
+	// Find the earliest date where metrics has meaningful coverage.
+	var metricsReady time.Time
+	if err := conn.QueryRow(ctx,
+		`SELECT MIN(event_date) FROM (
+			SELECT event_date, COUNT(DISTINCT composite_figi) AS cnt
+			FROM metrics
+			WHERE market_cap > 0
+			GROUP BY event_date
+			HAVING COUNT(DISTINCT composite_figi) >= $1
+		) t`, minMetricsCoverage,
+	).Scan(&metricsReady); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("query metrics ready date: %w", err)
+	}
 
-	if err := conn.QueryRow(ctx, `SELECT MIN(event_date), MAX(event_date) FROM metrics`).Scan(&minMetric, &maxMetric); err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("query metric date range: %w", err)
+	var maxMetric, maxEod time.Time
+
+	if err := conn.QueryRow(ctx, `SELECT MAX(event_date) FROM metrics`).Scan(&maxMetric); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("query metric max date: %w", err)
 	}
 
 	if err := conn.QueryRow(ctx, `SELECT MAX(event_date) FROM eod`).Scan(&maxEod); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("query eod max date: %w", err)
 	}
 
-	// Find the 200th trading day after minMetric.
+	// Find the 200th trading day after metricsReady.
 	var startDate time.Time
 	if err := conn.QueryRow(ctx,
 		`SELECT dt FROM trading_days($1::date, ($1::date + INTERVAL '400 days')::date) AS t(dt)
 		 ORDER BY dt LIMIT 1 OFFSET 199`,
-		minMetric,
+		metricsReady,
 	).Scan(&startDate); err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("compute start date: %w", err)
 	}

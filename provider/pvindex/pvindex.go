@@ -16,7 +16,6 @@ package pvindex
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/penny-vault/pvdata/data"
@@ -48,11 +47,7 @@ func (p *Pvindex) Description() string {
 }
 
 func (p *Pvindex) ConfigDescription() map[string]string {
-	return map[string]string{
-		"index_ticker":        "Optional. Override the index ticker (default: us-tradable).",
-		"start_date_override": "Optional. Force a later start date in YYYY-MM-DD format. Used for testing or selective backfill.",
-		"chunk_size_days":     "Optional. Number of trading days per processing chunk (default: 63).",
-	}
+	return map[string]string{}
 }
 
 func (p *Pvindex) Datasets() map[string]provider.Dataset {
@@ -91,17 +86,7 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 	}()
 
 	indexTicker := defaultIndexTicker
-	if v := sub.Config["index_ticker"]; v != "" {
-		indexTicker = v
-	}
-
 	chunkSize := defaultChunkSize
-
-	if v := sub.Config["chunk_size_days"]; v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			chunkSize = n
-		}
-	}
 
 	startDate, endDate, err := computeDateRange(ctx, pool)
 	if err != nil {
@@ -112,17 +97,19 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 		return
 	}
 
-	// Honor start_date_override.
-	if v := sub.Config["start_date_override"]; v != "" {
-		if t, err := time.Parse("2006-01-02", v); err == nil && t.After(startDate) {
-			startDate = t
+	// If a lookback is set (e.g. from "Run 26y"), use it to override the start date.
+	lookback := provider.LookbackFromContext(ctx, 0)
+	if lookback > 0 {
+		lbStart := time.Now().Add(-lookback)
+		if lbStart.After(startDate) {
+			startDate = lbStart
 		}
-	}
-
-	// Incremental: skip dates already covered.
-	highWater := provider.LastSnapshotDate(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], indexTicker)
-	if !highWater.IsZero() && highWater.After(startDate) {
-		startDate = highWater.AddDate(0, 0, 1)
+	} else {
+		// Incremental: skip dates already covered.
+		highWater := provider.LastSnapshotDate(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], indexTicker)
+		if !highWater.IsZero() && highWater.After(startDate) {
+			startDate = highWater.AddDate(0, 0, 1)
+		}
 	}
 
 	if startDate.After(endDate) {
@@ -149,9 +136,10 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 	}
 
 	totalObs := 0
+	state := newChunkState()
 
 	for _, chunk := range chunks {
-		if err := processChunk(ctx, pool, sub, indexTicker, chunk, candidates, out); err != nil {
+		if err := processChunk(ctx, pool, sub, indexTicker, chunk, candidates, state, out); err != nil {
 			logger.Error().Err(err).Time("chunk_start", chunk[0]).Msg("process chunk failed")
 
 			runSummary.Status = data.RunFailed

@@ -98,8 +98,8 @@ func loadEodChunk(ctx context.Context, pool *pgxpool.Pool, figis []string, start
 	return out, nil
 }
 
-// loadMarketCapAsOf reads the most recent market_cap on or before `asOf` for each FIGI
-// in the input. Used to populate per-day market cap lookups within a chunk.
+// loadMarketCapAsOf reads the market_cap for each FIGI on the given date.
+// Metrics are published daily so an exact-date match is used for efficiency.
 func loadMarketCapAsOf(ctx context.Context, pool *pgxpool.Pool, figis []string, asOf time.Time) (map[string]int64, error) {
 	if len(figis) == 0 {
 		return map[string]int64{}, nil
@@ -112,12 +112,11 @@ func loadMarketCapAsOf(ctx context.Context, pool *pgxpool.Pool, figis []string, 
 	defer conn.Release()
 
 	rows, err := conn.Query(ctx,
-		`SELECT DISTINCT ON (composite_figi) composite_figi, market_cap
+		`SELECT composite_figi, market_cap
 		 FROM metrics
 		 WHERE composite_figi = ANY($1)
-		   AND event_date <= $2
-		   AND market_cap > 0
-		 ORDER BY composite_figi, event_date DESC`,
+		   AND event_date = $2
+		   AND market_cap > 0`,
 		figis, asOf,
 	)
 	if err != nil {
@@ -147,9 +146,9 @@ func loadMarketCapAsOf(ctx context.Context, pool *pgxpool.Pool, figis []string, 
 	return out, nil
 }
 
-// loadBroadMarketCaps returns the market caps of all CS rows on the broad pool baseline:
-// active CS on whitelisted exchanges with a metric row on or before `asOf`. Used as the
-// percentile baseline for the size and early-entry filters.
+// loadBroadMarketCaps returns the market caps of all active CS stocks on
+// whitelisted exchanges for the given date. Used as the percentile baseline
+// for the size and early-entry filters.
 func loadBroadMarketCaps(ctx context.Context, pool *pgxpool.Pool, asOf time.Time) ([]int64, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -158,18 +157,14 @@ func loadBroadMarketCaps(ctx context.Context, pool *pgxpool.Pool, asOf time.Time
 	defer conn.Release()
 
 	rows, err := conn.Query(ctx,
-		`WITH latest AS (
-		   SELECT DISTINCT ON (m.composite_figi) m.composite_figi, m.market_cap
-		   FROM metrics m
-		   JOIN assets a USING (composite_figi)
-		   WHERE a.active = true
-		     AND a.asset_type = 'CS'
-		     AND a.primary_exchange IN ('NASDAQ','NYSE','NYSE MKT','NYSE ARCA','BATS','AMEX','XNAS','XNYS','XASE','ARCX')
-		     AND m.event_date <= $1
-		     AND m.market_cap > 0
-		   ORDER BY m.composite_figi, m.event_date DESC
-		 )
-		 SELECT market_cap FROM latest`,
+		`SELECT m.market_cap
+		 FROM metrics m
+		 JOIN assets a USING (composite_figi)
+		 WHERE a.active = true
+		   AND a.asset_type = 'CS'
+		   AND a.primary_exchange IN ('NASDAQ','NYSE','NYSE MKT','NYSE ARCA','BATS','AMEX','XNAS','XNYS','XASE','ARCX')
+		   AND m.event_date = $1
+		   AND m.market_cap > 0`,
 		asOf,
 	)
 	if err != nil {

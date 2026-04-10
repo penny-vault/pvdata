@@ -52,6 +52,11 @@ const datasetOptions = computed(() => {
   }))
 })
 
+const hasConfigKeys = computed(() => {
+  const desc = selectedProviderData.value?.config_description || {}
+  return Object.keys(desc).length > 0
+})
+
 function populateConfigKeys() {
   if (configEntries.value.length === 0) {
     const desc = selectedProviderData.value?.config_description || {}
@@ -144,14 +149,11 @@ onMounted(async () => {
                     border: selectedProvider === p.id ? '1px solid var(--p-primary-color)' : '1px solid transparent',
                     background: selectedProvider === p.id ? 'rgba(var(--p-primary-500), 0.08)' : 'var(--p-content-background)',
                   }"
-                  @click="selectedProvider = p.id; selectedDataset = ''"
+                  @click="selectedProvider = p.id; selectedDataset = ''; activateCallback('2')"
                 >
                   <div style="font-weight: 600">{{ p.name }}</div>
                   <div v-if="p.description" style="font-size: 12px; opacity: 0.6; margin-top: 2px">{{ p.description }}</div>
                 </div>
-              </div>
-              <div style="display: flex; justify-content: flex-end; margin-top: 1.5rem">
-                <Button label="Next" icon="pi pi-arrow-right" iconPos="right" :disabled="!selectedProvider" @click="activateCallback('2')" />
               </div>
             </div>
           </StepPanel>
@@ -171,7 +173,7 @@ onMounted(async () => {
                     border: selectedDataset === ds.key ? '1px solid var(--p-primary-color)' : '1px solid transparent',
                     background: selectedDataset === ds.key ? 'rgba(var(--p-primary-500), 0.08)' : 'var(--p-content-background)',
                   }"
-                  @click="selectedDataset = ds.key"
+                  @click="selectedDataset = ds.key; activateCallback('3')"
                 >
                   <div style="font-weight: 600">{{ ds.name }}</div>
                   <div v-if="ds.description" style="font-size: 12px; opacity: 0.6; margin-top: 2px">{{ ds.description }}</div>
@@ -181,9 +183,8 @@ onMounted(async () => {
                 </div>
               </div>
               <p v-if="datasetOptions.length === 0" style="opacity: 0.5">No datasets available for this provider.</p>
-              <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
+              <div style="display: flex; justify-content: flex-start; margin-top: 1.5rem">
                 <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('1')" />
-                <Button label="Next" icon="pi pi-arrow-right" iconPos="right" :disabled="!selectedDataset" @click="activateCallback('3')" />
               </div>
             </div>
           </StepPanel>
@@ -206,7 +207,7 @@ onMounted(async () => {
 
               <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
                 <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('2')" />
-                <Button label="Next" icon="pi pi-arrow-right" iconPos="right" :disabled="!schedule.trim()" @click="populateConfigKeys(); activateCallback('4')" />
+                <Button label="Next" icon="pi pi-arrow-right" iconPos="right" :disabled="!schedule.trim()" @click="populateConfigKeys(); activateCallback(hasConfigKeys ? '4' : '5')" />
               </div>
             </div>
           </StepPanel>
@@ -224,9 +225,6 @@ onMounted(async () => {
                   <div v-if="selectedProviderData?.config_description?.[entry.key]" style="font-size: 12px; opacity: 0.5; margin-top: 0.25rem">
                     {{ selectedProviderData.config_description[entry.key] }}
                   </div>
-                </div>
-                <div>
-                  <Button label="Add custom entry" icon="pi pi-plus" text size="small" @click="addConfigEntry" />
                 </div>
               </div>
 
@@ -264,7 +262,7 @@ onMounted(async () => {
               </Card>
 
               <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
-                <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback('4')" />
+                <Button label="Back" severity="secondary" icon="pi pi-arrow-left" @click="activateCallback(hasConfigKeys ? '4' : '3')" />
                 <Button
                   :label="creating ? 'Creating...' : 'Create Subscription'"
                   icon="pi pi-check"

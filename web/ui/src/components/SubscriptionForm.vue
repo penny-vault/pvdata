@@ -108,14 +108,6 @@ async function onSave() {
           @click="removeConfigEntry(i)"
         />
       </div>
-      <div>
-        <Button
-          label="+ Add config entry"
-          text
-          size="small"
-          @click="addConfigEntry"
-        />
-      </div>
     </div>
 
     <div style="display: flex; flex-direction: column; gap: 0.5rem">
