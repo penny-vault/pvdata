@@ -39,7 +39,6 @@ import (
 
 func init() {
 	provider.Register("massive", &Massive{})
-	provider.Register("polygon", &Massive{})
 }
 
 var (
