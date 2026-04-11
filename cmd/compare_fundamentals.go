@@ -316,6 +316,59 @@ func resolveCompareOptions(raw rawCompareFlags) (compareOptions, error) {
 	return opts, nil
 }
 
+// buildDateKeyQuery returns a SQL statement (and args) that yields the union
+// of distinct date_key values across the sec and sharadar tables, filtered by
+// tickers/dimensions/date range if configured.
+func buildDateKeyQuery(secTable, sharadarTable string, opts compareOptions) (string, []interface{}) {
+	var args []interface{}
+	placeholder := func(v interface{}) string {
+		args = append(args, v)
+
+		return fmt.Sprintf("$%d", len(args))
+	}
+
+	where := func() string {
+		var parts []string
+
+		if len(opts.tickers) > 0 {
+			parts = append(parts, fmt.Sprintf("ticker = ANY(%s)", placeholder(opts.tickers)))
+		}
+
+		if len(opts.dimensions) > 0 {
+			parts = append(parts, fmt.Sprintf("dimension = ANY(%s)", placeholder(opts.dimensions)))
+		}
+
+		if !opts.since.IsZero() {
+			parts = append(parts, fmt.Sprintf("date_key >= %s", placeholder(opts.since)))
+		}
+
+		if !opts.until.IsZero() {
+			parts = append(parts, fmt.Sprintf("date_key <= %s", placeholder(opts.until)))
+		}
+
+		if len(parts) == 0 {
+			return ""
+		}
+
+		return " WHERE " + strings.Join(parts, " AND ")
+	}
+
+	secWhere := where()
+	sharadarWhere := where()
+
+	sql := fmt.Sprintf(
+		`SELECT date_key FROM (
+	SELECT DISTINCT date_key FROM %s%s
+	UNION
+	SELECT DISTINCT date_key FROM %s%s
+) dk ORDER BY date_key`,
+		secTable, secWhere,
+		sharadarTable, sharadarWhere,
+	)
+
+	return sql, args
+}
+
 var compareFundamentalsCmd = &cobra.Command{
 	Use:   "compare-fundamentals",
 	Short: "Compare fundamentals rows between the SEC and Sharadar providers",

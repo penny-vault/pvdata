@@ -265,5 +265,29 @@ var _ = Describe("resolveCompareOptions", func() {
 	})
 })
 
-// Keep `time` in use even if no other spec references it directly.
-var _ = time.Time{}
+var _ = Describe("buildDateKeyQuery", func() {
+	It("generates a union query with no args when no filters are set", func() {
+		sql, args := buildDateKeyQuery("sec_fund", "sh_fund", compareOptions{})
+		Expect(sql).To(ContainSubstring("FROM sec_fund"))
+		Expect(sql).To(ContainSubstring("FROM sh_fund"))
+		Expect(args).To(BeEmpty())
+	})
+
+	It("applies ticker/dimension/date filters to both subqueries", func() {
+		since, err := time.Parse("2006-01-02", "2023-01-01")
+		Expect(err).NotTo(HaveOccurred())
+
+		opts := compareOptions{
+			tickers:    []string{"AAPL"},
+			dimensions: []string{"ARQ"},
+			since:      since,
+		}
+
+		sql, args := buildDateKeyQuery("sec_fund", "sh_fund", opts)
+		Expect(sql).To(ContainSubstring("ticker = ANY"))
+		Expect(sql).To(ContainSubstring("dimension = ANY"))
+		Expect(sql).To(ContainSubstring("date_key >="))
+		// 3 filters applied once per subquery = 6 args.
+		Expect(args).To(HaveLen(6))
+	})
+})
