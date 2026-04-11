@@ -773,7 +773,6 @@ type cfProgressMsg struct {
 	processed      int
 	total          int
 	diffCount      int
-	done           bool
 }
 
 // cfDoneMsg signals the comparison finished or errored.
@@ -902,6 +901,7 @@ func (m cfModel) View() tea.View {
 
 	if m.total > 0 {
 		fmt.Fprintf(&b, "%s  %d / %d date_keys   diffs so far: %d\n", pad, m.processed, m.total, m.diffCount)
+
 		if !m.currentDK.IsZero() {
 			fmt.Fprintf(&b, "%s  current: %s\n", pad, m.currentDK.Format("2006-01-02"))
 		}
@@ -936,23 +936,6 @@ tolerance plus an absolute tolerance floor.`,
 func runCompareFundamentals(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 
-	myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
-	if err != nil {
-		log.Fatal().Err(err).Msg("could not connect to library")
-	}
-
-	defer myLibrary.Close()
-
-	subs, err := myLibrary.Subscriptions(ctx)
-	if err != nil {
-		log.Fatal().Err(err).Msg("could not load subscriptions")
-	}
-
-	secTable, sharadarTable, err := discoverFundamentalsSubscriptions(subs)
-	if err != nil {
-		log.Fatal().Err(err).Msg("could not discover fundamentals subscriptions")
-	}
-
 	raw := rawCompareFlags{
 		tickers:    viper.GetStringSlice("compare-fundamentals.ticker"),
 		since:      viper.GetString("compare-fundamentals.since"),
@@ -968,6 +951,23 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 	opts, err := resolveCompareOptions(raw)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid compare-fundamentals options")
+	}
+
+	myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("could not connect to library")
+	}
+
+	defer myLibrary.Close()
+
+	subs, err := myLibrary.Subscriptions(ctx)
+	if err != nil {
+		log.Fatal().Err(err).Msg("could not load subscriptions")
+	}
+
+	secTable, sharadarTable, err := discoverFundamentalsSubscriptions(subs)
+	if err != nil {
+		log.Fatal().Err(err).Msg("could not discover fundamentals subscriptions")
 	}
 
 	var (
