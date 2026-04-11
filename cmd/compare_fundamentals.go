@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -942,7 +943,177 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 
 	defer myLibrary.Close()
 
-	_ = ctx
+	subs, err := myLibrary.Subscriptions(ctx)
+	if err != nil {
+		log.Fatal().Err(err).Msg("could not load subscriptions")
+	}
+
+	secTable, sharadarTable, err := discoverFundamentalsSubscriptions(subs)
+	if err != nil {
+		log.Fatal().Err(err).Msg("could not discover fundamentals subscriptions")
+	}
+
+	raw := rawCompareFlags{
+		tickers:    viper.GetStringSlice("compare-fundamentals.ticker"),
+		since:      viper.GetString("compare-fundamentals.since"),
+		until:      viper.GetString("compare-fundamentals.until"),
+		dimensions: viper.GetStringSlice("compare-fundamentals.dimension"),
+		fields:     viper.GetStringSlice("compare-fundamentals.fields"),
+		relTol:     viper.GetFloat64("compare-fundamentals.rel-tol"),
+		absTol:     viper.GetFloat64("compare-fundamentals.abs-tol"),
+		format:     viper.GetString("compare-fundamentals.format"),
+		output:     viper.GetString("compare-fundamentals.output"),
+	}
+
+	opts, err := resolveCompareOptions(raw)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid compare-fundamentals options")
+	}
+
+	var (
+		sink     io.Writer = os.Stdout
+		sinkFile *os.File
+	)
+
+	if opts.output != "" {
+		f, ferr := os.Create(opts.output)
+		if ferr != nil {
+			log.Fatal().Err(ferr).Str("path", opts.output).Msg("could not open output file")
+		}
+
+		sink = f
+		sinkFile = f
+	}
+
+	var writer diffWriter
+
+	switch opts.format {
+	case "csv":
+		writer = newCSVDiffWriter(sink)
+	default:
+		writer = newTextDiffWriter(sink)
+	}
+
+	progressCh := make(chan cfProgressMsg, 8)
+	doneCh := make(chan error, 1)
+
+	var totalDiffs int
+
+	go func() {
+		defer close(progressCh)
+
+		err := runComparison(ctx, myLibrary, secTable, sharadarTable, opts, writer, progressCh, &totalDiffs)
+		doneCh <- err
+	}()
+
+	program := tea.NewProgram(newCFModel(progressCh, doneCh))
+	if _, runErr := program.Run(); runErr != nil {
+		log.Error().Err(runErr).Msg("TUI error")
+	}
+
+	if cerr := writer.Close(); cerr != nil {
+		log.Error().Err(cerr).Msg("closing diff writer")
+	}
+
+	if sinkFile != nil {
+		if cerr := sinkFile.Close(); cerr != nil {
+			log.Error().Err(cerr).Msg("closing output file")
+		}
+	}
+}
+
+// runComparison fetches date_keys, loads rows per date_key from both tables,
+// diffs them, and emits diffs to `writer`. It sends progress updates on
+// progressCh but does not close it (the caller closes it when this returns).
+func runComparison(
+	ctx context.Context,
+	myLibrary *library.Library,
+	secTable, sharadarTable string,
+	opts compareOptions,
+	writer diffWriter,
+	progressCh chan<- cfProgressMsg,
+	totalDiffs *int,
+) error {
+	// Phase 1 — date_keys.
+	dkSQL, dkArgs := buildDateKeyQuery(secTable, sharadarTable, opts)
+
+	dkRows, err := myLibrary.Pool.Query(ctx, dkSQL, dkArgs...)
+	if err != nil {
+		return fmt.Errorf("query date_keys: %w", err)
+	}
+
+	var dateKeys []time.Time
+
+	for dkRows.Next() {
+		var dk time.Time
+		if err := dkRows.Scan(&dk); err != nil {
+			dkRows.Close()
+
+			return fmt.Errorf("scan date_key: %w", err)
+		}
+
+		dateKeys = append(dateKeys, dk)
+	}
+
+	dkRows.Close()
+
+	if err := dkRows.Err(); err != nil {
+		return fmt.Errorf("date_key rows: %w", err)
+	}
+
+	total := len(dateKeys)
+
+	progressCh <- cfProgressMsg{total: total}
+
+	// Phase 2 — per date_key.
+	secSQL := buildRowQuery(secTable, opts)
+	sharadarSQL := buildRowQuery(sharadarTable, opts)
+
+	for i, dk := range dateKeys {
+		args := buildRowQueryArgs(opts, dk)
+
+		secRowsPgx, err := myLibrary.Pool.Query(ctx, secSQL, args...)
+		if err != nil {
+			return fmt.Errorf("query sec rows: %w", err)
+		}
+
+		secRows, err := scanRows(secRowsPgx, opts.fields)
+		secRowsPgx.Close()
+
+		if err != nil {
+			return fmt.Errorf("scan sec rows: %w", err)
+		}
+
+		shRowsPgx, err := myLibrary.Pool.Query(ctx, sharadarSQL, args...)
+		if err != nil {
+			return fmt.Errorf("query sharadar rows: %w", err)
+		}
+
+		sharadarRows, err := scanRows(shRowsPgx, opts.fields)
+		shRowsPgx.Close()
+
+		if err != nil {
+			return fmt.Errorf("scan sharadar rows: %w", err)
+		}
+
+		diffs := diffRowSet(secRows, sharadarRows, opts.fields, opts.relTol, opts.absTol)
+		for _, rec := range diffs {
+			if err := writer.Write(rec); err != nil {
+				return fmt.Errorf("write diff: %w", err)
+			}
+		}
+
+		*totalDiffs += len(diffs)
+
+		progressCh <- cfProgressMsg{
+			currentDateKey: dk,
+			processed:      i + 1,
+			total:          total,
+			diffCount:      *totalDiffs,
+		}
+	}
+
+	return nil
 }
 
 func init() {
