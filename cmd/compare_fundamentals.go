@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
@@ -439,6 +441,84 @@ func buildRowQueryArgs(opts compareOptions, dateKey time.Time) []any {
 	args = append(args, dateKey)
 
 	return args
+}
+
+// scanRows reads all rows from `rows` into fundamentalRow values. The caller is
+// responsible for closing `rows`.
+func scanRows(rows pgx.Rows, fields []fundamentalField) ([]*fundamentalRow, error) {
+	var out []*fundamentalRow
+
+	for rows.Next() {
+		var (
+			ticker   string
+			figi     string
+			dim      string
+			dk       time.Time
+			ints     = make([]*int64, 0, len(fields))
+			numerics = make([]*pgtype.Numeric, 0, len(fields))
+		)
+
+		dests := []any{&ticker, &figi, &dim, &dk}
+
+		for _, f := range fields {
+			switch f.kind {
+			case kindInt:
+				var p *int64
+
+				ints = append(ints, p)
+				dests = append(dests, &ints[len(ints)-1])
+			case kindFloat:
+				n := &pgtype.Numeric{}
+				numerics = append(numerics, n)
+				dests = append(dests, n)
+			}
+		}
+
+		if err := rows.Scan(dests...); err != nil {
+			return nil, err
+		}
+
+		row := &fundamentalRow{
+			ticker:        ticker,
+			compositeFigi: figi,
+			dimension:     dim,
+			dateKey:       dk,
+			values:        make([]*float64, len(fields)),
+		}
+
+		intIdx, numIdx := 0, 0
+
+		for i, f := range fields {
+			switch f.kind {
+			case kindInt:
+				if ints[intIdx] != nil {
+					v := float64(*ints[intIdx])
+					row.values[i] = &v
+				}
+
+				intIdx++
+			case kindFloat:
+				n := numerics[numIdx]
+				if n.Valid {
+					f64, err := n.Float64Value()
+					if err != nil {
+						return nil, fmt.Errorf("numeric conversion for %s: %w", f.column, err)
+					}
+
+					if f64.Valid {
+						v := f64.Float64
+						row.values[i] = &v
+					}
+				}
+
+				numIdx++
+			}
+		}
+
+		out = append(out, row)
+	}
+
+	return out, rows.Err()
 }
 
 var compareFundamentalsCmd = &cobra.Command{
