@@ -321,6 +321,7 @@ func resolveCompareOptions(raw rawCompareFlags) (compareOptions, error) {
 // tickers/dimensions/date range if configured.
 func buildDateKeyQuery(secTable, sharadarTable string, opts compareOptions) (string, []interface{}) {
 	var args []interface{}
+
 	placeholder := func(v interface{}) string {
 		args = append(args, v)
 
