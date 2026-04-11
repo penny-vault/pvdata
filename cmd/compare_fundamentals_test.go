@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/library"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -109,5 +110,96 @@ var _ = Describe("valuesDiffer", func() {
 			a, b := 0.0, 0.0001
 			Expect(valuesDiffer(&a, &b, 0.0001, 0)).To(BeTrue())
 		})
+	})
+})
+
+var _ = Describe("discoverFundamentalsSubscriptions", func() {
+	It("returns the sec and sharadar tables when exactly one of each exists", func() {
+		subs := []*library.Subscription{
+			{
+				Name: "sec-fundamentals", Provider: "sec", Active: true,
+				DataTypes:     []string{data.FundamentalsKey},
+				DataTables:    []string{"sec_fundamentals_v1"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "sec_fundamentals_v1"},
+			},
+			{
+				Name: "sharadar-fundamentals", Provider: "sharadar", Active: true,
+				DataTypes:     []string{data.FundamentalsKey},
+				DataTables:    []string{"sharadar_fundamentals_v1"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "sharadar_fundamentals_v1"},
+			},
+			{
+				Name: "tiingo-eod", Provider: "tiingo", Active: true,
+				DataTypes: []string{data.EODKey},
+			},
+		}
+
+		secTbl, sharadarTbl, err := discoverFundamentalsSubscriptions(subs)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(secTbl).To(Equal("sec_fundamentals_v1"))
+		Expect(sharadarTbl).To(Equal("sharadar_fundamentals_v1"))
+	})
+
+	It("errors when the sec subscription is missing", func() {
+		subs := []*library.Subscription{
+			{
+				Name: "sharadar-fundamentals", Provider: "sharadar", Active: true,
+				DataTypes:     []string{data.FundamentalsKey},
+				DataTables:    []string{"sharadar_fundamentals_v1"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "sharadar_fundamentals_v1"},
+			},
+		}
+
+		_, _, err := discoverFundamentalsSubscriptions(subs)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("sec"))
+	})
+
+	It("errors when multiple sec subscriptions match", func() {
+		subs := []*library.Subscription{
+			{
+				Name: "sec-a", Provider: "sec", Active: true,
+				DataTypes: []string{data.FundamentalsKey}, DataTables: []string{"a"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "a"},
+			},
+			{
+				Name: "sec-b", Provider: "sec", Active: true,
+				DataTypes: []string{data.FundamentalsKey}, DataTables: []string{"b"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "b"},
+			},
+			{
+				Name: "sharadar-a", Provider: "sharadar", Active: true,
+				DataTypes: []string{data.FundamentalsKey}, DataTables: []string{"c"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "c"},
+			},
+		}
+
+		_, _, err := discoverFundamentalsSubscriptions(subs)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("multiple"))
+	})
+
+	It("ignores inactive subscriptions when picking a match", func() {
+		subs := []*library.Subscription{
+			{
+				Name: "sec-old", Provider: "sec", Active: false,
+				DataTypes: []string{data.FundamentalsKey}, DataTables: []string{"old"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "old"},
+			},
+			{
+				Name: "sec-new", Provider: "sec", Active: true,
+				DataTypes: []string{data.FundamentalsKey}, DataTables: []string{"new"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "new"},
+			},
+			{
+				Name: "sharadar", Provider: "sharadar", Active: true,
+				DataTypes: []string{data.FundamentalsKey}, DataTables: []string{"sh"},
+				DataTablesMap: map[string]string{data.FundamentalsKey: "sh"},
+			},
+		}
+
+		secTbl, _, err := discoverFundamentalsSubscriptions(subs)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(secTbl).To(Equal("new"))
 	})
 })

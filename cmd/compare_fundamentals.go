@@ -16,8 +16,11 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -176,6 +179,63 @@ func valuesDiffer(a, b *float64, relTol, absTol float64) bool {
 	}
 
 	return diff/denom > relTol
+}
+
+// discoverFundamentalsSubscriptions scans the supplied subscriptions and
+// returns the table names for the single active sec and sharadar subscriptions
+// that publish the fundamentals data type. Errors out if either is missing,
+// inactive-only, or present more than once.
+func discoverFundamentalsSubscriptions(subs []*library.Subscription) (secTable, sharadarTable string, err error) {
+	var (
+		secMatches      []*library.Subscription
+		sharadarMatches []*library.Subscription
+	)
+
+	for _, sub := range subs {
+		if !sub.Active {
+			continue
+		}
+
+		tbl, ok := sub.DataTablesMap[data.FundamentalsKey]
+		if !ok || tbl == "" {
+			continue
+		}
+
+		switch sub.Provider {
+		case "sec":
+			secMatches = append(secMatches, sub)
+		case "sharadar":
+			sharadarMatches = append(sharadarMatches, sub)
+		}
+	}
+
+	if len(secMatches) == 0 {
+		return "", "", fmt.Errorf("no active sec subscription with data type %q found", data.FundamentalsKey)
+	}
+
+	if len(secMatches) > 1 {
+		names := make([]string, 0, len(secMatches))
+		for _, s := range secMatches {
+			names = append(names, s.Name)
+		}
+
+		return "", "", fmt.Errorf("multiple active sec subscriptions with data type %q: %s", data.FundamentalsKey, strings.Join(names, ", "))
+	}
+
+	if len(sharadarMatches) == 0 {
+		return "", "", fmt.Errorf("no active sharadar subscription with data type %q found", data.FundamentalsKey)
+	}
+
+	if len(sharadarMatches) > 1 {
+		names := make([]string, 0, len(sharadarMatches))
+		for _, s := range sharadarMatches {
+			names = append(names, s.Name)
+		}
+
+		return "", "", fmt.Errorf("multiple active sharadar subscriptions with data type %q: %s", data.FundamentalsKey, strings.Join(names, ", "))
+	}
+
+	return secMatches[0].DataTablesMap[data.FundamentalsKey], sharadarMatches[0].DataTablesMap[data.FundamentalsKey], nil
 }
 
 var compareFundamentalsCmd = &cobra.Command{
