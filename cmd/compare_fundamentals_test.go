@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/csv"
 	"fmt"
 	"strings"
 	"time"
@@ -388,3 +390,107 @@ var _ = Describe("diffRowSet", func() {
 		Expect(recs).To(HaveLen(2))
 	})
 })
+
+var _ = Describe("textDiffWriter", func() {
+	mustPtr := func(v float64) *float64 { return &v }
+
+	It("renders a field diff with ticker/figi/date_key/dimension and values", func() {
+		dk, err := time.Parse("2006-01-02", "2023-03-31")
+		Expect(err).NotTo(HaveOccurred())
+
+		rec := diffRecord{
+			kind:          diffField,
+			ticker:        "AAPL",
+			compositeFigi: "BBG000B9XRY4",
+			dimension:     "ARQ",
+			dateKey:       dk,
+			field:         "revenues",
+			secValue:      mustPtr(100),
+			sharadarValue: mustPtr(200),
+		}
+
+		var buf bytes.Buffer
+
+		w := newTextDiffWriter(&buf)
+		Expect(w.Write(rec)).To(Succeed())
+
+		out := buf.String()
+		for _, want := range []string{"AAPL", "BBG000B9XRY4", "2023-03-31", "ARQ", "revenues", "100", "200"} {
+			Expect(out).To(ContainSubstring(want))
+		}
+	})
+
+	It("renders a missing-in-sharadar record", func() {
+		dk, err := time.Parse("2006-01-02", "2023-03-31")
+		Expect(err).NotTo(HaveOccurred())
+
+		rec := diffRecord{
+			kind: diffMissingShar, ticker: "AAPL", compositeFigi: "BBG1",
+			dimension: "ARQ", dateKey: dk,
+		}
+
+		var buf bytes.Buffer
+
+		w := newTextDiffWriter(&buf)
+		Expect(w.Write(rec)).To(Succeed())
+		Expect(buf.String()).To(ContainSubstring("missing in sharadar"))
+	})
+})
+
+var _ = Describe("csvDiffWriter", func() {
+	mustPtr := func(v float64) *float64 { return &v }
+
+	It("emits a header row when closed with no records", func() {
+		var buf bytes.Buffer
+
+		w := newCSVDiffWriter(&buf)
+		Expect(w.Close()).To(Succeed())
+
+		reader := csv.NewReader(&buf)
+		row, err := reader.Read()
+		Expect(err).NotTo(HaveOccurred())
+
+		want := []string{"ticker", "composite_figi", "dimension", "date_key", "kind", "field", "sec_value", "sharadar_value", "abs_diff", "rel_diff"}
+		Expect(row).To(Equal(want))
+	})
+
+	It("emits a field-diff row with expected columns", func() {
+		dk, err := time.Parse("2006-01-02", "2023-03-31")
+		Expect(err).NotTo(HaveOccurred())
+
+		rec := diffRecord{
+			kind:          diffField,
+			ticker:        "AAPL",
+			compositeFigi: "BBG000B9XRY4",
+			dimension:     "ARQ",
+			dateKey:       dk,
+			field:         "revenues",
+			secValue:      mustPtr(100),
+			sharadarValue: mustPtr(200),
+		}
+
+		var buf bytes.Buffer
+
+		w := newCSVDiffWriter(&buf)
+		Expect(w.Write(rec)).To(Succeed())
+		Expect(w.Close()).To(Succeed())
+
+		reader := csv.NewReader(&buf)
+		_, _ = reader.Read() // header
+
+		row, err := reader.Read()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(row[0]).To(Equal("AAPL"))
+		Expect(row[1]).To(Equal("BBG000B9XRY4"))
+		Expect(row[4]).To(Equal("diff"))
+		Expect(row[5]).To(Equal("revenues"))
+		Expect(row[6]).To(Equal("100"))
+		Expect(row[7]).To(Equal("200"))
+	})
+})
+
+// Compile-time check that both writers implement the diffWriter interface.
+var (
+	_ diffWriter = (*textDiffWriter)(nil)
+	_ diffWriter = (*csvDiffWriter)(nil)
+)

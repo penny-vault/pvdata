@@ -16,7 +16,9 @@ package cmd
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strings"
@@ -617,6 +619,149 @@ func diffRowSet(secRows, sharadarRows []*fundamentalRow, fields []fundamentalFie
 	})
 
 	return out
+}
+
+type diffWriter interface {
+	Write(rec diffRecord) error
+	Close() error
+}
+
+type textDiffWriter struct {
+	w       io.Writer
+	lastKey string
+}
+
+func newTextDiffWriter(w io.Writer) *textDiffWriter {
+	return &textDiffWriter{w: w}
+}
+
+func (t *textDiffWriter) Write(rec diffRecord) error {
+	header := fmt.Sprintf("%s  %s  %s  %s",
+		rec.ticker, rec.compositeFigi, rec.dateKey.Format("2006-01-02"), rec.dimension)
+
+	if header != t.lastKey {
+		if t.lastKey != "" {
+			if _, err := fmt.Fprintln(t.w); err != nil {
+				return err
+			}
+		}
+
+		if _, err := fmt.Fprintln(t.w, header); err != nil {
+			return err
+		}
+
+		t.lastKey = header
+	}
+
+	switch rec.kind {
+	case diffField:
+		absDiff, relDiff := diffStats(rec.secValue, rec.sharadarValue)
+		_, err := fmt.Fprintf(t.w, "  %-50s sec=%s  sharadar=%s  abs=%s  rel=%.6f\n",
+			rec.field, formatValue(rec.secValue), formatValue(rec.sharadarValue), formatValue(&absDiff), relDiff)
+
+		return err
+	case diffMissingSec:
+		_, err := fmt.Fprintln(t.w, "  (missing in sec)")
+
+		return err
+	case diffMissingShar:
+		_, err := fmt.Fprintln(t.w, "  (missing in sharadar)")
+
+		return err
+	}
+
+	return nil
+}
+
+func (t *textDiffWriter) Close() error { return nil }
+
+type csvDiffWriter struct {
+	w    *csv.Writer
+	init bool
+}
+
+func newCSVDiffWriter(w io.Writer) *csvDiffWriter {
+	return &csvDiffWriter{w: csv.NewWriter(w)}
+}
+
+func (c *csvDiffWriter) writeHeader() error {
+	if c.init {
+		return nil
+	}
+
+	c.init = true
+
+	return c.w.Write([]string{"ticker", "composite_figi", "dimension", "date_key", "kind", "field", "sec_value", "sharadar_value", "abs_diff", "rel_diff"})
+}
+
+func (c *csvDiffWriter) Write(rec diffRecord) error {
+	if err := c.writeHeader(); err != nil {
+		return err
+	}
+
+	kind := ""
+	field := ""
+	secVal := ""
+	shVal := ""
+	absStr := ""
+	relStr := ""
+
+	switch rec.kind {
+	case diffField:
+		kind = "diff"
+		field = rec.field
+		secVal = formatValue(rec.secValue)
+		shVal = formatValue(rec.sharadarValue)
+		ad, rd := diffStats(rec.secValue, rec.sharadarValue)
+		absStr = formatValue(&ad)
+		relStr = fmt.Sprintf("%.6f", rd)
+	case diffMissingSec:
+		kind = "missing_in_sec"
+	case diffMissingShar:
+		kind = "missing_in_sharadar"
+	}
+
+	return c.w.Write([]string{
+		rec.ticker, rec.compositeFigi, rec.dimension, rec.dateKey.Format("2006-01-02"),
+		kind, field, secVal, shVal, absStr, relStr,
+	})
+}
+
+func (c *csvDiffWriter) Close() error {
+	if err := c.writeHeader(); err != nil {
+		return err
+	}
+
+	c.w.Flush()
+
+	return c.w.Error()
+}
+
+// formatValue renders a *float64 as either an empty string (for NULL), a
+// decimal integer (for whole numbers), or a fixed-precision float.
+func formatValue(v *float64) string {
+	if v == nil {
+		return ""
+	}
+
+	if *v == math.Trunc(*v) && math.Abs(*v) < 1e18 {
+		return fmt.Sprintf("%d", int64(*v))
+	}
+
+	return fmt.Sprintf("%g", *v)
+}
+
+// diffStats returns (|a-b|, |a-b|/max(|a|,|b|)). Caller must ensure a and b
+// are both non-nil.
+func diffStats(a, b *float64) (absDiff, relDiff float64) {
+	absDiff = math.Abs(*a - *b)
+
+	denom := math.Max(math.Abs(*a), math.Abs(*b))
+	if denom > 0 {
+		relDiff = absDiff / denom
+	}
+
+	return
 }
 
 var compareFundamentalsCmd = &cobra.Command{
