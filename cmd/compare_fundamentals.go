@@ -23,6 +23,130 @@ import (
 	"github.com/spf13/viper"
 )
 
+type fieldKind int
+
+const (
+	kindInt fieldKind = iota
+	kindFloat
+)
+
+type fundamentalField struct {
+	column string
+	kind   fieldKind
+}
+
+// fundamentalFields enumerates every numeric column of the fundamentals table
+// in the same order as data/datatype.go FundamentalsKey schema.
+var fundamentalFields = []fundamentalField{
+	{"accumulated_other_comprehensive_income", kindInt},
+	{"total_assets", kindInt},
+	{"average_assets", kindInt},
+	{"current_assets", kindInt},
+	{"assets_non_current", kindInt},
+	{"asset_turnover", kindFloat},
+	{"book_value_per_share", kindFloat},
+	{"capital_expenditure", kindInt},
+	{"cash_and_equivalents", kindInt},
+	{"cost_of_revenue", kindInt},
+	{"consolidated_income", kindInt},
+	{"current_ratio", kindFloat},
+	{"debt_to_equity_ratio", kindFloat},
+	{"total_debt", kindInt},
+	{"debt_current", kindInt},
+	{"debt_non_current", kindInt},
+	{"deferred_revenue", kindInt},
+	{"depreciation_amortization_and_accretion", kindInt},
+	{"deposits", kindInt},
+	{"dividend_yield", kindFloat},
+	{"dividends_per_basic_common_share", kindFloat},
+	{"ebit", kindInt},
+	{"ebitda", kindInt},
+	{"ebitda_margin", kindFloat},
+	{"ebt", kindInt},
+	{"eps", kindFloat},
+	{"eps_diluted", kindFloat},
+	{"equity", kindInt},
+	{"equity_avg", kindInt},
+	{"enterprise_value", kindInt},
+	{"ev_to_ebit", kindInt},
+	{"ev_to_ebitda", kindFloat},
+	{"free_cash_flow", kindInt},
+	{"free_cash_flow_per_share", kindFloat},
+	{"fx_usd", kindFloat},
+	{"gross_profit", kindInt},
+	{"gross_margin", kindFloat},
+	{"intangibles", kindInt},
+	{"interest_expense", kindInt},
+	{"invested_capital", kindInt},
+	{"invested_capital_average", kindInt},
+	{"inventory", kindInt},
+	{"investments", kindInt},
+	{"investments_current", kindInt},
+	{"investments_non_current", kindInt},
+	{"total_liabilities", kindInt},
+	{"current_liabilities", kindInt},
+	{"liabilities_non_current", kindInt},
+	{"market_capitalization", kindInt},
+	{"net_cash_flow", kindInt},
+	{"net_cash_flow_business", kindInt},
+	{"net_cash_flow_common", kindInt},
+	{"net_cash_flow_debt", kindInt},
+	{"net_cash_flow_dividend", kindInt},
+	{"net_cash_flow_from_financing", kindInt},
+	{"net_cash_flow_from_investing", kindInt},
+	{"net_cash_flow_invest", kindInt},
+	{"net_cash_flow_from_operations", kindInt},
+	{"net_cash_flow_fx", kindInt},
+	{"net_income", kindInt},
+	{"net_income_common_stock", kindInt},
+	{"net_loss_income_discontinued_operations", kindInt},
+	{"net_income_to_non_controlling_interests", kindInt},
+	{"profit_margin", kindFloat},
+	{"operating_expenses", kindInt},
+	{"operating_income", kindInt},
+	{"payables", kindInt},
+	{"payout_ratio", kindFloat},
+	{"pb", kindFloat},
+	{"pe", kindFloat},
+	{"pe1", kindFloat},
+	{"property_plant_and_equipment_net", kindInt},
+	{"preferred_dividends_income_statement_impact", kindInt},
+	{"price", kindFloat},
+	{"ps", kindFloat},
+	{"ps1", kindFloat},
+	{"receivables", kindInt},
+	{"accumulated_retained_earnings_deficit", kindInt},
+	{"revenues", kindInt},
+	{"r_and_d_expenses", kindInt},
+	{"roa", kindFloat},
+	{"roe", kindFloat},
+	{"roic", kindFloat},
+	{"return_on_sales", kindFloat},
+	{"share_based_compensation", kindInt},
+	{"selling_general_and_administrative_expense", kindInt},
+	{"share_factor", kindFloat},
+	{"shares_basic", kindInt},
+	{"weighted_average_shares", kindInt},
+	{"weighted_average_shares_diluted", kindInt},
+	{"sales_per_share", kindFloat},
+	{"tangible_asset_value", kindInt},
+	{"tax_assets", kindInt},
+	{"income_tax_expense", kindInt},
+	{"tax_liabilities", kindInt},
+	{"tangible_assets_book_value_per_share", kindFloat},
+	{"working_capital", kindInt},
+}
+
+func fieldByName(name string) (fundamentalField, bool) {
+	for _, f := range fundamentalFields {
+		if f.column == name {
+			return f, true
+		}
+	}
+
+	return fundamentalField{}, false
+}
+
 var compareFundamentalsCmd = &cobra.Command{
 	Use:   "compare-fundamentals",
 	Short: "Compare fundamentals rows between the SEC and Sharadar providers",
@@ -48,8 +172,6 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 }
 
 func init() {
-	rootCmd.AddCommand(compareFundamentalsCmd)
-
 	compareFundamentalsCmd.Flags().StringSlice("ticker", nil, "Limit comparison to these tickers (comma-separated)")
 	compareFundamentalsCmd.Flags().String("since", "", "Only compare rows with date_key >= this date (YYYY-MM-DD)")
 	compareFundamentalsCmd.Flags().String("until", "", "Only compare rows with date_key <= this date (YYYY-MM-DD)")
@@ -65,4 +187,6 @@ func init() {
 			log.Panic().Err(err).Str("flag", name).Msg("BindPFlag failed for compare-fundamentals")
 		}
 	}
+
+	rootCmd.AddCommand(compareFundamentalsCmd)
 }
