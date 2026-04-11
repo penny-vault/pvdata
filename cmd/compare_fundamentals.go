@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/progress"
+	tea "charm.land/bubbletea/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/penny-vault/pvdata/data"
@@ -762,6 +764,161 @@ func diffStats(a, b *float64) (absDiff, relDiff float64) {
 	}
 
 	return
+}
+
+// cfProgressMsg reports progress from the comparison goroutine.
+type cfProgressMsg struct {
+	currentDateKey time.Time
+	processed      int
+	total          int
+	diffCount      int
+	done           bool
+}
+
+// cfDoneMsg signals the comparison finished or errored.
+type cfDoneMsg struct {
+	err error
+}
+
+type cfModel struct {
+	progress   progress.Model
+	progressCh <-chan cfProgressMsg
+	doneCh     <-chan error
+	currentDK  time.Time
+	processed  int
+	total      int
+	diffCount  int
+	startTime  time.Time
+	err        error
+	done       bool
+	width      int
+}
+
+const (
+	cfProgressPadding  = 2
+	cfProgressMaxWidth = 72
+)
+
+func newCFModel(progressCh <-chan cfProgressMsg, doneCh <-chan error) cfModel {
+	return cfModel{
+		progress:   progress.New(progress.WithDefaultBlend()),
+		progressCh: progressCh,
+		doneCh:     doneCh,
+		startTime:  time.Now(),
+	}
+}
+
+type cfTickMsg time.Time
+
+func (m cfModel) Init() tea.Cmd {
+	return tea.Batch(m.waitForProgress(), cfTickCmd())
+}
+
+func cfTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return cfTickMsg(t) })
+}
+
+func (m cfModel) waitForProgress() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case msg, ok := <-m.progressCh:
+			if !ok {
+				err := <-m.doneCh
+
+				return cfDoneMsg{err: err}
+			}
+
+			return msg
+		case err := <-m.doneCh:
+			return cfDoneMsg{err: err}
+		}
+	}
+}
+
+func (m cfModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+
+		return m, nil
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width - cfProgressPadding*2 - 4
+		if m.width > cfProgressMaxWidth {
+			m.width = cfProgressMaxWidth
+		}
+
+		m.progress.SetWidth(m.width)
+
+		return m, nil
+
+	case cfProgressMsg:
+		m.currentDK = msg.currentDateKey
+		m.processed = msg.processed
+		m.total = msg.total
+		m.diffCount = msg.diffCount
+
+		var pct float64
+		if m.total > 0 {
+			pct = float64(m.processed) / float64(m.total)
+		}
+
+		cmd := m.progress.SetPercent(pct)
+
+		return m, tea.Batch(m.waitForProgress(), cmd)
+
+	case cfDoneMsg:
+		m.done = true
+		m.err = msg.err
+
+		return m, tea.Quit
+
+	case cfTickMsg:
+		return m, cfTickCmd()
+
+	case progress.FrameMsg:
+		var cmd tea.Cmd
+
+		m.progress, cmd = m.progress.Update(msg)
+
+		return m, cmd
+
+	default:
+		return m, nil
+	}
+}
+
+func (m cfModel) View() tea.View {
+	pad := strings.Repeat(" ", cfProgressPadding)
+
+	var b strings.Builder
+
+	elapsed := time.Since(m.startTime).Truncate(time.Second)
+
+	fmt.Fprintf(&b, "\n%sComparing fundamentals (%s elapsed)\n\n", pad, elapsed)
+
+	if m.total > 0 {
+		fmt.Fprintf(&b, "%s  %d / %d date_keys   diffs so far: %d\n", pad, m.processed, m.total, m.diffCount)
+		if !m.currentDK.IsZero() {
+			fmt.Fprintf(&b, "%s  current: %s\n", pad, m.currentDK.Format("2006-01-02"))
+		}
+
+		b.WriteString(pad + "  " + m.progress.View() + "\n")
+	}
+
+	if m.done {
+		b.WriteString("\n")
+
+		if m.err != nil {
+			fmt.Fprintf(&b, "%s  Comparison failed: %v\n", pad, m.err)
+		} else {
+			fmt.Fprintf(&b, "%s  Comparison complete. Total diffs: %d\n", pad, m.diffCount)
+		}
+	}
+
+	return tea.NewView(b.String())
 }
 
 var compareFundamentalsCmd = &cobra.Command{
