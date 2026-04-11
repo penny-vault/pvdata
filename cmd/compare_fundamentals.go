@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"math"
 
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
@@ -145,6 +146,36 @@ func fieldByName(name string) (fundamentalField, bool) {
 	}
 
 	return fundamentalField{}, false
+}
+
+// valuesDiffer returns true when a and b differ by more than the configured
+// tolerance. A nil pointer represents SQL NULL. Two nulls are equal; a null
+// compared to a non-null value always differs. Non-null values satisfy
+// "not different" when either |a-b| <= absTol OR |a-b| / max(|a|,|b|) <= relTol.
+func valuesDiffer(a, b *float64, relTol, absTol float64) bool {
+	if a == nil && b == nil {
+		return false
+	}
+
+	if a == nil || b == nil {
+		return true
+	}
+
+	diff := math.Abs(*a - *b)
+	if diff == 0 {
+		return false
+	}
+
+	if diff <= absTol {
+		return false
+	}
+
+	denom := math.Max(math.Abs(*a), math.Abs(*b))
+	if denom == 0 {
+		return true
+	}
+
+	return diff/denom > relTol
 }
 
 var compareFundamentalsCmd = &cobra.Command{

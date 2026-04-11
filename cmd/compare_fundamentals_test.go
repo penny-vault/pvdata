@@ -60,3 +60,68 @@ func TestFieldByName(t *testing.T) {
 		t.Errorf("did not expect to find not_a_field")
 	}
 }
+
+func TestValuesDifferBothNull(t *testing.T) {
+	if valuesDiffer(nil, nil, 0.0001, 0) {
+		t.Errorf("two nulls should not differ")
+	}
+}
+
+func TestValuesDifferOneNull(t *testing.T) {
+	v := 5.0
+
+	if !valuesDiffer(&v, nil, 0.0001, 0) {
+		t.Errorf("null vs non-null should differ")
+	}
+
+	if !valuesDiffer(nil, &v, 0.0001, 0) {
+		t.Errorf("non-null vs null should differ")
+	}
+}
+
+func TestValuesDifferExact(t *testing.T) {
+	a, b := 100.0, 100.0
+
+	if valuesDiffer(&a, &b, 0.0001, 0) {
+		t.Errorf("equal values should not differ")
+	}
+}
+
+func TestValuesDifferWithinRelTol(t *testing.T) {
+	a, b := 1_000_000.0, 1_000_050.0 // 0.005% difference, under 0.01%
+
+	if valuesDiffer(&a, &b, 0.0001, 0) {
+		t.Errorf("0.005%% diff should be within 0.01%% tolerance")
+	}
+}
+
+func TestValuesDifferOutsideRelTol(t *testing.T) {
+	a, b := 1_000_000.0, 1_001_000.0 // 0.1% difference, above 0.01%
+
+	if !valuesDiffer(&a, &b, 0.0001, 0) {
+		t.Errorf("0.1%% diff should exceed 0.01%% tolerance")
+	}
+}
+
+func TestValuesDifferAbsToleranceFloor(t *testing.T) {
+	a, b := 0.0, 0.5
+	// rel diff would be huge, but abs-tol floor of 1 keeps it within tolerance
+	if valuesDiffer(&a, &b, 0.0001, 1.0) {
+		t.Errorf("|0-0.5|=0.5 should be within abs-tol=1")
+	}
+}
+
+func TestValuesDifferBothZero(t *testing.T) {
+	a, b := 0.0, 0.0
+	if valuesDiffer(&a, &b, 0.0001, 0) {
+		t.Errorf("0 vs 0 should not differ")
+	}
+}
+
+func TestValuesDifferZeroVsSmall(t *testing.T) {
+	a, b := 0.0, 0.0001
+	// With abs-tol=0 and one value zero, max(|a|,|b|) = 0.0001, |diff|/max = 1.0 > rel-tol
+	if !valuesDiffer(&a, &b, 0.0001, 0) {
+		t.Errorf("0 vs 0.0001 should differ when abs-tol=0")
+	}
+}
