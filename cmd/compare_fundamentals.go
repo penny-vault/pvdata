@@ -370,6 +370,77 @@ func buildDateKeyQuery(secTable, sharadarTable string, opts compareOptions) (str
 	return sql, args
 }
 
+// fundamentalRow holds the identifying columns plus one *float64 per numeric
+// field (nil = SQL NULL). The values slice is indexed the same as opts.fields.
+type fundamentalRow struct {
+	ticker        string
+	compositeFigi string
+	dimension     string
+	dateKey       time.Time
+	values        []*float64
+}
+
+// rowKey identifies a row within a single date_key.
+type rowKey struct {
+	compositeFigi string
+	dimension     string
+}
+
+func (r *fundamentalRow) key() rowKey {
+	return rowKey{compositeFigi: r.compositeFigi, dimension: r.dimension}
+}
+
+// buildRowQuery produces the SELECT that fetches all matching rows for a
+// single date_key. Positional args: [filter args..., dateKey].
+func buildRowQuery(table string, opts compareOptions) string {
+	cols := []string{"ticker", "composite_figi", "dimension", "date_key"}
+	for _, f := range opts.fields {
+		cols = append(cols, f.column)
+	}
+
+	var wherePieces []string
+
+	paramIdx := 0
+	nextParam := func() string {
+		paramIdx++
+
+		return fmt.Sprintf("$%d", paramIdx)
+	}
+
+	if len(opts.tickers) > 0 {
+		wherePieces = append(wherePieces, "ticker = ANY("+nextParam()+")")
+	}
+
+	if len(opts.dimensions) > 0 {
+		wherePieces = append(wherePieces, "dimension = ANY("+nextParam()+")")
+	}
+
+	wherePieces = append(wherePieces, "date_key = "+nextParam())
+
+	return fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s",
+		strings.Join(cols, ", "), table, strings.Join(wherePieces, " AND "),
+	)
+}
+
+// buildRowQueryArgs produces the positional argument slice matching
+// buildRowQuery for a specific date_key.
+func buildRowQueryArgs(opts compareOptions, dateKey time.Time) []any {
+	var args []any
+
+	if len(opts.tickers) > 0 {
+		args = append(args, opts.tickers)
+	}
+
+	if len(opts.dimensions) > 0 {
+		args = append(args, opts.dimensions)
+	}
+
+	args = append(args, dateKey)
+
+	return args
+}
+
 var compareFundamentalsCmd = &cobra.Command{
 	Use:   "compare-fundamentals",
 	Short: "Compare fundamentals rows between the SEC and Sharadar providers",

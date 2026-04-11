@@ -291,3 +291,35 @@ var _ = Describe("buildDateKeyQuery", func() {
 		Expect(args).To(HaveLen(6))
 	})
 })
+
+var _ = Describe("buildRowQuery", func() {
+	It("emits the column list in the opts.fields order", func() {
+		opts := compareOptions{fields: []fundamentalField{{"revenues", kindInt}, {"eps", kindFloat}}}
+		sql := buildRowQuery("sec_fund", opts)
+		Expect(sql).To(ContainSubstring("ticker, composite_figi, dimension, date_key, revenues, eps"))
+		Expect(sql).To(HavePrefix("SELECT "))
+		Expect(sql).To(ContainSubstring("FROM sec_fund"))
+	})
+})
+
+var _ = Describe("buildRowQueryArgs", func() {
+	It("yields just the date_key when no filters are configured", func() {
+		dk, err := time.Parse("2006-01-02", "2023-03-31")
+		Expect(err).NotTo(HaveOccurred())
+
+		args := buildRowQueryArgs(compareOptions{}, dk)
+		Expect(args).To(HaveLen(1))
+		Expect(args[0]).To(BeAssignableToTypeOf(time.Time{}))
+	})
+
+	It("includes ticker and dimension filter args ahead of the date_key", func() {
+		dk, err := time.Parse("2006-01-02", "2023-03-31")
+		Expect(err).NotTo(HaveOccurred())
+
+		args := buildRowQueryArgs(compareOptions{
+			tickers:    []string{"AAPL"},
+			dimensions: []string{"ARQ"},
+		}, dk)
+		Expect(args).To(HaveLen(3))
+	})
+})
