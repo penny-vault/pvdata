@@ -323,3 +323,68 @@ var _ = Describe("buildRowQueryArgs", func() {
 		Expect(args).To(HaveLen(3))
 	})
 })
+
+var _ = Describe("diffRowSet", func() {
+	fields := []fundamentalField{{"revenues", kindInt}, {"eps", kindFloat}}
+
+	It("emits one diffRecord per differing field when only one field mismatches", func() {
+		v1, v2 := 100.0, 200.0
+		e1 := 1.5
+
+		sec := []*fundamentalRow{{
+			ticker: "AAPL", compositeFigi: "BBG000B9XRY4", dimension: "ARQ",
+			values: []*float64{&v1, &e1},
+		}}
+		sh := []*fundamentalRow{{
+			ticker: "AAPL", compositeFigi: "BBG000B9XRY4", dimension: "ARQ",
+			values: []*float64{&v2, &e1},
+		}}
+
+		recs := diffRowSet(sec, sh, fields, 0.0001, 0)
+		Expect(recs).To(HaveLen(1))
+		Expect(recs[0].field).To(Equal("revenues"))
+		Expect(*recs[0].secValue).To(Equal(100.0))
+		Expect(*recs[0].sharadarValue).To(Equal(200.0))
+	})
+
+	It("reports missing-in-sharadar when a sec row has no match", func() {
+		oneField := []fundamentalField{{"revenues", kindInt}}
+		v := 100.0
+		sec := []*fundamentalRow{{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&v}}}
+
+		recs := diffRowSet(sec, nil, oneField, 0.0001, 0)
+		Expect(recs).To(HaveLen(1))
+		Expect(recs[0].kind).To(Equal(diffMissingShar))
+	})
+
+	It("reports missing-in-sec when a sharadar row has no match", func() {
+		oneField := []fundamentalField{{"revenues", kindInt}}
+		v := 100.0
+		sh := []*fundamentalRow{{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&v}}}
+
+		recs := diffRowSet(nil, sh, oneField, 0.0001, 0)
+		Expect(recs).To(HaveLen(1))
+		Expect(recs[0].kind).To(Equal(diffMissingSec))
+	})
+
+	It("emits no diffs when rows are identical", func() {
+		oneField := []fundamentalField{{"revenues", kindInt}}
+		v := 100.0
+		sec := []*fundamentalRow{{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&v}}}
+		sh := []*fundamentalRow{{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&v}}}
+
+		recs := diffRowSet(sec, sh, oneField, 0.0001, 0)
+		Expect(recs).To(BeEmpty())
+	})
+
+	It("emits one record per differing field when multiple fields mismatch", func() {
+		rev1, rev2 := 100.0, 200.0
+		eps1, eps2 := 1.0, 2.0
+
+		sec := []*fundamentalRow{{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&rev1, &eps1}}}
+		sh := []*fundamentalRow{{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&rev2, &eps2}}}
+
+		recs := diffRowSet(sec, sh, fields, 0.0001, 0)
+		Expect(recs).To(HaveLen(2))
+	})
+})

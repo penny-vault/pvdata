@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -519,6 +520,103 @@ func scanRows(rows pgx.Rows, fields []fundamentalField) ([]*fundamentalRow, erro
 	}
 
 	return out, rows.Err()
+}
+
+// diffKind distinguishes the three diff record flavors.
+type diffKind int
+
+const (
+	diffField       diffKind = iota // matching row with a field mismatch
+	diffMissingSec                  // row present in sharadar but not sec
+	diffMissingShar                 // row present in sec but not sharadar
+)
+
+type diffRecord struct {
+	kind          diffKind
+	ticker        string
+	compositeFigi string
+	dimension     string
+	dateKey       time.Time
+	field         string   // for diffField
+	secValue      *float64 // for diffField
+	sharadarValue *float64 // for diffField
+}
+
+// diffRowSet diffs the sec and sharadar rows for a single date_key. It returns
+// one diffRecord for every differing field, plus missing-row records for keys
+// present in only one side.
+func diffRowSet(secRows, sharadarRows []*fundamentalRow, fields []fundamentalField, relTol, absTol float64) []diffRecord {
+	secByKey := make(map[rowKey]*fundamentalRow, len(secRows))
+	for _, r := range secRows {
+		secByKey[r.key()] = r
+	}
+
+	sharadarByKey := make(map[rowKey]*fundamentalRow, len(sharadarRows))
+	for _, r := range sharadarRows {
+		sharadarByKey[r.key()] = r
+	}
+
+	var out []diffRecord
+
+	// Rows present in both: per-field comparison.
+	for key, secRow := range secByKey {
+		shRow, ok := sharadarByKey[key]
+		if !ok {
+			out = append(out, diffRecord{
+				kind:          diffMissingShar,
+				ticker:        secRow.ticker,
+				compositeFigi: secRow.compositeFigi,
+				dimension:     secRow.dimension,
+				dateKey:       secRow.dateKey,
+			})
+
+			continue
+		}
+
+		for i, f := range fields {
+			if valuesDiffer(secRow.values[i], shRow.values[i], relTol, absTol) {
+				out = append(out, diffRecord{
+					kind:          diffField,
+					ticker:        secRow.ticker,
+					compositeFigi: secRow.compositeFigi,
+					dimension:     secRow.dimension,
+					dateKey:       secRow.dateKey,
+					field:         f.column,
+					secValue:      secRow.values[i],
+					sharadarValue: shRow.values[i],
+				})
+			}
+		}
+	}
+
+	// Rows present only in sharadar.
+	for key, shRow := range sharadarByKey {
+		if _, ok := secByKey[key]; ok {
+			continue
+		}
+
+		out = append(out, diffRecord{
+			kind:          diffMissingSec,
+			ticker:        shRow.ticker,
+			compositeFigi: shRow.compositeFigi,
+			dimension:     shRow.dimension,
+			dateKey:       shRow.dateKey,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].compositeFigi != out[j].compositeFigi {
+			return out[i].compositeFigi < out[j].compositeFigi
+		}
+
+		if out[i].dimension != out[j].dimension {
+			return out[i].dimension < out[j].dimension
+		}
+
+		return out[i].field < out[j].field
+	})
+
+	return out
 }
 
 var compareFundamentalsCmd = &cobra.Command{
