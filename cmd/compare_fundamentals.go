@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
@@ -236,6 +237,83 @@ func discoverFundamentalsSubscriptions(subs []*library.Subscription) (secTable, 
 	}
 
 	return secMatches[0].DataTablesMap[data.FundamentalsKey], sharadarMatches[0].DataTablesMap[data.FundamentalsKey], nil
+}
+
+type rawCompareFlags struct {
+	tickers    []string
+	since      string
+	until      string
+	dimensions []string
+	fields     []string
+	relTol     float64
+	absTol     float64
+	format     string
+	output     string
+}
+
+type compareOptions struct {
+	tickers    []string
+	since      time.Time
+	until      time.Time
+	dimensions []string
+	fields     []fundamentalField
+	relTol     float64
+	absTol     float64
+	format     string
+	output     string
+}
+
+func resolveCompareOptions(raw rawCompareFlags) (compareOptions, error) {
+	opts := compareOptions{
+		tickers: raw.tickers,
+		relTol:  raw.relTol,
+		absTol:  raw.absTol,
+		format:  raw.format,
+		output:  raw.output,
+	}
+
+	if raw.format != "text" && raw.format != "csv" {
+		return compareOptions{}, fmt.Errorf("invalid --format %q: must be text or csv", raw.format)
+	}
+
+	if raw.since != "" {
+		t, err := time.Parse("2006-01-02", raw.since)
+		if err != nil {
+			return compareOptions{}, fmt.Errorf("invalid --since %q: %w", raw.since, err)
+		}
+
+		opts.since = t
+	}
+
+	if raw.until != "" {
+		t, err := time.Parse("2006-01-02", raw.until)
+		if err != nil {
+			return compareOptions{}, fmt.Errorf("invalid --until %q: %w", raw.until, err)
+		}
+
+		opts.until = t
+	}
+
+	for _, d := range raw.dimensions {
+		opts.dimensions = append(opts.dimensions, strings.ToUpper(strings.TrimSpace(d)))
+	}
+
+	if len(raw.fields) == 0 {
+		opts.fields = append(opts.fields, fundamentalFields...)
+	} else {
+		for _, name := range raw.fields {
+			name = strings.TrimSpace(name)
+
+			f, ok := fieldByName(name)
+			if !ok {
+				return compareOptions{}, fmt.Errorf("unknown fundamental field %q", name)
+			}
+
+			opts.fields = append(opts.fields, f)
+		}
+	}
+
+	return opts, nil
 }
 
 var compareFundamentalsCmd = &cobra.Command{

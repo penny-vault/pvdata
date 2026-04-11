@@ -17,6 +17,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
@@ -203,3 +204,66 @@ var _ = Describe("discoverFundamentalsSubscriptions", func() {
 		Expect(secTbl).To(Equal("new"))
 	})
 })
+
+var _ = Describe("resolveCompareOptions", func() {
+	It("applies defaults: all fields, empty dimensions, zero since/until, text format", func() {
+		raw := rawCompareFlags{relTol: 0.0001, format: "text"}
+
+		opts, err := resolveCompareOptions(raw)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts.relTol).To(Equal(0.0001))
+		Expect(opts.fields).To(HaveLen(len(fundamentalFields)))
+		Expect(opts.dimensions).To(BeEmpty())
+		Expect(opts.format).To(Equal("text"))
+		Expect(opts.since.IsZero()).To(BeTrue())
+		Expect(opts.until.IsZero()).To(BeTrue())
+	})
+
+	It("narrows the field set when --fields is supplied", func() {
+		raw := rawCompareFlags{fields: []string{"revenues", "eps"}, format: "text"}
+
+		opts, err := resolveCompareOptions(raw)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts.fields).To(HaveLen(2))
+		Expect(opts.fields[0].column).To(Equal("revenues"))
+		Expect(opts.fields[1].column).To(Equal("eps"))
+	})
+
+	It("errors when --fields names an unknown column", func() {
+		raw := rawCompareFlags{fields: []string{"not_a_field"}, format: "text"}
+		_, err := resolveCompareOptions(raw)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("errors when --since is not a valid date", func() {
+		raw := rawCompareFlags{since: "not-a-date", format: "text"}
+		_, err := resolveCompareOptions(raw)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("errors when --format is unknown", func() {
+		raw := rawCompareFlags{format: "xml"}
+		_, err := resolveCompareOptions(raw)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("uppercases dimension values", func() {
+		raw := rawCompareFlags{dimensions: []string{"arq", "MRQ"}, format: "text"}
+
+		opts, err := resolveCompareOptions(raw)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts.dimensions).To(Equal([]string{"ARQ", "MRQ"}))
+	})
+
+	It("parses a valid --since and --until into time.Time", func() {
+		raw := rawCompareFlags{since: "2023-01-01", until: "2023-12-31", format: "text"}
+
+		opts, err := resolveCompareOptions(raw)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts.since.Format("2006-01-02")).To(Equal("2023-01-01"))
+		Expect(opts.until.Format("2006-01-02")).To(Equal("2023-12-31"))
+	})
+})
+
+// Keep `time` in use even if no other spec references it directly.
+var _ = time.Time{}
