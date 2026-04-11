@@ -17,111 +17,97 @@ package cmd
 import (
 	"fmt"
 	"strings"
-	"testing"
 
 	"github.com/penny-vault/pvdata/data"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestFundamentalFieldsMatchSchema(t *testing.T) {
-	dt := data.DataTypes[data.FundamentalsKey]
-	if dt == nil {
-		t.Fatalf("FundamentalsKey data type not registered")
-	}
+var _ = Describe("fundamentalFields", func() {
+	It("has every entry present in the FundamentalsKey schema with the correct SQL type", func() {
+		dt := data.DataTypes[data.FundamentalsKey]
+		Expect(dt).NotTo(BeNil(), "FundamentalsKey data type should be registered")
 
-	schema := dt.Schema
+		schema := dt.Schema
 
-	for _, f := range fundamentalFields {
-		var want string
+		for _, f := range fundamentalFields {
+			var want string
 
-		switch f.kind {
-		case kindInt:
-			want = fmt.Sprintf("%s BIGINT", f.column)
-		case kindFloat:
-			want = fmt.Sprintf("%s NUMERIC", f.column)
+			switch f.kind {
+			case kindInt:
+				want = fmt.Sprintf("%s BIGINT", f.column)
+			case kindFloat:
+				want = fmt.Sprintf("%s NUMERIC", f.column)
+			}
+
+			Expect(strings.Contains(schema, want)).To(BeTrue(),
+				"field %q not found in schema with expected type (looking for %q)", f.column, want)
 		}
+	})
+})
 
-		if !strings.Contains(schema, want) {
-			t.Errorf("field %q not found in schema with expected type (looking for %q)", f.column, want)
-		}
-	}
-}
+var _ = Describe("fieldByName", func() {
+	It("returns a known int field", func() {
+		f, ok := fieldByName("revenues")
+		Expect(ok).To(BeTrue())
+		Expect(f.kind).To(Equal(kindInt))
+	})
 
-func TestFieldByName(t *testing.T) {
-	f, ok := fieldByName("revenues")
-	if !ok {
-		t.Fatalf("expected to find revenues field")
-	}
+	It("returns a known float field", func() {
+		f, ok := fieldByName("eps")
+		Expect(ok).To(BeTrue())
+		Expect(f.kind).To(Equal(kindFloat))
+	})
 
-	if f.kind != kindInt {
-		t.Errorf("expected revenues to be kindInt, got %v", f.kind)
-	}
+	It("reports ok=false for an unknown field", func() {
+		_, ok := fieldByName("not_a_field")
+		Expect(ok).To(BeFalse())
+	})
+})
 
-	if _, ok := fieldByName("not_a_field"); ok {
-		t.Errorf("did not expect to find not_a_field")
-	}
-}
+var _ = Describe("valuesDiffer", func() {
+	Context("null handling", func() {
+		It("treats two nils as equal", func() {
+			Expect(valuesDiffer(nil, nil, 0.0001, 0)).To(BeFalse())
+		})
 
-func TestValuesDifferBothNull(t *testing.T) {
-	if valuesDiffer(nil, nil, 0.0001, 0) {
-		t.Errorf("two nulls should not differ")
-	}
-}
+		It("treats nil vs non-nil as different in either order", func() {
+			v := 5.0
+			Expect(valuesDiffer(&v, nil, 0.0001, 0)).To(BeTrue())
+			Expect(valuesDiffer(nil, &v, 0.0001, 0)).To(BeTrue())
+		})
+	})
 
-func TestValuesDifferOneNull(t *testing.T) {
-	v := 5.0
+	Context("numeric comparison", func() {
+		It("returns false for exactly equal values", func() {
+			a, b := 100.0, 100.0
+			Expect(valuesDiffer(&a, &b, 0.0001, 0)).To(BeFalse())
+		})
 
-	if !valuesDiffer(&v, nil, 0.0001, 0) {
-		t.Errorf("null vs non-null should differ")
-	}
+		It("returns false when relative diff is within tolerance", func() {
+			a, b := 1_000_000.0, 1_000_050.0 // 0.005% < 0.01%
+			Expect(valuesDiffer(&a, &b, 0.0001, 0)).To(BeFalse())
+		})
 
-	if !valuesDiffer(nil, &v, 0.0001, 0) {
-		t.Errorf("non-null vs null should differ")
-	}
-}
+		It("returns true when relative diff exceeds tolerance", func() {
+			a, b := 1_000_000.0, 1_001_000.0 // 0.1% > 0.01%
+			Expect(valuesDiffer(&a, &b, 0.0001, 0)).To(BeTrue())
+		})
 
-func TestValuesDifferExact(t *testing.T) {
-	a, b := 100.0, 100.0
+		It("applies the absolute tolerance floor", func() {
+			a, b := 0.0, 0.5
+			Expect(valuesDiffer(&a, &b, 0.0001, 1.0)).To(BeFalse())
+		})
 
-	if valuesDiffer(&a, &b, 0.0001, 0) {
-		t.Errorf("equal values should not differ")
-	}
-}
+		It("treats zero vs zero as equal", func() {
+			a, b := 0.0, 0.0
+			Expect(valuesDiffer(&a, &b, 0.0001, 0)).To(BeFalse())
+		})
 
-func TestValuesDifferWithinRelTol(t *testing.T) {
-	a, b := 1_000_000.0, 1_000_050.0 // 0.005% difference, under 0.01%
-
-	if valuesDiffer(&a, &b, 0.0001, 0) {
-		t.Errorf("0.005%% diff should be within 0.01%% tolerance")
-	}
-}
-
-func TestValuesDifferOutsideRelTol(t *testing.T) {
-	a, b := 1_000_000.0, 1_001_000.0 // 0.1% difference, above 0.01%
-
-	if !valuesDiffer(&a, &b, 0.0001, 0) {
-		t.Errorf("0.1%% diff should exceed 0.01%% tolerance")
-	}
-}
-
-func TestValuesDifferAbsToleranceFloor(t *testing.T) {
-	a, b := 0.0, 0.5
-	// rel diff would be huge, but abs-tol floor of 1 keeps it within tolerance
-	if valuesDiffer(&a, &b, 0.0001, 1.0) {
-		t.Errorf("|0-0.5|=0.5 should be within abs-tol=1")
-	}
-}
-
-func TestValuesDifferBothZero(t *testing.T) {
-	a, b := 0.0, 0.0
-	if valuesDiffer(&a, &b, 0.0001, 0) {
-		t.Errorf("0 vs 0 should not differ")
-	}
-}
-
-func TestValuesDifferZeroVsSmall(t *testing.T) {
-	a, b := 0.0, 0.0001
-	// With abs-tol=0 and one value zero, max(|a|,|b|) = 0.0001, |diff|/max = 1.0 > rel-tol
-	if !valuesDiffer(&a, &b, 0.0001, 0) {
-		t.Errorf("0 vs 0.0001 should differ when abs-tol=0")
-	}
-}
+		It("treats zero vs a small non-zero as different when abs-tol is zero", func() {
+			a, b := 0.0, 0.0001
+			Expect(valuesDiffer(&a, &b, 0.0001, 0)).To(BeTrue())
+		})
+	})
+})

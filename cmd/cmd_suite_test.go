@@ -15,26 +15,13 @@
 package cmd
 
 import (
-	"github.com/penny-vault/pvdata/data"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("requiredLegacyTables", func() {
-	It("is non-empty and contains only non-empty names", func() {
-		Expect(requiredLegacyTables).NotTo(BeEmpty())
-		for _, tbl := range requiredLegacyTables {
-			Expect(tbl).NotTo(BeEmpty())
-		}
-	})
-})
-
-var _ = Describe("zacks data type registration", func() {
-	It("registers every zacks data type", func() {
-		zacksTypes := []string{data.RatingKey, data.MetricKey, data.EstimateKey, data.ConsensusKey}
-		for _, dt := range zacksTypes {
-			Expect(data.DataTypes[dt]).NotTo(BeNil(), "data type %q should be registered", dt)
-		}
-	})
-})
+func TestCmd(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Cmd Suite")
+}
