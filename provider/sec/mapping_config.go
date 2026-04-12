@@ -62,6 +62,10 @@ type FieldMapping struct {
 
 	// For derived mappings that also have a direct XBRL fallback
 	FallbackTags []string
+
+	// OptionalOperands makes OpAdd treat missing operands as 0 and resolve
+	// when at least one operand is present, instead of requiring all.
+	OptionalOperands bool
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -98,15 +102,6 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"InventoryNet", "InventoryFinishedGoodsAndWorkInProcess"},
 	},
 	{
-		FieldName: "Investments", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{
-			"Investments",
-			"ShortTermInvestments",
-			"LongTermInvestments",
-			"MarketableSecuritiesCurrent",
-		},
-	},
-	{
 		FieldName: "InvestmentsCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"ShortTermInvestments",
@@ -122,13 +117,40 @@ var FieldMappings = []FieldMapping{
 			"AvailableForSaleSecuritiesDebtSecuritiesNoncurrent",
 		},
 	},
+	// Investments = InvestmentsCurrent + InvestmentsNonCurrent. Sharadar
+	// defines this as "total amount of marketable and non-marketable
+	// securities, loans receivable and other invested assets." Companies
+	// like Apple tag current/noncurrent separately rather than a single
+	// "Investments" concept; the sum captures both.
 	{
-		FieldName: "Receivables", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "Investments", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:     []string{"Investments"},
+		Op:               OpAdd,
+		Operands:         []string{"InvestmentsCurrent", "InvestmentsNonCurrent"},
+		OptionalOperands: true,
+	},
+	{
+		FieldName: "TradeReceivables", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"AccountsReceivableNetCurrent",
 			"AccountsReceivableNet",
-			"ReceivablesNetCurrent",
 		},
+	},
+	{
+		FieldName: "NonTradeReceivables", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{
+			"NontradeReceivablesCurrent",
+		},
+	},
+	// Receivables = TradeReceivables + NonTradeReceivables. Sharadar
+	// defines this as "trade and non-trade receivables." Apple tags these
+	// separately (AccountsReceivableNetCurrent + NontradeReceivablesCurrent).
+	{
+		FieldName: "Receivables", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:     []string{"ReceivablesNetCurrent"},
+		Op:               OpAdd,
+		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "Payables", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -170,13 +192,28 @@ var FieldMappings = []FieldMapping{
 		},
 	},
 	{
-		FieldName: "DebtCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{
-			"ShortTermBorrowings",
-			"LongTermDebtCurrent",
-			"DebtCurrent",
-			"CommercialPaper",
-		},
+		FieldName: "ShortTermDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"ShortTermBorrowings"},
+	},
+	{
+		FieldName: "LongTermDebtCurrentMaturities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"LongTermDebtCurrent"},
+	},
+	{
+		FieldName: "CommercialPaperDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"CommercialPaper"},
+	},
+	// DebtCurrent = ShortTermDebt + LongTermDebtCurrentMaturities +
+	// CommercialPaperDebt. Sharadar includes all forms of current debt
+	// (bonds, commercial paper, notes payable, credit facilities). Apple
+	// tags LongTermDebtCurrent and CommercialPaper separately; the sum
+	// captures both.
+	{
+		FieldName: "DebtCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:     []string{"DebtCurrent"},
+		Op:               OpAdd,
+		Operands:         []string{"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "DebtNonCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -193,10 +230,14 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "DeferredRevenue", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		// Current-specific tags first to match Sharadar, which reports
+		// the current portion. Apple tags ContractWithCustomerLiabilityCurrent
+		// (8.0B) vs the total ContractWithCustomerLiability (12.6B).
 		XBRLTags: []string{
+			"DeferredRevenueCurrent",
+			"ContractWithCustomerLiabilityCurrent",
 			"DeferredRevenue",
 			"ContractWithCustomerLiability",
-			"DeferredRevenueCurrent",
 		},
 	},
 	{

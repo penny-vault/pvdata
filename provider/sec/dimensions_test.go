@@ -526,9 +526,23 @@ var _ = Describe("Dimensions", func() {
 
 			srcStr := string(src)
 
+			// Intermediate fields used only as operands for derived fields;
+			// they are intentionally not mapped to Fundamental struct fields.
+			intermediate := map[string]bool{
+				"TradeReceivables":            true,
+				"NonTradeReceivables":         true,
+				"ShortTermDebt":               true,
+				"LongTermDebtCurrentMaturities": true,
+				"CommercialPaperDebt":         true,
+			}
+
 			var missing []string
 
 			for _, m := range FieldMappings {
+				if intermediate[m.FieldName] {
+					continue
+				}
+
 				pattern := fmt.Sprintf(`fields[%q]`, m.FieldName)
 				if !strings.Contains(srcStr, pattern) {
 					missing = append(missing, m.FieldName)
