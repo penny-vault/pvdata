@@ -249,15 +249,16 @@ func discoverFundamentalsSubscriptions(subs []*library.Subscription) (secTable, 
 }
 
 type rawCompareFlags struct {
-	tickers    []string
-	since      string
-	until      string
-	dimensions []string
-	fields     []string
-	relTol     float64
-	absTol     float64
-	format     string
-	output     string
+	tickers        []string
+	since          string
+	until          string
+	dimensions     []string
+	fields         []string
+	relTol         float64
+	absTol         float64
+	format         string
+	output         string
+	excludeForeign bool
 }
 
 type compareOptions struct {
@@ -938,15 +939,16 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 
 	raw := rawCompareFlags{
-		tickers:    viper.GetStringSlice("compare-fundamentals.ticker"),
-		since:      viper.GetString("compare-fundamentals.since"),
-		until:      viper.GetString("compare-fundamentals.until"),
-		dimensions: viper.GetStringSlice("compare-fundamentals.dimension"),
-		fields:     viper.GetStringSlice("compare-fundamentals.fields"),
-		relTol:     viper.GetFloat64("compare-fundamentals.rel-tol"),
-		absTol:     viper.GetFloat64("compare-fundamentals.abs-tol"),
-		format:     viper.GetString("compare-fundamentals.format"),
-		output:     viper.GetString("compare-fundamentals.output"),
+		tickers:        viper.GetStringSlice("compare-fundamentals.ticker"),
+		since:          viper.GetString("compare-fundamentals.since"),
+		until:          viper.GetString("compare-fundamentals.until"),
+		dimensions:     viper.GetStringSlice("compare-fundamentals.dimension"),
+		fields:         viper.GetStringSlice("compare-fundamentals.fields"),
+		relTol:         viper.GetFloat64("compare-fundamentals.rel-tol"),
+		absTol:         viper.GetFloat64("compare-fundamentals.abs-tol"),
+		format:         viper.GetString("compare-fundamentals.format"),
+		output:         viper.GetString("compare-fundamentals.output"),
+		excludeForeign: viper.GetBool("compare-fundamentals.exclude-foreign"),
 	}
 
 	opts, err := resolveCompareOptions(raw)
@@ -969,6 +971,61 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 	secTable, sharadarTable, err := discoverFundamentalsSubscriptions(subs)
 	if err != nil {
 		log.Fatal().Err(err).Msg("could not discover fundamentals subscriptions")
+	}
+
+	if raw.excludeForeign {
+		conn, connErr := myLibrary.Pool.Acquire(ctx)
+		if connErr != nil {
+			log.Fatal().Err(connErr).Msg("could not acquire db connection for domestic ticker query")
+		}
+
+		domesticSQL := fmt.Sprintf("SELECT DISTINCT ticker FROM %s WHERE dimension = 'ARQ'", secTable)
+
+		arqRows, arqErr := conn.Query(ctx, domesticSQL)
+		conn.Release()
+
+		if arqErr != nil {
+			log.Fatal().Err(arqErr).Msg("could not query domestic tickers from sec table")
+		}
+
+		var domesticTickers []string
+
+		for arqRows.Next() {
+			var t string
+			if scanErr := arqRows.Scan(&t); scanErr != nil {
+				arqRows.Close()
+				log.Fatal().Err(scanErr).Msg("could not scan domestic ticker")
+			}
+
+			domesticTickers = append(domesticTickers, t)
+		}
+
+		arqRows.Close()
+
+		if arqErr = arqRows.Err(); arqErr != nil {
+			log.Fatal().Err(arqErr).Msg("error reading domestic ticker rows")
+		}
+
+		log.Info().Int("count", len(domesticTickers)).Msg("domestic tickers found (have ARQ data in sec table)")
+
+		if len(opts.tickers) > 0 {
+			// Intersect user-provided filter with domestic set.
+			domesticSet := make(map[string]struct{}, len(domesticTickers))
+			for _, t := range domesticTickers {
+				domesticSet[t] = struct{}{}
+			}
+
+			filtered := opts.tickers[:0]
+			for _, t := range opts.tickers {
+				if _, ok := domesticSet[t]; ok {
+					filtered = append(filtered, t)
+				}
+			}
+
+			opts.tickers = filtered
+		} else {
+			opts.tickers = domesticTickers
+		}
 	}
 
 	var (
@@ -1137,8 +1194,9 @@ func init() {
 	compareFundamentalsCmd.Flags().Float64("abs-tol", 0, "Absolute tolerance floor: values differ only when |a-b| > abs-tol")
 	compareFundamentalsCmd.Flags().String("format", "text", "Output format: text or csv")
 	compareFundamentalsCmd.Flags().String("output", "", "Write output to this file instead of stdout")
+	compareFundamentalsCmd.Flags().Bool("exclude-foreign", true, "Exclude tickers with no ARQ data in the SEC table (foreign filers)")
 
-	for _, name := range []string{"ticker", "since", "until", "dimension", "fields", "rel-tol", "abs-tol", "format", "output"} {
+	for _, name := range []string{"ticker", "since", "until", "dimension", "fields", "rel-tol", "abs-tol", "format", "output", "exclude-foreign"} {
 		if err := viper.BindPFlag("compare-fundamentals."+name, compareFundamentalsCmd.Flags().Lookup(name)); err != nil {
 			log.Panic().Err(err).Str("flag", name).Msg("BindPFlag failed for compare-fundamentals")
 		}
