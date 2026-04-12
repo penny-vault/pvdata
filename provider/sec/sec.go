@@ -759,6 +759,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(arQSlice); ttm != nil {
+			if i >= 4 {
+				for k, v := range ComputePeriodAverages(ttm, quarters[i-4].arEmit) {
+					ttm[k] = v
+				}
+			}
+
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "ART",
 				q.period.ARFiledDate, calendarDate, q.period.PeriodEnd, latestARFiled)
 			out <- &data.Observation{
@@ -778,6 +784,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(mrQSlice); ttm != nil {
+			if i >= 4 {
+				for k, v := range ComputePeriodAverages(ttm, quarters[i-4].mrEmit) {
+					ttm[k] = v
+				}
+			}
+
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "MRT",
 				q.period.PeriodEnd, calendarDate, q.period.PeriodEnd, latestMRFiled)
 			out <- &data.Observation{

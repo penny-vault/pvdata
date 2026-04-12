@@ -816,6 +816,112 @@ var _ = Describe("Dimensions", func() {
 			Expect(fy2Fund.ROE).To(BeNumerically("~", 250.0/900.0, 1e-10))
 		})
 	})
+
+	Describe("TTM period averages", func() {
+		It("computes averages using quarter before TTM window", func() {
+			cf := &CompanyFacts{
+				CIK:        1,
+				EntityName: "TTM Co",
+				Facts:      make(map[string][]Fact),
+			}
+
+			// 5 consecutive quarters: q0 through q4.
+			// TTM window for q4 = [q1..q4], prior balance sheet = q0.
+			ends := []time.Time{
+				time.Date(2023, 3, 31, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 6, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC),
+				time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+			}
+
+			for i, end := range ends {
+				start := end.AddDate(0, 0, -89)
+				filed := end.AddDate(0, 0, 30)
+				assets := float64(1000 + i*100) // 1000, 1100, 1200, 1300, 1400
+				equity := float64(500 + i*50)   // 500, 550, 600, 650, 700
+
+				cf.Facts["Assets"] = append(cf.Facts["Assets"],
+					Fact{End: end, Filed: filed, Val: assets, Form: "10-Q"})
+				cf.Facts["StockholdersEquity"] = append(cf.Facts["StockholdersEquity"],
+					Fact{End: end, Filed: filed, Val: equity, Form: "10-Q"})
+				cf.Facts["Revenues"] = append(cf.Facts["Revenues"],
+					Fact{Start: start, End: end, Filed: filed, Val: 200, Form: "10-Q"})
+				cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"] = append(
+					cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"],
+					Fact{Start: start, End: end, Filed: filed, Val: 50, Form: "10-Q"})
+				cf.Facts["NetIncomeLoss"] = append(cf.Facts["NetIncomeLoss"],
+					Fact{Start: start, End: end, Filed: filed, Val: 50, Form: "10-Q"})
+			}
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var ttmFund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					if obs.Fundamental.Dimension == "ART" {
+						ttmFund = obs.Fundamental
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// TTM window = q1..q4, prior = q0
+			// AverageAssets = (q0 assets + q4 assets) / 2 = (1000 + 1400) / 2 = 1200
+			// EquityAvg = (q0 equity + q4 equity) / 2 = (500 + 700) / 2 = 600
+			// TTM NetIncomeCommonStock = 50*4 = 200
+			// ROA = 200 / 1200
+			Expect(ttmFund).NotTo(BeNil())
+			Expect(ttmFund.AverageAssets).To(Equal(int64(1200)))
+			Expect(ttmFund.EquityAvg).To(Equal(int64(600)))
+			Expect(ttmFund.ROA).To(BeNumerically("~", 200.0/1200.0, 1e-10))
+			Expect(ttmFund.ROE).To(BeNumerically("~", 200.0/600.0, 1e-10))
+		})
+
+		It("skips TTM averages when fewer than 5 quarters", func() {
+			// Only 4 quarters -- enough for TTM sums but no prior for averages
+			cf := buildSyntheticQuarterlyFacts([]time.Time{
+				time.Date(2023, 6, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC),
+				time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+			})
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var ttmFund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					if obs.Fundamental.Dimension == "ART" {
+						ttmFund = obs.Fundamental
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// TTM should exist but without averages
+			Expect(ttmFund).NotTo(BeNil())
+			Expect(ttmFund.AverageAssets).To(Equal(int64(0)))
+		})
+	})
 })
 
 // buildSyntheticQuarterlyFacts constructs a minimal CompanyFacts containing one
