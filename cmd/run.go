@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/penny-vault/pvdata/tui"
@@ -89,9 +90,17 @@ provided then each subscription will execute sequentially.`,
 
 		runManager := tui.NewRunManager(myLibrary, result.Subscriptions)
 
-		if err := tui.Run(ctx, myLibrary, runManager, logWriter); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+		if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
+			// No TTY available -- run without TUI, log to stderr
+			consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
+			log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
+
+			runManager.RunAll(ctx)
+		} else {
+			if err := tui.Run(ctx, myLibrary, runManager, logWriter); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 		}
 	},
 }
