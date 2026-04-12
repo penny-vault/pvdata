@@ -498,6 +498,124 @@ var _ = Describe("Mapping Engine", func() {
 			Expect(resolved["InvestedCapital"]).To(Equal(315_000.0))
 		})
 
+		It("resolves NetCashFlowDebt as proceeds minus repayments", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			debtCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"ProceedsFromIssuanceOfLongTermDebt": {
+						{
+							Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   5_000_000_000,
+							Form:  "10-Q",
+						},
+					},
+					"RepaymentsOfLongTermDebt": {
+						{
+							Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   3_000_000_000,
+							Form:  "10-Q",
+						},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(debtCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("NetCashFlowDebt"))
+			Expect(resolved["NetCashFlowDebt"]).To(Equal(2_000_000_000.0),
+				"NetCashFlowDebt = proceeds(5B) - repayments(3B) = 2B")
+		})
+
+		It("resolves NetCashFlowDebt with only repayments present", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			debtCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"RepaymentsOfLongTermDebt": {
+						{
+							Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   3_000_000_000,
+							Form:  "10-Q",
+						},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(debtCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("NetCashFlowDebt"))
+			Expect(resolved["NetCashFlowDebt"]).To(Equal(-3_000_000_000.0),
+				"NetCashFlowDebt = -repayments(3B) when no proceeds exist")
+		})
+
+		It("resolves NetCashFlowInvest as proceeds minus payments", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			investCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"PaymentsToAcquireAvailableForSaleSecuritiesDebt": {
+						{
+							Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   15_300_000_000,
+							Form:  "10-Q",
+						},
+					},
+					"ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities": {
+						{
+							Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   13_200_000_000,
+							Form:  "10-Q",
+						},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(investCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("NetCashFlowInvest"))
+			Expect(resolved["NetCashFlowInvest"]).To(Equal(-2_100_000_000.0),
+				"NetCashFlowInvest = -payments(15.3B) + proceeds(13.2B) = -2.1B")
+		})
+
+		It("resolves NetCashFlowInvest with only proceeds present", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			investCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt": {
+						{
+							Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   7_000_000_000,
+							Form:  "10-Q",
+						},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(investCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("NetCashFlowInvest"))
+			Expect(resolved["NetCashFlowInvest"]).To(Equal(7_000_000_000.0),
+				"NetCashFlowInvest = proceeds(7B) when no payments exist")
+		})
+
 		It("falls back to basic weighted-average shares when diluted tags are absent", func() {
 			// Simulates a loss-quarter filer (e.g. Nordstrom during COVID,
 			// Vaxart as a pre-revenue biotech) that reports only the basic
