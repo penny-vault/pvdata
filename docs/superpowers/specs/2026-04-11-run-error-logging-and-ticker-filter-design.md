@@ -50,7 +50,7 @@ func SecurityFilterFromContext(ctx context.Context) (ticker, figi string) {
 
 | Category | Providers | Behavior |
 |----------|-----------|----------|
-| Individual securities | sec, tiingo, sharadar, zacks, massive, nasdaq | Filter universe to only the matching security. If no match, complete with 0 observations and a warning log. |
+| Individual securities | sec, tiingo, sharadar, zacks, massive, nasdaq | Filter universe to only the matching security. If no match, log an error with fuzzy suggestions (see below) and complete with 0 observations. |
 | Non-applicable | fred, tradingview, ishares, pvindex, legacy | Log "ticker/FIGI filtering not applicable to provider X, skipping" and emit 0 observations with success status. |
 
 **SEC provider specifically:**
@@ -59,9 +59,27 @@ func SecurityFilterFromContext(ctx context.Context) (ticker, figi string) {
 - In `runIncremental`: only fetch filings for the matching CIK.
 - Lookup: match ticker or FIGI against the `cikMap` to find the target CIK.
 
+**Fuzzy match on not-found:**
+
+When a provider's universe does not contain the requested ticker or FIGI, it must:
+
+1. Log an error: `"ticker not found in provider universe"` (or FIGI equivalent).
+2. Compute Jaro-Winkler similarity between the input and all tickers/FIGIs in the provider's universe.
+3. If the best match scores above 0.85, suggest it: `"did you mean AAPL?"`.
+4. If multiple matches score above 0.85, suggest the top 3.
+5. Complete the run with 0 observations and `RunFailed` status.
+
+This logic lives in a shared helper in `provider/` (e.g., `provider/fuzzy.go`) so all providers call the same function rather than reimplementing it. The helper signature:
+
+```go
+func SuggestMatch(input string, candidates []string) []string
+```
+
+Returns up to 3 suggestions sorted by descending similarity, or nil if none score above 0.85.
+
 **Other individual-security providers:**
 
-Each provider checks `SecurityFilterFromContext(ctx)` at the start of its Fetch function. If a filter is set, it restricts its API calls / data processing to only the matching security. The exact mechanism varies by provider (API query parameters, loop filtering, etc.).
+Each provider checks `SecurityFilterFromContext(ctx)` at the start of its Fetch function. If a filter is set, it restricts its API calls / data processing to only the matching security. The exact mechanism varies by provider (API query parameters, loop filtering, etc.). If the security is not found in the provider's universe, it calls `SuggestMatch` and logs accordingly.
 
 ## Non-Goals
 
