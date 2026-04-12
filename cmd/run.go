@@ -41,6 +41,25 @@ provided then each subscription will execute sequentially.`,
 			ctx = context.WithValue(ctx, provider.LookbackKey, lookback)
 		}
 
+		// Validate and inject ticker/FIGI filter
+		tickerFilter := strings.ToUpper(strings.TrimSpace(viper.GetString("ticker")))
+		figiFilter := strings.TrimSpace(viper.GetString("figi"))
+
+		if tickerFilter != "" && figiFilter != "" {
+			fmt.Fprintf(os.Stderr, "Error: --ticker and --figi are mutually exclusive\n")
+			os.Exit(1)
+		}
+
+		if tickerFilter != "" {
+			ctx = context.WithValue(ctx, provider.TickerFilterKey, tickerFilter)
+			log.Info().Str("ticker", tickerFilter).Msg("filtering run to single security")
+		}
+
+		if figiFilter != "" {
+			ctx = context.WithValue(ctx, provider.FigiFilterKey, figiFilter)
+			log.Info().Str("figi", figiFilter).Msg("filtering run to single security")
+		}
+
 		// load the library
 		myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
 		if err != nil {
@@ -80,9 +99,19 @@ provided then each subscription will execute sequentially.`,
 
 func init() {
 	runCmd.Flags().StringP("lookback", "l", "", "Override data lookback period (e.g. 14d, 4w, 6m, 1y)")
+	runCmd.Flags().String("ticker", "", "Filter run to a single security by ticker (e.g. AAPL)")
+	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
 
 	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind lookback flag")
+	}
+
+	if err := viper.BindPFlag("ticker", runCmd.Flags().Lookup("ticker")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind ticker flag")
+	}
+
+	if err := viper.BindPFlag("figi", runCmd.Flags().Lookup("figi")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind figi flag")
 	}
 
 	rootCmd.AddCommand(runCmd)
