@@ -609,44 +609,51 @@ var FieldMappings = []FieldMapping{
 	// GrossMargin = GrossProfit / Revenues
 	{
 		FieldName: "GrossMargin", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"GrossProfit", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"GrossProfit", "Revenues"},
+		RoundDigits: 4,
 	},
 	// ProfitMargin = NetIncomeCommonStock / Revenues
 	{
 		FieldName: "ProfitMargin", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"NetIncomeCommonStock", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"NetIncomeCommonStock", "Revenues"},
+		RoundDigits: 4,
 	},
 	// EBITDAMargin = EBITDA / Revenues
 	{
 		FieldName: "EBITDAMargin", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"EBITDA", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"EBITDA", "Revenues"},
+		RoundDigits: 4,
 	},
 	// CurrentRatio = CurrentAssets / CurrentLiabilities
 	{
 		FieldName: "CurrentRatio", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"CurrentAssets", "CurrentLiabilities"},
+		Op:          OpDivide,
+		Operands:    []string{"CurrentAssets", "CurrentLiabilities"},
+		RoundDigits: 4,
 	},
 	// DebtToEquityRatio = TotalLiabilities / Equity
 	{
 		FieldName: "DebtToEquityRatio", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"TotalLiabilities", "Equity"},
+		Op:          OpDivide,
+		Operands:    []string{"TotalLiabilities", "Equity"},
+		RoundDigits: 4,
 	},
 	// AssetTurnover = Revenues / TotalAssets
 	{
 		FieldName: "AssetTurnover", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"Revenues", "TotalAssets"},
+		Op:          OpDivide,
+		Operands:    []string{"Revenues", "TotalAssets"},
+		RoundDigits: 4,
 	},
 	// ReturnOnSales = EBIT / Revenues
 	{
 		FieldName: "ReturnOnSales", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"EBIT", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"EBIT", "Revenues"},
+		RoundDigits: 4,
 	},
 
 	// ==================== PER-SHARE METRICS (derived) ====================
@@ -654,26 +661,30 @@ var FieldMappings = []FieldMapping{
 	// FreeCashFlowPerShare = FreeCashFlow / WeightedAverageShares
 	{
 		FieldName: "FreeCashFlowPerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"FreeCashFlow", "WeightedAverageShares"},
+		Op:          OpDivide,
+		Operands:    []string{"FreeCashFlow", "WeightedAverageShares"},
+		RoundDigits: 4,
 	},
-	// BookValuePerShare = Equity / SharesBasic
+	// BookValuePerShare = Equity / WeightedAverageShares
 	{
 		FieldName: "BookValuePerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"Equity", "SharesBasic"},
+		Op:          OpDivide,
+		Operands:    []string{"Equity", "WeightedAverageShares"},
+		RoundDigits: 4,
 	},
 	// SalesPerShare = Revenues / WeightedAverageShares
 	{
 		FieldName: "SalesPerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"Revenues", "WeightedAverageShares"},
+		Op:          OpDivide,
+		Operands:    []string{"Revenues", "WeightedAverageShares"},
+		RoundDigits: 4,
 	},
-	// TangibleAssetsBookValuePerShare = TangibleAssetValue / SharesBasic
+	// TangibleAssetsBookValuePerShare = TangibleAssetValue / WeightedAverageShares
 	{
 		FieldName: "TangibleAssetsBookValuePerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"TangibleAssetValue", "SharesBasic"},
+		Op:          OpDivide,
+		Operands:    []string{"TangibleAssetValue", "WeightedAverageShares"},
+		RoundDigits: 4,
 	},
 
 	// Note: The following Sharadar fields require market price data and are

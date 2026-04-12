@@ -83,6 +83,37 @@ var _ = Describe("Mapping Config", func() {
 				"mapping %s has invalid statement type: %s", m.FieldName, m.StatementType)
 		}
 	})
+
+	It("BookValuePerShare uses WeightedAverageShares as denominator", func() {
+		for _, m := range FieldMappings {
+			if m.FieldName == "BookValuePerShare" {
+				Expect(m.Operands).To(Equal([]string{"Equity", "WeightedAverageShares"}))
+				return
+			}
+		}
+
+		Fail("BookValuePerShare not found in FieldMappings")
+	})
+
+	It("TangibleAssetsBookValuePerShare uses WeightedAverageShares as denominator", func() {
+		for _, m := range FieldMappings {
+			if m.FieldName == "TangibleAssetsBookValuePerShare" {
+				Expect(m.Operands).To(Equal([]string{"TangibleAssetValue", "WeightedAverageShares"}))
+				return
+			}
+		}
+
+		Fail("TangibleAssetsBookValuePerShare not found in FieldMappings")
+	})
+
+	It("all OpDivide float64 fields have RoundDigits set", func() {
+		for _, m := range FieldMappings {
+			if m.Type == MappingDerived && m.Op == OpDivide && m.ValueType == "float64" {
+				Expect(m.RoundDigits).To(BeNumerically(">", 0),
+					"derived OpDivide float64 field %s should have RoundDigits set", m.FieldName)
+			}
+		}
+	})
 })
 
 var _ = Describe("Mapping Engine", func() {
