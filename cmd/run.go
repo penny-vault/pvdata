@@ -79,8 +79,7 @@ provided then each subscription will execute sequentially.`,
 		}
 		defer logWriter.Close()
 
-		consoleWriter := zerolog.ConsoleWriter{Out: logWriter}
-		log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
+		log.Logger = zerolog.New(logWriter).With().Timestamp().Logger()
 
 		result, err := tui.RunPreflight(ctx, myLibrary, args)
 		if err != nil {
