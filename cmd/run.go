@@ -65,7 +65,8 @@ provided then each subscription will execute sequentially.`,
 
 		result, err := tui.RunPreflight(ctx, myLibrary, args)
 		if err != nil {
-			log.Fatal().Err(err).Msg("pre-flight validation failed")
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
 
 		runManager := tui.NewRunManager(myLibrary, result.Subscriptions)
