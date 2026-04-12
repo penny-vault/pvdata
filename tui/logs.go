@@ -56,7 +56,7 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 		m.ready = true
 
 	case LogLineMsg:
-		m.lines = append(m.lines, m.colorize(msg.Line))
+		m.lines = append(m.lines, msg.Line)
 		if len(m.lines) > m.maxLines {
 			m.lines = m.lines[len(m.lines)-m.maxLines:]
 		}
@@ -85,18 +85,4 @@ func (m LogsModel) View() string {
 	}
 
 	return m.viewport.View()
-}
-
-func (m LogsModel) colorize(line string) string {
-	trimmed := strings.TrimSpace(line)
-	switch {
-	case strings.Contains(trimmed, "ERR") || strings.Contains(trimmed, "error"):
-		return LogError.Render(line)
-	case strings.Contains(trimmed, "WRN") || strings.Contains(trimmed, "warn"):
-		return LogWarn.Render(line)
-	case strings.Contains(trimmed, "DBG") || strings.Contains(trimmed, "debug"):
-		return LogDebug.Render(line)
-	default:
-		return LogInfo.Render(line)
-	}
 }
