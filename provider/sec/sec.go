@@ -634,6 +634,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// Skip if a quarter already exists at this period end (e.g. if a
 		// company unusually filed a 10-Q for Q4 alongside its 10-K).
 		alreadyExists := false
+
 		for _, q := range quarters {
 			if q.period.PeriodEnd.Equal(a.period.PeriodEnd) {
 				alreadyExists = true
