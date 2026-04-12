@@ -413,6 +413,7 @@ var _ = Describe("textDiffWriter", func() {
 
 		w := newTextDiffWriter(&buf)
 		Expect(w.Write(rec)).To(Succeed())
+		Expect(w.Close()).To(Succeed())
 
 		out := buf.String()
 		for _, want := range []string{"AAPL", "BBG000B9XRY4", "2023-03-31", "ARQ", "revenues", "100", "200"} {
@@ -433,6 +434,7 @@ var _ = Describe("textDiffWriter", func() {
 
 		w := newTextDiffWriter(&buf)
 		Expect(w.Write(rec)).To(Succeed())
+		Expect(w.Close()).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("missing in sharadar"))
 	})
 })

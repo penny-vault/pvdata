@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"fmt"
@@ -23,10 +24,9 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
-	"charm.land/bubbles/v2/progress"
-	tea "charm.land/bubbletea/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mattn/go-isatty"
@@ -632,12 +632,20 @@ type diffWriter interface {
 }
 
 type textDiffWriter struct {
-	w       io.Writer
+	raw     io.Writer
+	tw      *tabwriter.Writer
 	lastKey string
 }
 
 func newTextDiffWriter(w io.Writer) *textDiffWriter {
-	return &textDiffWriter{w: w}
+	return &textDiffWriter{
+		raw: w,
+		tw:  tabwriter.NewWriter(w, 2, 0, 2, ' ', tabwriter.AlignRight),
+	}
+}
+
+func (t *textDiffWriter) flushGroup() error {
+	return t.tw.Flush()
 }
 
 func (t *textDiffWriter) Write(rec diffRecord) error {
@@ -646,12 +654,22 @@ func (t *textDiffWriter) Write(rec diffRecord) error {
 
 	if header != t.lastKey {
 		if t.lastKey != "" {
-			if _, err := fmt.Fprintln(t.w); err != nil {
+			if err := t.flushGroup(); err != nil {
+				return err
+			}
+
+			if _, err := fmt.Fprintln(t.raw); err != nil {
 				return err
 			}
 		}
 
-		if _, err := fmt.Fprintln(t.w, header); err != nil {
+		if _, err := fmt.Fprintln(t.raw, header); err != nil {
+			return err
+		}
+
+		// column header
+		if _, err := fmt.Fprintf(t.tw, "  %s\t  %s\t  %s\t  %s\t  %s\t\n",
+			"FIELD", "SEC", "SHARADAR", "ABS DIFF", "REL DIFF"); err != nil {
 			return err
 		}
 
@@ -661,16 +679,20 @@ func (t *textDiffWriter) Write(rec diffRecord) error {
 	switch rec.kind {
 	case diffField:
 		absDiff, relDiff := diffStats(rec.secValue, rec.sharadarValue)
-		_, err := fmt.Fprintf(t.w, "  %-50s sec=%s  sharadar=%s  abs=%s  rel=%.6f\n",
-			rec.field, formatValue(rec.secValue), formatValue(rec.sharadarValue), formatValue(&absDiff), relDiff)
+		_, err := fmt.Fprintf(t.tw, "  %s\t  %s\t  %s\t  %s\t  %.6f\t\n",
+			rec.field,
+			formatValueCompact(rec.secValue),
+			formatValueCompact(rec.sharadarValue),
+			formatValueCompact(&absDiff),
+			relDiff)
 
 		return err
 	case diffMissingSec:
-		_, err := fmt.Fprintln(t.w, "  (missing in sec)")
+		_, err := fmt.Fprintf(t.tw, "  (missing in sec)\t\t\t\t\t\n")
 
 		return err
 	case diffMissingShar:
-		_, err := fmt.Fprintln(t.w, "  (missing in sharadar)")
+		_, err := fmt.Fprintf(t.tw, "  (missing in sharadar)\t\t\t\t\t\n")
 
 		return err
 	}
@@ -678,7 +700,7 @@ func (t *textDiffWriter) Write(rec diffRecord) error {
 	return nil
 }
 
-func (t *textDiffWriter) Close() error { return nil }
+func (t *textDiffWriter) Close() error { return t.flushGroup() }
 
 type csvDiffWriter struct {
 	w    *csv.Writer
@@ -756,6 +778,20 @@ func formatValue(v *float64) string {
 	return fmt.Sprintf("%g", *v)
 }
 
+// formatValueCompact renders a *float64 with limited precision for
+// human-readable text output (6 significant digits).
+func formatValueCompact(v *float64) string {
+	if v == nil {
+		return ""
+	}
+
+	if *v == math.Trunc(*v) && math.Abs(*v) < 1e18 {
+		return fmt.Sprintf("%d", int64(*v))
+	}
+
+	return fmt.Sprintf("%.6g", *v)
+}
+
 // diffStats returns (|a-b|, |a-b|/max(|a|,|b|)). Caller must ensure a and b
 // are both non-nil.
 func diffStats(a, b *float64) (absDiff, relDiff float64) {
@@ -777,151 +813,29 @@ type cfProgressMsg struct {
 	diffCount      int
 }
 
-// cfDoneMsg signals the comparison finished or errored.
-type cfDoneMsg struct {
-	err error
-}
+// drainProgress reads cfProgressMsg values from progressCh until the channel
+// is closed, printing an inline progress line to stderr on each update. When
+// the comparison goroutine finishes it reads the final error from doneCh.
+func drainProgress(progressCh <-chan cfProgressMsg, doneCh <-chan error, isTTY bool) error {
+	start := time.Now()
 
-type cfModel struct {
-	progress   progress.Model
-	progressCh <-chan cfProgressMsg
-	doneCh     <-chan error
-	currentDK  time.Time
-	processed  int
-	total      int
-	diffCount  int
-	startTime  time.Time
-	err        error
-	done       bool
-	width      int
-}
-
-const (
-	cfProgressPadding  = 2
-	cfProgressMaxWidth = 72
-)
-
-func newCFModel(progressCh <-chan cfProgressMsg, doneCh <-chan error) cfModel {
-	return cfModel{
-		progress:   progress.New(progress.WithDefaultBlend()),
-		progressCh: progressCh,
-		doneCh:     doneCh,
-		startTime:  time.Now(),
-	}
-}
-
-type cfTickMsg time.Time
-
-func (m cfModel) Init() tea.Cmd {
-	return tea.Batch(m.waitForProgress(), cfTickCmd())
-}
-
-func cfTickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return cfTickMsg(t) })
-}
-
-func (m cfModel) waitForProgress() tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case msg, ok := <-m.progressCh:
-			if !ok {
-				err := <-m.doneCh
-
-				return cfDoneMsg{err: err}
-			}
-
-			return msg
-		case err := <-m.doneCh:
-			return cfDoneMsg{err: err}
-		}
-	}
-}
-
-func (m cfModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+	for msg := range progressCh {
+		if !isTTY {
+			continue
 		}
 
-		return m, nil
+		elapsed := time.Since(start).Truncate(time.Second)
 
-	case tea.WindowSizeMsg:
-		m.width = msg.Width - cfProgressPadding*2 - 4
-		if m.width > cfProgressMaxWidth {
-			m.width = cfProgressMaxWidth
-		}
-
-		m.progress.SetWidth(m.width)
-
-		return m, nil
-
-	case cfProgressMsg:
-		m.currentDK = msg.currentDateKey
-		m.processed = msg.processed
-		m.total = msg.total
-		m.diffCount = msg.diffCount
-
-		var pct float64
-		if m.total > 0 {
-			pct = float64(m.processed) / float64(m.total)
-		}
-
-		cmd := m.progress.SetPercent(pct)
-
-		return m, tea.Batch(m.waitForProgress(), cmd)
-
-	case cfDoneMsg:
-		m.done = true
-		m.err = msg.err
-
-		return m, tea.Quit
-
-	case cfTickMsg:
-		return m, cfTickCmd()
-
-	case progress.FrameMsg:
-		var cmd tea.Cmd
-
-		m.progress, cmd = m.progress.Update(msg)
-
-		return m, cmd
-
-	default:
-		return m, nil
-	}
-}
-
-func (m cfModel) View() tea.View {
-	pad := strings.Repeat(" ", cfProgressPadding)
-
-	var b strings.Builder
-
-	elapsed := time.Since(m.startTime).Truncate(time.Second)
-
-	fmt.Fprintf(&b, "\n%sComparing fundamentals (%s elapsed)\n\n", pad, elapsed)
-
-	if m.total > 0 {
-		fmt.Fprintf(&b, "%s  %d / %d date_keys   diffs so far: %d\n", pad, m.processed, m.total, m.diffCount)
-
-		if !m.currentDK.IsZero() {
-			fmt.Fprintf(&b, "%s  current: %s\n", pad, m.currentDK.Format("2006-01-02"))
-		}
-
-		b.WriteString(pad + "  " + m.progress.View() + "\n")
+		fmt.Fprintf(os.Stderr, "\r\033[K  %d / %d date_keys  diffs: %d  current: %s  (%s)",
+			msg.processed, msg.total, msg.diffCount,
+			msg.currentDateKey.Format("2006-01-02"), elapsed)
 	}
 
-	if m.done {
-		b.WriteString("\n")
-
-		if m.err != nil {
-			fmt.Fprintf(&b, "%s  Comparison failed: %v\n", pad, m.err)
-		} else {
-			fmt.Fprintf(&b, "%s  Comparison complete. Total diffs: %d\n", pad, m.diffCount)
-		}
+	if isTTY {
+		fmt.Fprint(os.Stderr, "\r\033[K") // clear the progress line
 	}
 
-	return tea.NewView(b.String())
+	return <-doneCh
 }
 
 var compareFundamentalsCmd = &cobra.Command{
@@ -1034,6 +948,7 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 	var (
 		sink     io.Writer = os.Stdout
 		sinkFile *os.File
+		diffBuf  *bytes.Buffer // non-nil when we buffer diffs during TUI
 	)
 
 	if opts.output != "" {
@@ -1044,6 +959,15 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 
 		sink = f
 		sinkFile = f
+	}
+
+	// When writing to a TTY with the progress TUI active, buffer diff output
+	// so it doesn't interleave with bubbletea's rendering. The buffer is
+	// flushed to stdout after the TUI exits.
+	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+	if isTTY && sinkFile == nil {
+		diffBuf = &bytes.Buffer{}
+		sink = diffBuf
 	}
 
 	var writer diffWriter
@@ -1067,23 +991,19 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		doneCh <- err
 	}()
 
-	if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
-		// No TTY available -- drain progress channel and wait for completion
-		for range progressCh {
-		}
-
-		if compErr := <-doneCh; compErr != nil {
-			log.Fatal().Err(compErr).Msg("comparison failed")
-		}
-	} else {
-		program := tea.NewProgram(newCFModel(progressCh, doneCh))
-		if _, runErr := program.Run(); runErr != nil {
-			log.Error().Err(runErr).Msg("TUI error")
-		}
+	if compErr := drainProgress(progressCh, doneCh, isTTY); compErr != nil {
+		log.Fatal().Err(compErr).Msg("comparison failed")
 	}
 
 	if cerr := writer.Close(); cerr != nil {
 		log.Error().Err(cerr).Msg("closing diff writer")
+	}
+
+	// Flush buffered diffs to stdout now that the TUI is gone.
+	if diffBuf != nil {
+		if _, ferr := io.Copy(os.Stdout, diffBuf); ferr != nil {
+			log.Error().Err(ferr).Msg("writing buffered diffs")
+		}
 	}
 
 	if sinkFile != nil {
