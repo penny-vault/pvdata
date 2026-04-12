@@ -24,9 +24,9 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
+	"charm.land/glamour/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mattn/go-isatty"
@@ -631,76 +631,68 @@ type diffWriter interface {
 	Close() error
 }
 
-type textDiffWriter struct {
-	raw     io.Writer
-	tw      *tabwriter.Writer
-	lastKey string
+// mdDiffWriter buffers all diff records and writes them as markdown tables
+// grouped by ticker / composite FIGI on Close.
+type mdDiffWriter struct {
+	w    io.Writer
+	recs []diffRecord
 }
 
-func newTextDiffWriter(w io.Writer) *textDiffWriter {
-	return &textDiffWriter{
-		raw: w,
-		tw:  tabwriter.NewWriter(w, 2, 0, 2, ' ', tabwriter.AlignRight),
-	}
+func newMDDiffWriter(w io.Writer) *mdDiffWriter {
+	return &mdDiffWriter{w: w}
 }
 
-func (t *textDiffWriter) flushGroup() error {
-	return t.tw.Flush()
+func (m *mdDiffWriter) Write(rec diffRecord) error {
+	m.recs = append(m.recs, rec)
+	return nil
 }
 
-func (t *textDiffWriter) Write(rec diffRecord) error {
-	header := fmt.Sprintf("%s  %s  %s  %s",
-		rec.ticker, rec.compositeFigi, rec.dateKey.Format("2006-01-02"), rec.dimension)
+func (m *mdDiffWriter) Close() error {
+	// Group records by (ticker, compositeFigi).
+	type groupKey struct{ ticker, figi string }
 
-	if header != t.lastKey {
-		if t.lastKey != "" {
-			if err := t.flushGroup(); err != nil {
-				return err
-			}
+	groups := make(map[groupKey][]diffRecord)
 
-			if _, err := fmt.Fprintln(t.raw); err != nil {
-				return err
-			}
+	var order []groupKey
+
+	for _, r := range m.recs {
+		k := groupKey{r.ticker, r.compositeFigi}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
 		}
 
-		if _, err := fmt.Fprintln(t.raw, header); err != nil {
-			return err
-		}
-
-		// column header
-		if _, err := fmt.Fprintf(t.tw, "  %s\t  %s\t  %s\t  %s\t  %s\t\n",
-			"FIELD", "SEC", "SHARADAR", "ABS DIFF", "REL DIFF"); err != nil {
-			return err
-		}
-
-		t.lastKey = header
+		groups[k] = append(groups[k], r)
 	}
 
-	switch rec.kind {
-	case diffField:
-		absDiff, relDiff := diffStats(rec.secValue, rec.sharadarValue)
-		_, err := fmt.Fprintf(t.tw, "  %s\t  %s\t  %s\t  %s\t  %.6f\t\n",
-			rec.field,
-			formatValueCompact(rec.secValue),
-			formatValueCompact(rec.sharadarValue),
-			formatValueCompact(&absDiff),
-			relDiff)
+	for i, k := range order {
+		if i > 0 {
+			fmt.Fprintln(m.w)
+		}
 
-		return err
-	case diffMissingSec:
-		_, err := fmt.Fprintf(t.tw, "  (missing in sec)\t\t\t\t\t\n")
+		fmt.Fprintf(m.w, "## %s (%s)\n\n", k.ticker, k.figi)
+		fmt.Fprintln(m.w, "| Dimension | Date Key | Field | SEC | Sharadar | Diff % |")
+		fmt.Fprintln(m.w, "|-----------|----------|-------|-----|----------|--------|")
 
-		return err
-	case diffMissingShar:
-		_, err := fmt.Fprintf(t.tw, "  (missing in sharadar)\t\t\t\t\t\n")
-
-		return err
+		for _, r := range groups[k] {
+			switch r.kind {
+			case diffField:
+				_, relDiff := diffStats(r.secValue, r.sharadarValue)
+				fmt.Fprintf(m.w, "| %s | %s | %s | %s | %s | %.2f%% |\n",
+					r.dimension, r.dateKey.Format("2006-01-02"), r.field,
+					formatValueCompact(r.secValue), formatValueCompact(r.sharadarValue),
+					relDiff*100)
+			case diffMissingSec:
+				fmt.Fprintf(m.w, "| %s | %s | *(missing in sec)* | | | |\n",
+					r.dimension, r.dateKey.Format("2006-01-02"))
+			case diffMissingShar:
+				fmt.Fprintf(m.w, "| %s | %s | *(missing in sharadar)* | | | |\n",
+					r.dimension, r.dateKey.Format("2006-01-02"))
+			}
+		}
 	}
 
 	return nil
 }
-
-func (t *textDiffWriter) Close() error { return t.flushGroup() }
 
 type csvDiffWriter struct {
 	w    *csv.Writer
@@ -945,38 +937,19 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	var (
-		sink     io.Writer = os.Stdout
-		sinkFile *os.File
-		diffBuf  *bytes.Buffer // non-nil when we buffer diffs during TUI
-	)
-
-	if opts.output != "" {
-		f, ferr := os.Create(opts.output)
-		if ferr != nil {
-			log.Fatal().Err(ferr).Str("path", opts.output).Msg("could not open output file")
-		}
-
-		sink = f
-		sinkFile = f
-	}
-
-	// When writing to a TTY with the progress TUI active, buffer diff output
-	// so it doesn't interleave with bubbletea's rendering. The buffer is
-	// flushed to stdout after the TUI exits.
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
-	if isTTY && sinkFile == nil {
-		diffBuf = &bytes.Buffer{}
-		sink = diffBuf
-	}
+
+	// All formats write into a buffer first so progress output to stderr
+	// doesn't interleave with results.
+	var buf bytes.Buffer
 
 	var writer diffWriter
 
 	switch opts.format {
 	case "csv":
-		writer = newCSVDiffWriter(sink)
+		writer = newCSVDiffWriter(&buf)
 	default:
-		writer = newTextDiffWriter(sink)
+		writer = newMDDiffWriter(&buf)
 	}
 
 	progressCh := make(chan cfProgressMsg, 8)
@@ -999,16 +972,23 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		log.Error().Err(cerr).Msg("closing diff writer")
 	}
 
-	// Flush buffered diffs to stdout now that the TUI is gone.
-	if diffBuf != nil {
-		if _, ferr := io.Copy(os.Stdout, diffBuf); ferr != nil {
-			log.Error().Err(ferr).Msg("writing buffered diffs")
+	// Render markdown through glamour when writing to a TTY.
+	output := buf.Bytes()
+	if isTTY && opts.format != "csv" {
+		rendered, gerr := glamour.RenderBytes(output, "dark")
+		if gerr == nil {
+			output = rendered
 		}
 	}
 
-	if sinkFile != nil {
-		if cerr := sinkFile.Close(); cerr != nil {
-			log.Error().Err(cerr).Msg("closing output file")
+	// Write to file or stdout.
+	if opts.output != "" {
+		if ferr := os.WriteFile(opts.output, buf.Bytes(), 0o644); ferr != nil {
+			log.Fatal().Err(ferr).Str("path", opts.output).Msg("could not write output file")
+		}
+	} else {
+		if _, werr := os.Stdout.Write(output); werr != nil {
+			log.Error().Err(werr).Msg("writing output")
 		}
 	}
 }

@@ -391,10 +391,10 @@ var _ = Describe("diffRowSet", func() {
 	})
 })
 
-var _ = Describe("textDiffWriter", func() {
+var _ = Describe("mdDiffWriter", func() {
 	mustPtr := func(v float64) *float64 { return &v }
 
-	It("renders a field diff with ticker/figi/date_key/dimension and values", func() {
+	It("renders a markdown table with ticker heading and field values", func() {
 		dk, err := time.Parse("2006-01-02", "2023-03-31")
 		Expect(err).NotTo(HaveOccurred())
 
@@ -411,12 +411,12 @@ var _ = Describe("textDiffWriter", func() {
 
 		var buf bytes.Buffer
 
-		w := newTextDiffWriter(&buf)
+		w := newMDDiffWriter(&buf)
 		Expect(w.Write(rec)).To(Succeed())
 		Expect(w.Close()).To(Succeed())
 
 		out := buf.String()
-		for _, want := range []string{"AAPL", "BBG000B9XRY4", "2023-03-31", "ARQ", "revenues", "100", "200"} {
+		for _, want := range []string{"## AAPL (BBG000B9XRY4)", "2023-03-31", "ARQ", "revenues", "100", "200", "Diff %"} {
 			Expect(out).To(ContainSubstring(want))
 		}
 	})
@@ -432,10 +432,34 @@ var _ = Describe("textDiffWriter", func() {
 
 		var buf bytes.Buffer
 
-		w := newTextDiffWriter(&buf)
+		w := newMDDiffWriter(&buf)
 		Expect(w.Write(rec)).To(Succeed())
 		Expect(w.Close()).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("missing in sharadar"))
+	})
+
+	It("groups multiple records under one ticker heading", func() {
+		dk, err := time.Parse("2006-01-02", "2023-03-31")
+		Expect(err).NotTo(HaveOccurred())
+
+		recs := []diffRecord{
+			{kind: diffField, ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ",
+				dateKey: dk, field: "pe", secValue: mustPtr(10), sharadarValue: mustPtr(11)},
+			{kind: diffField, ticker: "AAPL", compositeFigi: "BBG1", dimension: "ART",
+				dateKey: dk, field: "ps", secValue: mustPtr(5), sharadarValue: mustPtr(6)},
+		}
+
+		var buf bytes.Buffer
+		w := newMDDiffWriter(&buf)
+		for _, r := range recs {
+			Expect(w.Write(r)).To(Succeed())
+		}
+		Expect(w.Close()).To(Succeed())
+
+		out := buf.String()
+		Expect(strings.Count(out, "## AAPL")).To(Equal(1))
+		Expect(out).To(ContainSubstring("pe"))
+		Expect(out).To(ContainSubstring("ps"))
 	})
 })
 
@@ -493,6 +517,6 @@ var _ = Describe("csvDiffWriter", func() {
 
 // Compile-time check that both writers implement the diffWriter interface.
 var (
-	_ diffWriter = (*textDiffWriter)(nil)
+	_ diffWriter = (*mdDiffWriter)(nil)
 	_ diffWriter = (*csvDiffWriter)(nil)
 )
