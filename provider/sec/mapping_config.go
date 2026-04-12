@@ -36,9 +36,10 @@ const (
 type FormulaOp string
 
 const (
-	OpAdd      FormulaOp = "add"      // A + B + ...
-	OpSubtract FormulaOp = "subtract" // A - B
-	OpDivide   FormulaOp = "divide"   // A / B
+	OpAdd               FormulaOp = "add"                // A + B + ...
+	OpSubtract          FormulaOp = "subtract"           // A - B
+	OpDivide            FormulaOp = "divide"             // A / B
+	OpLinearCombination FormulaOp = "linear_combination" // C0*A + C1*B + ...
 )
 
 // FieldMapping maps a data.Fundamental field to XBRL tag(s) or a formula.
@@ -57,8 +58,9 @@ type FieldMapping struct {
 	Negate bool
 
 	// For derived mappings: formula
-	Op       FormulaOp // Operation to apply
-	Operands []string  // Field names to use as operands
+	Op           FormulaOp // Operation to apply
+	Operands     []string  // Field names to use as operands
+	Coefficients []float64 // Per-operand multipliers (for OpLinearCombination)
 
 	// For derived mappings that also have a direct XBRL fallback
 	FallbackTags []string

@@ -212,6 +212,44 @@ var _ = Describe("Mapping Engine", func() {
 		})
 	})
 
+	Describe("computeDerived with OpLinearCombination", func() {
+		It("computes weighted sum of operands", func() {
+			resolved := map[string]float64{
+				"A": 100,
+				"B": 200,
+				"C": 30,
+				"D": 20,
+				"E": 10,
+			}
+			m := FieldMapping{
+				FieldName:    "Result",
+				Type:         MappingDerived,
+				Op:           OpLinearCombination,
+				Operands:     []string{"A", "B", "C", "D", "E"},
+				Coefficients: []float64{1, 1, -1, -1, -1},
+			}
+			val, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(240.0))
+		})
+
+		It("returns false when any operand is missing", func() {
+			resolved := map[string]float64{
+				"A": 100,
+				"B": 200,
+			}
+			m := FieldMapping{
+				FieldName:    "Result",
+				Type:         MappingDerived,
+				Op:           OpLinearCombination,
+				Operands:     []string{"A", "B", "C"},
+				Coefficients: []float64{1, 1, -1},
+			}
+			_, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeFalse())
+		})
+	})
+
 	Describe("ResolveAllFields", func() {
 		It("resolves both direct and derived fields", func() {
 			periodEnd := time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC)

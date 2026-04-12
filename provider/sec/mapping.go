@@ -280,6 +280,18 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 		}
 
 		return vals[0] / vals[1], true
+
+	case OpLinearCombination:
+		if len(vals) != len(m.Coefficients) {
+			return 0, false
+		}
+
+		sum := 0.0
+		for i, v := range vals {
+			sum += m.Coefficients[i] * v
+		}
+
+		return sum, true
 	}
 
 	return 0, false
