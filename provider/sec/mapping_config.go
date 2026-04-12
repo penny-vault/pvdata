@@ -68,6 +68,10 @@ type FieldMapping struct {
 	// OptionalOperands makes OpAdd treat missing operands as 0 and resolve
 	// when at least one operand is present, instead of requiring all.
 	OptionalOperands bool
+
+	// RoundDigits rounds OpDivide results to this many decimal places.
+	// Zero (the default) means no rounding.
+	RoundDigits int
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -605,44 +609,51 @@ var FieldMappings = []FieldMapping{
 	// GrossMargin = GrossProfit / Revenues
 	{
 		FieldName: "GrossMargin", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"GrossProfit", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"GrossProfit", "Revenues"},
+		RoundDigits: 3,
 	},
 	// ProfitMargin = NetIncomeCommonStock / Revenues
 	{
 		FieldName: "ProfitMargin", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"NetIncomeCommonStock", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"NetIncomeCommonStock", "Revenues"},
+		RoundDigits: 3,
 	},
 	// EBITDAMargin = EBITDA / Revenues
 	{
 		FieldName: "EBITDAMargin", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"EBITDA", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"EBITDA", "Revenues"},
+		RoundDigits: 3,
 	},
 	// CurrentRatio = CurrentAssets / CurrentLiabilities
 	{
 		FieldName: "CurrentRatio", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"CurrentAssets", "CurrentLiabilities"},
+		Op:          OpDivide,
+		Operands:    []string{"CurrentAssets", "CurrentLiabilities"},
+		RoundDigits: 3,
 	},
 	// DebtToEquityRatio = TotalLiabilities / Equity
 	{
 		FieldName: "DebtToEquityRatio", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"TotalLiabilities", "Equity"},
+		Op:          OpDivide,
+		Operands:    []string{"TotalLiabilities", "Equity"},
+		RoundDigits: 3,
 	},
 	// AssetTurnover = Revenues / TotalAssets
 	{
 		FieldName: "AssetTurnover", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"Revenues", "TotalAssets"},
+		Op:          OpDivide,
+		Operands:    []string{"Revenues", "TotalAssets"},
+		RoundDigits: 3,
 	},
 	// ReturnOnSales = EBIT / Revenues
 	{
 		FieldName: "ReturnOnSales", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"EBIT", "Revenues"},
+		Op:          OpDivide,
+		Operands:    []string{"EBIT", "Revenues"},
+		RoundDigits: 3,
 	},
 
 	// ==================== PER-SHARE METRICS (derived) ====================
@@ -650,26 +661,30 @@ var FieldMappings = []FieldMapping{
 	// FreeCashFlowPerShare = FreeCashFlow / WeightedAverageShares
 	{
 		FieldName: "FreeCashFlowPerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"FreeCashFlow", "WeightedAverageShares"},
+		Op:          OpDivide,
+		Operands:    []string{"FreeCashFlow", "WeightedAverageShares"},
+		RoundDigits: 3,
 	},
-	// BookValuePerShare = Equity / SharesBasic
+	// BookValuePerShare = Equity / WeightedAverageShares
 	{
 		FieldName: "BookValuePerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"Equity", "SharesBasic"},
+		Op:          OpDivide,
+		Operands:    []string{"Equity", "WeightedAverageShares"},
+		RoundDigits: 3,
 	},
 	// SalesPerShare = Revenues / WeightedAverageShares
 	{
 		FieldName: "SalesPerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"Revenues", "WeightedAverageShares"},
+		Op:          OpDivide,
+		Operands:    []string{"Revenues", "WeightedAverageShares"},
+		RoundDigits: 3,
 	},
-	// TangibleAssetsBookValuePerShare = TangibleAssetValue / SharesBasic
+	// TangibleAssetsBookValuePerShare = TangibleAssetValue / WeightedAverageShares
 	{
 		FieldName: "TangibleAssetsBookValuePerShare", Type: MappingDerived, StatementType: StmtMetric, ValueType: "float64",
-		Op:       OpDivide,
-		Operands: []string{"TangibleAssetValue", "SharesBasic"},
+		Op:          OpDivide,
+		Operands:    []string{"TangibleAssetValue", "WeightedAverageShares"},
+		RoundDigits: 3,
 	},
 
 	// Note: The following Sharadar fields require market price data and are

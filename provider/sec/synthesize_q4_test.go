@@ -170,9 +170,9 @@ var _ = Describe("SynthesizeQ4", func() {
 			Expect(arResult["Revenues"]).To(BeNumerically("~", 170, 0.001))
 			// Q4 GrossProfit = 225 - (45+55+50) = 75
 			Expect(arResult["GrossProfit"]).To(BeNumerically("~", 75, 0.001))
-			// Q4 GrossMargin = GrossProfit / Revenues = 75 / 170 ≈ 0.4412
-			Expect(arResult["GrossMargin"]).To(BeNumerically("~", 75.0/170.0, 0.0001))
-			Expect(mrResult["GrossMargin"]).To(BeNumerically("~", 75.0/170.0, 0.0001))
+			// Q4 GrossMargin = GrossProfit / Revenues = 75 / 170 ≈ 0.441 (rounded to 3 decimal places)
+			Expect(arResult["GrossMargin"]).To(Equal(0.441))
+			Expect(mrResult["GrossMargin"]).To(Equal(0.441))
 		})
 	})
 
