@@ -33,11 +33,17 @@ func NewSubscriptionsModel(statuses []*SubscriptionStatus) SubscriptionsModel {
 
 	rows := buildRows(statuses)
 
+	width := 0
+	for _, c := range columns {
+		width += c.Width + 2
+	}
+
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(10),
+		table.WithWidth(width),
 	)
 
 	s := table.DefaultStyles()

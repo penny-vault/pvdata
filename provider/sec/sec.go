@@ -213,14 +213,22 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 
 	skippedMissingFIGI := 0
 
+	// Determine the cutoff date for which periods to emit. If --lookback is
+	// set it takes precedence; otherwise fall back to the subscription's
+	// last observation date (zero means full backfill).
+	since := sub.LastObsDate
+	if lookback := provider.LookbackFromContext(ctx, 0); lookback > 0 {
+		since = time.Now().Add(-lookback)
+	}
+
 	isBackfill := sub.LastObsDate.IsZero()
 	if isBackfill {
-		if err := runBackfill(ctx, client, cikMap, sub, out, &numObservations, &skippedMissingFIGI); err != nil {
+		if err := runBackfill(ctx, client, cikMap, sub, since, out, &numObservations, &skippedMissingFIGI); err != nil {
 			runSummary.Status = data.RunFailed
 			return
 		}
 	} else {
-		if err := runIncremental(ctx, client, cikMap, sub, sub.LastObsDate, out, &numObservations, &skippedMissingFIGI); err != nil {
+		if err := runIncremental(ctx, client, cikMap, sub, since, out, &numObservations, &skippedMissingFIGI); err != nil {
 			runSummary.Status = data.RunFailed
 			return
 		}
@@ -233,7 +241,7 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	}
 }
 
-func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
+func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
 	processed := 0
 	processErrors := 0
 
@@ -269,7 +277,7 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			return nil
 		}
 
-		latestCoverage, periodsEmitted := emitFundamentals(cf, asset, sub, time.Time{}, out, numObservations)
+		latestCoverage, periodsEmitted := emitFundamentals(cf, asset, sub, since, out, numObservations)
 		if periodsEmitted > 0 {
 			coverageSamples = append(coverageSamples, latestCoverage)
 		}
