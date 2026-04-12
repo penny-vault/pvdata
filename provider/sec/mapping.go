@@ -192,6 +192,10 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		switch m.Type {
 		case MappingDirect:
 			if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {
+				if m.Negate {
+					val = -val
+				}
+
 				resolved[m.FieldName] = val
 			}
 
@@ -199,6 +203,10 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 			// Try direct XBRL fallback tags first
 			if len(m.FallbackTags) > 0 {
 				if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {
+					if m.Negate {
+						val = -val
+					}
+
 					resolved[m.FieldName] = val
 					continue
 				}
