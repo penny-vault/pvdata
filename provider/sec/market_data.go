@@ -16,10 +16,15 @@
 package sec
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/library"
+	"github.com/rs/zerolog/log"
 )
 
 // PriceLookupFn returns the EOD close price for a given asset and date.
@@ -152,4 +157,56 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			dst.PayoutRatio = src.PayoutRatio
 		}
 	}
+}
+
+// NewEODPriceLookup returns a PriceLookupFn that queries the published EOD
+// view for the unadjusted close price nearest to and on or before the given
+// date (up to 7 days back to handle weekends and holidays). Returns 0 if no
+// price is found; this is normal for historical gaps and is not treated as an
+// error.
+func NewEODPriceLookup(ctx context.Context, pool *pgxpool.Pool, eodViewName string) PriceLookupFn {
+	query := fmt.Sprintf(
+		`SELECT close FROM %s WHERE composite_figi = $1 AND event_date <= $2 AND event_date >= $3 ORDER BY event_date DESC LIMIT 1`,
+		eodViewName,
+	)
+
+	return func(compositeFigi string, eventDate time.Time) float64 {
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to acquire connection for EOD price lookup")
+
+			return 0
+		}
+
+		defer conn.Release()
+
+		var close float64
+
+		err = conn.QueryRow(ctx, query, compositeFigi, eventDate, eventDate.AddDate(0, 0, -7)).Scan(&close)
+		if err != nil {
+			return 0
+		}
+
+		return close
+	}
+}
+
+// FindEODViewName loads all published views and returns the ViewName of the
+// one whose DataTypeKey is "eod". Returns an empty string if no such view
+// exists.
+func FindEODViewName(ctx context.Context, pool *pgxpool.Pool) string {
+	views, err := library.LoadPublishedViews(ctx, pool)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to load published views")
+
+		return ""
+	}
+
+	for _, v := range views {
+		if v.DataTypeKey == "eod" {
+			return v.ViewName
+		}
+	}
+
+	return ""
 }
