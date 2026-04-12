@@ -590,11 +590,14 @@ var FieldMappings = []FieldMapping{
 		Operands: []string{"TotalAssets", "Intangibles"},
 	},
 	// InvestedCapital = TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
+	// OptionalOperands: some companies (e.g. Apple) have no intangible assets
+	// and do not report the Intangibles XBRL tag; treat missing components as 0.
 	{
 		FieldName: "InvestedCapital", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:           OpLinearCombination,
-		Operands:     []string{"TotalDebt", "TotalAssets", "Intangibles", "CashAndEquivalents", "CurrentLiabilities"},
-		Coefficients: []float64{1, 1, -1, -1, -1},
+		Op:               OpLinearCombination,
+		Operands:         []string{"TotalDebt", "TotalAssets", "Intangibles", "CashAndEquivalents", "CurrentLiabilities"},
+		Coefficients:     []float64{1, 1, -1, -1, -1},
+		OptionalOperands: true,
 	},
 
 	// ==================== RATIO METRICS (derived) ====================
