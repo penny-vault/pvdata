@@ -419,8 +419,8 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "SharesBasic", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
-			"CommonStockSharesOutstanding",
-			"EntityCommonStockSharesOutstanding",
+			"EntityCommonStockSharesOutstanding", // DEI cover-page count (matches Sharadar sharesbas)
+			"CommonStockSharesOutstanding",       // us-gaap balance sheet fallback
 		},
 	},
 	{

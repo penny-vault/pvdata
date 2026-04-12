@@ -53,7 +53,30 @@ var _ = Describe("CompanyFacts Parser", func() {
 		Expect(cf.Facts).To(HaveKey("NetIncomeLoss"))
 		Expect(cf.Facts).To(HaveKey("EarningsPerShareBasic"))
 		Expect(cf.Facts).To(HaveKey("CommonStockSharesOutstanding"))
-		Expect(cf.Facts).To(HaveLen(14))
+		Expect(cf.Facts).To(HaveLen(15)) // 14 us-gaap + 1 dei
+	})
+
+	It("parses DEI namespace concepts", func() {
+		Expect(cf.Facts).To(HaveKey("EntityCommonStockSharesOutstanding"))
+
+		deiFacts := cf.Facts["EntityCommonStockSharesOutstanding"]
+		Expect(deiFacts).NotTo(BeEmpty())
+
+		// Verify a specific DEI fact (Q2 FY2024 cover page)
+		var found *Fact
+
+		for i := range deiFacts {
+			if deiFacts[i].Accn == "0000320193-24-000069" {
+				found = &deiFacts[i]
+
+				break
+			}
+		}
+
+		Expect(found).NotTo(BeNil())
+		Expect(found.Val).To(Equal(15334082000.0))
+		Expect(found.Form).To(Equal("10-Q"))
+		Expect(found.Start.IsZero()).To(BeTrue(), "DEI share count is an instant concept")
 	})
 
 	It("parses instant facts (balance sheet items with only end date)", func() {

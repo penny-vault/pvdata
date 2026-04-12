@@ -77,6 +77,13 @@ var unitPreference = []string{"USD", "USD/shares", "shares", "pure"}
 
 const dateFormat = "2006-01-02"
 
+// xbrlNamespaces lists the XBRL taxonomy namespaces parsed from SEC EDGAR
+// companyfacts JSON. "us-gaap" contains financial statement data (balance
+// sheet, income statement, cash flow); "dei" (Document and Entity Information)
+// contains filing metadata including EntityCommonStockSharesOutstanding -- the
+// cover-page share count that Sharadar uses for sharesbas.
+var xbrlNamespaces = []string{"us-gaap", "dei"}
+
 // ParseCompanyFacts parses SEC EDGAR companyfacts JSON into a CompanyFacts struct.
 // It only includes facts from 10-K and 10-Q filings and selects the preferred
 // unit type when multiple are available for a concept.
@@ -93,13 +100,22 @@ func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 		Facts:      make(map[string][]Fact),
 	}
 
-	// Iterate over us-gaap concepts
-	usGAAP := root.Get("facts.us-gaap")
-	if !usGAAP.Exists() {
-		return cf, nil
+	for _, ns := range xbrlNamespaces {
+		nsData := root.Get("facts." + ns)
+		if !nsData.Exists() {
+			continue
+		}
+
+		parseNamespaceFacts(nsData, cf)
 	}
 
-	usGAAP.ForEach(func(conceptName, conceptData gjson.Result) bool {
+	return cf, nil
+}
+
+// parseNamespaceFacts extracts XBRL facts from a single taxonomy namespace
+// (e.g. us-gaap or dei) and merges them into cf.Facts.
+func parseNamespaceFacts(nsData gjson.Result, cf *CompanyFacts) {
+	nsData.ForEach(func(conceptName, conceptData gjson.Result) bool {
 		units := conceptData.Get("units")
 		if !units.Exists() {
 			return true
@@ -193,8 +209,6 @@ func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 
 		return true
 	})
-
-	return cf, nil
 }
 
 // FetchCompanyFacts downloads the companyfacts JSON for a single CIK from SEC EDGAR.
