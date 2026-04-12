@@ -160,6 +160,45 @@ var _ = Describe("Mapping Engine", func() {
 			Expect(ok).To(BeFalse())
 		})
 
+		It("prefers EntityCommonStockSharesOutstanding over CommonStockSharesOutstanding", func() {
+			// When both DEI (EntityCommonStockSharesOutstanding) and us-gaap
+			// (CommonStockSharesOutstanding) facts are present, the DEI
+			// cover-page count should be selected because it matches Sharadar's
+			// sharesbas definition. The two values differ slightly because the
+			// cover-page date is ~3 weeks after quarter end and ongoing
+			// buybacks reduce the count.
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			bothCF := &CompanyFacts{
+				CIK:        320193,
+				EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"EntityCommonStockSharesOutstanding": {
+						// DEI cover-page value (as of ~2024-04-19)
+						{End: time.Date(2024, 4, 19, 0, 0, 0, 0, time.UTC), Filed: filed, Val: 15_334_082_000, Form: "10-Q"},
+					},
+					"CommonStockSharesOutstanding": {
+						// us-gaap balance sheet value (as of 2024-03-30)
+						{End: periodEnd, Filed: filed, Val: 15_337_686_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			val, ok := ResolveDirect(bothCF, FieldMapping{
+				FieldName: "SharesBasic",
+				Type:      MappingDirect,
+				XBRLTags: []string{
+					"EntityCommonStockSharesOutstanding",
+					"CommonStockSharesOutstanding",
+				},
+			}, periodEnd, "10-Q")
+
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(15_334_082_000.0),
+				"should pick DEI cover-page count, not us-gaap balance sheet count")
+		})
+
 		It("prefers single-quarter facts over YTD cumulative facts in 10-Q", func() {
 			// Simulate Apple's Q2 10-Q where both a 90-day single-quarter
 			// fact and a 181-day YTD cumulative fact exist for the same
