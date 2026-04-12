@@ -424,14 +424,20 @@ var FieldMappings = []FieldMapping{
 		},
 	},
 	{
-		FieldName: "WeightedAverageShares", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		// Weighted average shares are period-average values, not cumulative
+		// flows. StmtPointInTime ensures Q4 synthesis copies the annual value
+		// directly (rather than computing annual - sum(Q1..Q3), which produces
+		// nonsensical negative numbers) and TTM uses the latest quarter's value
+		// (rather than summing 4 quarters, which would quadruple the count).
+		FieldName: "WeightedAverageShares", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
 			"WeightedAverageNumberOfSharesOutstandingBasic",
 		},
 	},
 	{
-		FieldName: "WeightedAverageSharesDiluted", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		// See WeightedAverageShares comment above for StatementType rationale.
+		FieldName: "WeightedAverageSharesDiluted", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		// WeightedAverageNumberOfSharesOutstandingBasic is the final fallback
 		// because in loss periods the diluted count is antidilutive and many
 		// filers omit the diluted tag entirely; in those cases basic ≡ diluted.

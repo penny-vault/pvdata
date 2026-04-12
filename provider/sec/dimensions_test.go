@@ -208,6 +208,54 @@ var _ = Describe("Dimensions", func() {
 				}
 			})
 
+			It("excludes spurious 10-K periods created by short-duration quarterly facts", func() {
+				// SEC 10-K filings often include quarterly-duration facts
+				// (e.g. current-quarter revenue or comparative quarterly data)
+				// alongside full-year data. These short-duration facts share
+				// Form="10-K" but their End dates correspond to quarter boundaries.
+				// Without filtering, they create spurious 10-K periods that merge
+				// with the real annual period during NormalizeEventDate dedup
+				// (both snap to Dec 31), shifting PeriodEnd to December.
+				shortDurationCF := &CompanyFacts{
+					CIK:        320193,
+					EntityName: "Apple Inc",
+					Facts: map[string][]Fact{
+						"Revenues": {
+							// Full-year fact (genuine 10-K period)
+							{
+								Val:   400000,
+								Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC),
+								Form:  "10-K",
+								FY:    2024,
+								FP:    "FY",
+								Filed: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC),
+							},
+							// Q1 quarterly-duration fact within the 10-K filing
+							{
+								Val:   110000,
+								Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2023, 12, 30, 0, 0, 0, 0, time.UTC),
+								Form:  "10-K",
+								FY:    2024,
+								FP:    "Q1",
+								Filed: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC),
+							},
+						},
+					},
+				}
+
+				periods := IdentifyPeriods(shortDurationCF)
+
+				// Should have exactly 1 10-K period at the actual fiscal year-end.
+				Expect(periods).To(HaveLen(1))
+				Expect(periods[0].FormType).To(Equal("10-K"))
+				// PeriodEnd must be the annual End date (Sep 28), NOT the
+				// quarterly End date (Dec 30) that would result from merging.
+				Expect(periods[0].PeriodEnd).To(Equal(
+					time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC)))
+			})
+
 			It("keeps distinct calendar quarters as separate periods", func() {
 				// Q2 2018 (2018-06-30) and Q3 2018 (2018-09-30) normalize to
 				// different calendar quarter ends and must remain separate.
