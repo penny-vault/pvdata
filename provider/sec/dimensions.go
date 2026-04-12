@@ -97,6 +97,25 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 				continue
 			}
 
+			// 10-K filings often include quarterly-duration facts alongside
+			// the full-year data (e.g. current-quarter revenue breakdowns,
+			// or comparative quarterly data from prior years). These short-
+			// duration facts share Form="10-K" but their End dates correspond
+			// to quarter boundaries, not the fiscal year-end. If allowed into
+			// period identification they create spurious 10-K periods at those
+			// quarter-end dates that later merge with the real annual period
+			// during NormalizeEventDate dedup (both snap to Dec 31). The merge
+			// picks the latest raw PeriodEnd — typically the Q1 end in December
+			// — which shifts the synthesized Q4 to the wrong calendar quarter.
+			// Filtering to >= 300 days mirrors ResolveDirect's logic and ensures
+			// only genuine annual-duration facts drive 10-K period creation.
+			if f.Form == "10-K" {
+				days := f.End.Sub(f.Start).Hours() / 24
+				if days < 300 {
+					continue
+				}
+			}
+
 			key := periodKey{end: f.End, form: f.Form}
 
 			p, exists := rawPeriods[key]

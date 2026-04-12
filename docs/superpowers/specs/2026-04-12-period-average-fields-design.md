@@ -86,20 +86,15 @@ If either period is missing a required input, dependent fields are omitted from 
 
 **File:** `provider/sec/sec.go`
 
-Three insertion points corresponding to the three dimension types:
+Two insertion points corresponding to annual and trailing-twelve-month dimension types.
 
-#### Quarterly (ARQ/MRQ)
+#### Quarterly (ARQ/MRQ) -- excluded
 
-After the existing de-cumulation loop, add a new loop over `quarters`:
+Period averages, derived ratios (`ROA`, `ROE`, `ROIC`), `AssetTurnover`, and `ReturnOnSales` are **not computed** for ARQ/MRQ dimensions. Rationale (see #56):
 
-```
-for i := range quarters:
-    if i > 0 and gap <= maxQuarterGapDays:
-        merge ComputePeriodAverages(quarters[i].arEmit, quarters[i-1].arEmit) into quarters[i].arEmit
-        merge ComputePeriodAverages(quarters[i].mrEmit, quarters[i-1].mrEmit) into quarters[i].mrEmit
-```
-
-When `i == 0` or the gap exceeds the threshold, the 6 fields are simply absent from that period.
+1. **Misleading rates.** `ROA`, `ROE`, `ROIC`, and `AssetTurnover` divide a single quarter's flow (income or revenue) by a balance sheet stock. The resulting quarterly rate is ~1/4 the scale of an annual rate but occupies the same database column, creating a silent foot-gun for strategy authors who compare across dimensions.
+2. **Sharadar parity.** Sharadar returns NULL for all 8 fields in ARQ/MRQ across its entire dataset (verified against raw SF1 parquet). Computing them only in the SEC provider generates false diffs in `compare-fundamentals`.
+3. **TTM covers the use case.** Strategy authors who rebalance quarterly can use ART/MRT values, which are updated every quarter and contain properly annualized ratios. Authors who need single-quarter analysis can derive ratios from the raw components (`NetIncomeCommonStock`, `TotalAssets`, `Equity`, etc.) that are present in ARQ/MRQ.
 
 #### Annual (ARY/MRY)
 
