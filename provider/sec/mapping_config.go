@@ -429,7 +429,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "CapitalExpenditure", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		Negate:   true,
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsToAcquirePropertyPlantAndEquipment",
 			"PaymentsToAcquireProductiveAssets",
@@ -445,7 +445,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetCashFlowBusiness", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		Negate:   true,
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsToAcquireBusinessesNetOfCashAcquired",
 			"PaymentsToAcquireBusinessesGross",
@@ -453,10 +453,9 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetCashFlowCommon", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		Negate:   true,
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsForRepurchaseOfCommonStock",
-			"ProceedsFromIssuanceOfCommonStock",
 		},
 	},
 	{
@@ -468,7 +467,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		Negate:   true,
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsOfDividendsCommonStock",
 			"PaymentsOfDividends",

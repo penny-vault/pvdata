@@ -323,8 +323,9 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEn
 	}
 
 	// Pass 2: recompute derived flow fields from (now de-cumulated) components.
-	// This handles cases like FreeCashFlow = NetCashFlowFromOperations -
-	// CapitalExpenditure where both operands are cash flow YTD values.
+	// This handles cases like FreeCashFlow = NetCashFlowFromOperations +
+	// CapitalExpenditure (CapEx is negative) where both operands are cash
+	// flow YTD values.
 	for _, m := range FieldMappings {
 		if m.Type != MappingDerived || m.StatementType != StmtFlow {
 			continue

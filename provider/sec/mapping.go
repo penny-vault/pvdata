@@ -208,6 +208,7 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 					}
 
 					resolved[m.FieldName] = val
+
 					continue
 				}
 			}
