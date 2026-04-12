@@ -111,7 +111,6 @@ func DiffSnapshots(current, previous map[string]IndexMember) (added, removed, we
 	return
 }
 
-
 // LastSnapshotDate queries the database for the most recent snapshot date for the given index.
 func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string) time.Time {
 	conn, err := pool.Acquire(ctx)

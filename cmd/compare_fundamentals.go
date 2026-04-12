@@ -29,6 +29,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/mattn/go-isatty"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
@@ -1006,9 +1007,19 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		doneCh <- err
 	}()
 
-	program := tea.NewProgram(newCFModel(progressCh, doneCh))
-	if _, runErr := program.Run(); runErr != nil {
-		log.Error().Err(runErr).Msg("TUI error")
+	if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
+		// No TTY available -- drain progress channel and wait for completion
+		for range progressCh {
+		}
+
+		if compErr := <-doneCh; compErr != nil {
+			log.Fatal().Err(compErr).Msg("comparison failed")
+		}
+	} else {
+		program := tea.NewProgram(newCFModel(progressCh, doneCh))
+		if _, runErr := program.Run(); runErr != nil {
+			log.Error().Err(runErr).Msg("TUI error")
+		}
 	}
 
 	if cerr := writer.Close(); cerr != nil {

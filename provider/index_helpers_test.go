@@ -233,4 +233,3 @@ var _ = Describe("currentIndexMembers", func() {
 		Expect(result).To(BeEmpty())
 	})
 })
-

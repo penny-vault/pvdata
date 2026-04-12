@@ -488,14 +488,16 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// the true latest-period coverage for the company.
 	var latestPeriodEnd time.Time
 
-	// Collect quarterly periods for TTM computation, keyed by normalized event date.
-	// All quarters are kept (even those filtered out below) so TTM windows can
-	// still find their constituent quarters; the since check is reapplied per
-	// window when emitting TTM observations.
+	// Collect quarterly periods for de-cumulation and TTM computation. All
+	// quarters are kept (even those filtered by since) so TTM windows and
+	// de-cumulation chains remain complete; the since check is reapplied when
+	// emitting.
 	type quarterData struct {
 		period   Period
-		arFields map[string]float64
-		mrFields map[string]float64
+		arFields map[string]float64 // original resolved values (may be YTD for cash flow)
+		mrFields map[string]float64 // original resolved values (may be YTD for cash flow)
+		arEmit   map[string]float64 // de-cumulated values for emission and TTM
+		mrEmit   map[string]float64 // de-cumulated values for emission and TTM
 	}
 
 	var quarters []quarterData
@@ -531,41 +533,13 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			latestPeriodCoverage = len(arFields)
 		}
 
-		// Skip emitting per-period observations for periods filed before since.
-		// MRFiledDate is used so that restatements filed after since are re-emitted.
-		if !since.IsZero() && p.MRFiledDate.Before(since) {
-			continue
-		}
-
-		if p.FormType == "10-Q" {
-			// ARQ
-			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARQ",
-				p.ARFiledDate, calendarDate, p.PeriodEnd, p.ARFiledDate)
-			out <- &data.Observation{
-				Fundamental:      fundamental,
-				ObservationDate:  calendarDate,
-				SubscriptionID:   sub.ID,
-				SubscriptionName: sub.Name,
-			}
-
-			*numObservations++
-
-			// MRQ
-			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRQ",
-				p.PeriodEnd, calendarDate, p.PeriodEnd, p.MRFiledDate)
-			out <- &data.Observation{
-				Fundamental:      fundamental,
-				ObservationDate:  calendarDate,
-				SubscriptionID:   sub.ID,
-				SubscriptionName: sub.Name,
-			}
-
-			*numObservations++
-
-			periodsEmitted++
-		}
-
+		// Emit annual observations immediately (10-K data is always full-year,
+		// no de-cumulation needed).
 		if p.FormType == "10-K" {
+			if !since.IsZero() && p.MRFiledDate.Before(since) {
+				continue
+			}
+
 			// ARY
 			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARY",
 				p.ARFiledDate, calendarDate, p.PeriodEnd, p.ARFiledDate)
@@ -594,7 +568,77 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 	}
 
-	// Compute TTM for each quarter that has 4 preceding quarters
+	// De-cumulate YTD cash flow values for quarterly periods. SEC 10-Q filings
+	// report cash flow items as year-to-date cumulative values only. For Q1 the
+	// YTD equals the quarterly value; for Q2/Q3 we subtract the prior quarter's
+	// YTD to isolate the single-quarter amount.
+	//
+	// Consecutive quarters within the same fiscal year are identified by a gap
+	// of <= 120 days between period ends. A larger gap (e.g. Q3 -> Q1 across a
+	// 10-K boundary) means the current quarter is a new fiscal year's Q1 and
+	// its YTD value is already the quarterly value.
+	const maxQuarterGapDays = 120
+
+	for i := range quarters {
+		q := &quarters[i]
+
+		if i > 0 {
+			prev := &quarters[i-1]
+			gapDays := q.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
+
+			if gapDays <= maxQuarterGapDays {
+				// Consecutive quarter in same fiscal year: de-cumulate using
+				// the prior quarter's ORIGINAL (pre-de-cumulation) YTD values.
+				q.arEmit = DecumulateYTD(cf, q.arFields, prev.arFields, q.period.PeriodEnd, q.period.FormType)
+				q.mrEmit = DecumulateYTD(cf, q.mrFields, prev.mrFields, q.period.PeriodEnd, q.period.FormType)
+
+				continue
+			}
+		}
+
+		// Q1 or no prior quarter: no de-cumulation needed.
+		q.arEmit = q.arFields
+		q.mrEmit = q.mrFields
+	}
+
+	// Emit quarterly observations using de-cumulated values.
+	for i := range quarters {
+		q := &quarters[i]
+		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
+
+		if !since.IsZero() && q.period.MRFiledDate.Before(since) {
+			continue
+		}
+
+		// ARQ
+		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",
+			q.period.ARFiledDate, calendarDate, q.period.PeriodEnd, q.period.ARFiledDate)
+		out <- &data.Observation{
+			Fundamental:      fundamental,
+			ObservationDate:  calendarDate,
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		*numObservations++
+
+		// MRQ
+		fundamental = BuildFundamental(q.mrEmit, asset.Ticker, asset.CompositeFigi, "MRQ",
+			q.period.PeriodEnd, calendarDate, q.period.PeriodEnd, q.period.MRFiledDate)
+		out <- &data.Observation{
+			Fundamental:      fundamental,
+			ObservationDate:  calendarDate,
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		*numObservations++
+
+		periodsEmitted++
+	}
+
+	// Compute TTM for each quarter that has 4 preceding quarters.
+	// Uses de-cumulated (single-quarter) values so the TTM sum is correct.
 	for i := 3; i < len(quarters); i++ {
 		q := quarters[i]
 		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
@@ -653,10 +697,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		// ART
+		// ART — uses de-cumulated quarterly values
 		arQSlice := make([]map[string]float64, 4)
 		for j := 0; j < 4; j++ {
-			arQSlice[j] = quarters[i-3+j].arFields
+			arQSlice[j] = quarters[i-3+j].arEmit
 		}
 
 		if ttm := ComputeTTM(arQSlice); ttm != nil {
@@ -672,10 +716,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			*numObservations++
 		}
 
-		// MRT
+		// MRT — uses de-cumulated quarterly values
 		mrQSlice := make([]map[string]float64, 4)
 		for j := 0; j < 4; j++ {
-			mrQSlice[j] = quarters[i-3+j].mrFields
+			mrQSlice[j] = quarters[i-3+j].mrEmit
 		}
 
 		if ttm := ComputeTTM(mrQSlice); ttm != nil {

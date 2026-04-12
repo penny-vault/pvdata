@@ -118,6 +118,96 @@ var _ = Describe("Dimensions", func() {
 				Expect(p.MRFiledDate).To(Equal(time.Date(2018, 11, 15, 0, 0, 0, 0, time.UTC)))
 			})
 
+			It("excludes spurious 10-Q periods created by comparative balance sheet data", func() {
+				// Simulate Apple's Q1 10-Q (covering Oct-Dec 2024) which includes
+				// comparative balance sheet data (instant concepts like Assets)
+				// as of the prior fiscal year-end (2024-09-28). IdentifyPeriods
+				// should NOT create a 10-Q period at 2024-09-28 -- that date
+				// belongs to the 10-K only.
+				comparativeCF := &CompanyFacts{
+					CIK:        320193,
+					EntityName: "Apple Inc",
+					Facts: map[string][]Fact{
+						"Revenues": {
+							// Real Q1 10-Q revenue (duration concept)
+							{
+								Val:   100000,
+								Start: time.Date(2024, 9, 29, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2024, 12, 28, 0, 0, 0, 0, time.UTC),
+								Form:  "10-Q",
+								FY:    2025,
+								FP:    "Q1",
+								Filed: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC),
+							},
+							// Annual revenue (duration concept)
+							{
+								Val:   400000,
+								Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+								End:   time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC),
+								Form:  "10-K",
+								FY:    2024,
+								FP:    "FY",
+								Filed: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC),
+							},
+						},
+						"Assets": {
+							// Q1 10-Q balance sheet (instant concept, current quarter)
+							{
+								Val:   500000,
+								End:   time.Date(2024, 12, 28, 0, 0, 0, 0, time.UTC),
+								Form:  "10-Q",
+								FY:    2025,
+								FP:    "Q1",
+								Filed: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC),
+							},
+							// Q1 10-Q comparative balance sheet (instant concept
+							// at PRIOR fiscal year-end) -- this is the problematic
+							// fact that was creating a spurious 10-Q period.
+							{
+								Val:   480000,
+								End:   time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC),
+								Form:  "10-Q",
+								FY:    2025,
+								FP:    "Q1",
+								Filed: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC),
+							},
+							// Annual balance sheet (instant concept)
+							{
+								Val:   480000,
+								End:   time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC),
+								Form:  "10-K",
+								FY:    2024,
+								FP:    "FY",
+								Filed: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC),
+							},
+						},
+					},
+				}
+
+				periods := IdentifyPeriods(comparativeCF)
+
+				// Should have exactly 2 periods: one 10-Q for Q1 2025 and one
+				// 10-K for FY2024. The comparative balance sheet data at the
+				// fiscal year-end should NOT create a third (spurious) 10-Q period.
+				Expect(periods).To(HaveLen(2))
+
+				formTypes := map[string]bool{}
+				for _, p := range periods {
+					formTypes[p.FormType] = true
+				}
+
+				Expect(formTypes).To(HaveKey("10-Q"))
+				Expect(formTypes).To(HaveKey("10-K"))
+
+				// The 10-Q period should be for Q1 (Dec 2024), not the fiscal year-end (Sep 2024).
+				for _, p := range periods {
+					if p.FormType == "10-Q" {
+						Expect(p.PeriodEnd).To(Equal(time.Date(2024, 12, 28, 0, 0, 0, 0, time.UTC)),
+							"10-Q period should be at Q1 end, not at fiscal year-end")
+					}
+				}
+			})
+
 			It("keeps distinct calendar quarters as separate periods", func() {
 				// Q2 2018 (2018-06-30) and Q3 2018 (2018-09-30) normalize to
 				// different calendar quarter ends and must remain separate.
@@ -298,6 +388,129 @@ var _ = Describe("Dimensions", func() {
 			Expect(obs["MRQ"]).To(Equal(0))
 			Expect(obs["ART"]).To(Equal(0))
 			Expect(obs["MRT"]).To(Equal(0))
+		})
+	})
+
+	Describe("YTD cash flow de-cumulation", func() {
+		It("de-cumulates YTD cash flow values to single-quarter values", func() {
+			// Build 3 consecutive quarters with:
+			// - Income statement items: both quarterly and YTD facts (should pick quarterly)
+			// - Cash flow items: ONLY YTD facts (should be de-cumulated)
+			cf := &CompanyFacts{
+				CIK:        1,
+				EntityName: "YTD Co",
+				Facts:      make(map[string][]Fact),
+			}
+
+			q1End := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+			q2End := time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC)
+			q3End := time.Date(2024, 9, 30, 0, 0, 0, 0, time.UTC)
+			fyStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			q1Filed := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+			q2Filed := time.Date(2024, 8, 1, 0, 0, 0, 0, time.UTC)
+			q3Filed := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
+
+			// Revenues: quarterly facts (90 days each)
+			// Q1=100, Q2=120, Q3=110
+			cf.Facts["Revenues"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 100, Form: "10-Q", FP: "Q1"},
+				// Q2 has both quarterly and YTD
+				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 120, Form: "10-Q", FP: "Q2"},
+				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 220, Form: "10-Q", FP: "Q2"}, // YTD
+				// Q3 has both quarterly and YTD
+				{Start: q2End.AddDate(0, 0, 1), End: q3End, Filed: q3Filed, Val: 110, Form: "10-Q", FP: "Q3"},
+				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 330, Form: "10-Q", FP: "Q3"}, // YTD
+			}
+
+			// NetIncomeLoss: quarterly facts
+			cf.Facts["NetIncomeLoss"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 20, Form: "10-Q", FP: "Q1"},
+				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 25, Form: "10-Q", FP: "Q2"},
+				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 45, Form: "10-Q", FP: "Q2"}, // YTD
+				{Start: q2End.AddDate(0, 0, 1), End: q3End, Filed: q3Filed, Val: 22, Form: "10-Q", FP: "Q3"},
+				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 67, Form: "10-Q", FP: "Q3"}, // YTD
+			}
+
+			// Cash flow (operations): YTD ONLY (no quarterly facts)
+			// Q1=50, cumulative Q2=110 (Q2 alone=60), cumulative Q3=180 (Q3 alone=70)
+			cf.Facts["NetCashProvidedByUsedInOperatingActivities"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 50, Form: "10-Q", FP: "Q1"},
+				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 110, Form: "10-Q", FP: "Q2"},  // YTD
+				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 180, Form: "10-Q", FP: "Q3"},  // YTD
+			}
+
+			// CapEx: YTD ONLY
+			// Q1=10, cumulative Q2=22 (Q2 alone=12), cumulative Q3=35 (Q3 alone=13)
+			cf.Facts["PaymentsToAcquirePropertyPlantAndEquipment"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 10, Form: "10-Q", FP: "Q1"},
+				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 22, Form: "10-Q", FP: "Q2"},
+				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 35, Form: "10-Q", FP: "Q3"},
+			}
+
+			// Balance sheet (instant, for period identification support)
+			cf.Facts["Assets"] = []Fact{
+				{End: q1End, Filed: q1Filed, Val: 1000, Form: "10-Q", FP: "Q1"},
+				{End: q2End, Filed: q2Filed, Val: 1050, Form: "10-Q", FP: "Q2"},
+				{End: q3End, Filed: q3Filed, Val: 1100, Form: "10-Q", FP: "Q3"},
+			}
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			results := make(map[string]map[string]*data.Fundamental)
+
+			go func() {
+				for obs := range out {
+					dim := obs.Fundamental.Dimension
+					dateKey := obs.ObservationDate.Format("2006-01-02")
+					key := dim + ":" + dateKey
+					if results[key] == nil {
+						results[key] = make(map[string]*data.Fundamental)
+					}
+					results[key][dim] = obs.Fundamental
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// Q1 (2024-03-31): no de-cumulation needed
+			q1ARQ := results["ARQ:2024-03-31"]["ARQ"]
+			Expect(q1ARQ).NotTo(BeNil())
+			Expect(q1ARQ.Revenues).To(Equal(int64(100)))
+			Expect(q1ARQ.NetCashFlowFromOperations).To(Equal(int64(50)))
+			Expect(q1ARQ.CapitalExpenditure).To(Equal(int64(10)))
+
+			// Q2 (2024-06-30): should be de-cumulated
+			q2ARQ := results["ARQ:2024-06-30"]["ARQ"]
+			Expect(q2ARQ).NotTo(BeNil())
+			Expect(q2ARQ.Revenues).To(Equal(int64(120)),
+				"revenues should be quarterly (shorter-duration preference), not YTD")
+			Expect(q2ARQ.NetCashFlowFromOperations).To(Equal(int64(60)),
+				"cash flow should be de-cumulated: 110 (YTD) - 50 (Q1) = 60")
+			Expect(q2ARQ.CapitalExpenditure).To(Equal(int64(12)),
+				"cap-ex should be de-cumulated: 22 (YTD) - 10 (Q1) = 12")
+
+			// Q3 (2024-09-30): should be de-cumulated using Q2's ORIGINAL YTD
+			q3ARQ := results["ARQ:2024-09-30"]["ARQ"]
+			Expect(q3ARQ).NotTo(BeNil())
+			Expect(q3ARQ.Revenues).To(Equal(int64(110)),
+				"revenues should be quarterly")
+			Expect(q3ARQ.NetCashFlowFromOperations).To(Equal(int64(70)),
+				"cash flow should be de-cumulated: 180 (YTD) - 110 (Q2 YTD) = 70")
+			Expect(q3ARQ.CapitalExpenditure).To(Equal(int64(13)),
+				"cap-ex should be de-cumulated: 35 (YTD) - 22 (Q2 YTD) = 13")
+
+			// FreeCashFlow is derived: NetCashFlowFromOperations - CapitalExpenditure
+			Expect(q2ARQ.FreeCashFlow).To(Equal(int64(48)),
+				"free cash flow should be re-derived from de-cumulated components: 60 - 12 = 48")
+			Expect(q3ARQ.FreeCashFlow).To(Equal(int64(57)),
+				"free cash flow should be re-derived: 70 - 13 = 57")
 		})
 	})
 

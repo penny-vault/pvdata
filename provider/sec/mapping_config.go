@@ -380,9 +380,13 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "WeightedAverageSharesDiluted", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		// WeightedAverageNumberOfSharesOutstandingBasic is the final fallback
+		// because in loss periods the diluted count is antidilutive and many
+		// filers omit the diluted tag entirely; in those cases basic ≡ diluted.
 		XBRLTags: []string{
 			"WeightedAverageNumberOfDilutedSharesOutstanding",
 			"WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
+			"WeightedAverageNumberOfSharesOutstandingBasic",
 		},
 	},
 
@@ -465,7 +469,10 @@ var FieldMappings = []FieldMapping{
 		FieldName: "NetCashFlowInvest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"PaymentsToAcquireInvestments",
+			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
 			"ProceedsFromSaleAndMaturityOfMarketableSecurities",
+			"ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities",
+			"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
 		},
 	},
 	{
