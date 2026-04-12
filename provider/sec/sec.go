@@ -581,6 +581,64 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		q.mrEmit = q.mrFields
 	}
 
+	// Synthesize Q4 entries from 10-K annual data and preceding quarters.
+	// Each synthesized Q4 is inserted into the sorted quarters slice so it
+	// participates in TTM computation and is emitted as ARQ/MRQ.
+	for _, a := range annuals {
+		// Rebuild inputs each iteration so previously synthesized Q4s are
+		// available as preceding quarters for later annuals.
+		inputs := make([]synthesizeInput, len(quarters))
+		for i, q := range quarters {
+			inputs[i] = synthesizeInput{
+				periodEnd: q.period.PeriodEnd,
+				arEmit:    q.arEmit,
+				mrEmit:    q.mrEmit,
+			}
+		}
+
+		arQ4, mrQ4 := SynthesizeQ4(a.arFields, a.mrFields, a.period, inputs)
+		if arQ4 == nil {
+			continue
+		}
+
+		// Skip if a quarter already exists at this period end (e.g. if a
+		// company unusually filed a 10-Q for Q4 alongside its 10-K).
+		alreadyExists := false
+
+		for _, q := range quarters {
+			if q.period.PeriodEnd.Equal(a.period.PeriodEnd) {
+				alreadyExists = true
+				break
+			}
+		}
+
+		if alreadyExists {
+			continue
+		}
+
+		q4 := quarterData{
+			period: Period{
+				PeriodEnd:   a.period.PeriodEnd,
+				FormType:    "10-Q",
+				ARFiledDate: a.period.ARFiledDate,
+				MRFiledDate: a.period.MRFiledDate,
+			},
+			arFields: arQ4,
+			mrFields: mrQ4,
+			arEmit:   arQ4,
+			mrEmit:   mrQ4,
+		}
+
+		// Insert into sorted position by PeriodEnd.
+		idx := sort.Search(len(quarters), func(i int) bool {
+			return quarters[i].period.PeriodEnd.After(q4.period.PeriodEnd)
+		})
+
+		quarters = append(quarters, quarterData{})
+		copy(quarters[idx+1:], quarters[idx:])
+		quarters[idx] = q4
+	}
+
 	// Compute period-average fields (AverageAssets, EquityAvg,
 	// InvestedCapitalAverage) and derived ratios (ROA, ROE, ROIC) from
 	// consecutive quarterly balance sheet values.
