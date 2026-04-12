@@ -435,8 +435,8 @@ var _ = Describe("Dimensions", func() {
 			// Q1=50, cumulative Q2=110 (Q2 alone=60), cumulative Q3=180 (Q3 alone=70)
 			cf.Facts["NetCashProvidedByUsedInOperatingActivities"] = []Fact{
 				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 50, Form: "10-Q", FP: "Q1"},
-				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 110, Form: "10-Q", FP: "Q2"},  // YTD
-				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 180, Form: "10-Q", FP: "Q3"},  // YTD
+				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 110, Form: "10-Q", FP: "Q2"}, // YTD
+				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 180, Form: "10-Q", FP: "Q3"}, // YTD
 			}
 
 			// CapEx: YTD ONLY
@@ -624,11 +624,11 @@ var _ = Describe("Dimensions", func() {
 			// Intermediate fields used only as operands for derived fields;
 			// they are intentionally not mapped to Fundamental struct fields.
 			intermediate := map[string]bool{
-				"TradeReceivables":            true,
-				"NonTradeReceivables":         true,
-				"ShortTermDebt":               true,
+				"TradeReceivables":              true,
+				"NonTradeReceivables":           true,
+				"ShortTermDebt":                 true,
 				"LongTermDebtCurrentMaturities": true,
-				"CommercialPaperDebt":         true,
+				"CommercialPaperDebt":           true,
 			}
 
 			var missing []string
@@ -738,8 +738,8 @@ var _ = Describe("Dimensions", func() {
 
 			// Q2: has prior quarter
 			Expect(q2Fund).NotTo(BeNil())
-			Expect(q2Fund.AverageAssets).To(Equal(int64(1100)))  // (1000+1200)/2
-			Expect(q2Fund.EquityAvg).To(Equal(int64(550)))       // (500+600)/2
+			Expect(q2Fund.AverageAssets).To(Equal(int64(1100))) // (1000+1200)/2
+			Expect(q2Fund.EquityAvg).To(Equal(int64(550)))      // (500+600)/2
 			Expect(q2Fund.ROA).To(BeNumerically("~", 120.0/1100.0, 1e-10))
 			Expect(q2Fund.ROE).To(BeNumerically("~", 120.0/550.0, 1e-10))
 		})
@@ -810,8 +810,8 @@ var _ = Describe("Dimensions", func() {
 
 			// FY2: has prior year
 			Expect(fy2Fund).NotTo(BeNil())
-			Expect(fy2Fund.AverageAssets).To(Equal(int64(2200)))  // (2000+2400)/2
-			Expect(fy2Fund.EquityAvg).To(Equal(int64(900)))       // (800+1000)/2
+			Expect(fy2Fund.AverageAssets).To(Equal(int64(2200))) // (2000+2400)/2
+			Expect(fy2Fund.EquityAvg).To(Equal(int64(900)))      // (800+1000)/2
 			Expect(fy2Fund.ROA).To(BeNumerically("~", 250.0/2200.0, 1e-10))
 			Expect(fy2Fund.ROE).To(BeNumerically("~", 250.0/900.0, 1e-10))
 		})

@@ -393,7 +393,7 @@ var _ = Describe("Mapping Engine", func() {
 					"Assets":                                {{End: periodEnd, Filed: filed, Val: 350_000, Form: "10-Q"}},
 					"IntangibleAssetsNetIncludingGoodwill":  {{End: periodEnd, Filed: filed, Val: 50_000, Form: "10-Q"}},
 					"CashAndCashEquivalentsAtCarryingValue": {{End: periodEnd, Filed: filed, Val: 25_000, Form: "10-Q"}},
-					"LiabilitiesCurrent":                   {{End: periodEnd, Filed: filed, Val: 60_000, Form: "10-Q"}},
+					"LiabilitiesCurrent":                    {{End: periodEnd, Filed: filed, Val: 60_000, Form: "10-Q"}},
 				},
 			}
 
