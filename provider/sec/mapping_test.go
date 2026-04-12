@@ -67,6 +67,16 @@ var _ = Describe("Mapping Config", func() {
 		}
 	})
 
+	It("OpLinearCombination mappings have matching Coefficients length", func() {
+		for _, m := range FieldMappings {
+			if m.Op == OpLinearCombination {
+				Expect(len(m.Coefficients)).To(Equal(len(m.Operands)),
+					"mapping %s: Coefficients length (%d) must match Operands length (%d)",
+					m.FieldName, len(m.Coefficients), len(m.Operands))
+			}
+		}
+	})
+
 	It("all mappings have a valid statement type", func() {
 		for _, m := range FieldMappings {
 			Expect(m.StatementType).To(BeElementOf(StmtFlow, StmtPointInTime, StmtMetric),
@@ -212,6 +222,44 @@ var _ = Describe("Mapping Engine", func() {
 		})
 	})
 
+	Describe("computeDerived with OpLinearCombination", func() {
+		It("computes weighted sum of operands", func() {
+			resolved := map[string]float64{
+				"A": 100,
+				"B": 200,
+				"C": 30,
+				"D": 20,
+				"E": 10,
+			}
+			m := FieldMapping{
+				FieldName:    "Result",
+				Type:         MappingDerived,
+				Op:           OpLinearCombination,
+				Operands:     []string{"A", "B", "C", "D", "E"},
+				Coefficients: []float64{1, 1, -1, -1, -1},
+			}
+			val, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(240.0))
+		})
+
+		It("returns false when any operand is missing", func() {
+			resolved := map[string]float64{
+				"A": 100,
+				"B": 200,
+			}
+			m := FieldMapping{
+				FieldName:    "Result",
+				Type:         MappingDerived,
+				Op:           OpLinearCombination,
+				Operands:     []string{"A", "B", "C"},
+				Coefficients: []float64{1, 1, -1},
+			}
+			_, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeFalse())
+		})
+	})
+
 	Describe("ResolveAllFields", func() {
 		It("resolves both direct and derived fields", func() {
 			periodEnd := time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC)
@@ -341,6 +389,30 @@ var _ = Describe("Mapping Engine", func() {
 			Expect(resolved).To(HaveKey("TotalDebt"))
 			Expect(resolved["TotalDebt"]).To(Equal(104_590_000_000.0),
 				"TotalDebt should cascade from corrected DebtCurrent + DebtNonCurrent")
+		})
+
+		It("resolves InvestedCapital from component fields", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			icCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"LongTermDebtCurrent":                   {{End: periodEnd, Filed: filed, Val: 10_000, Form: "10-Q"}},
+					"LongTermDebtNoncurrent":                {{End: periodEnd, Filed: filed, Val: 90_000, Form: "10-Q"}},
+					"Assets":                                {{End: periodEnd, Filed: filed, Val: 350_000, Form: "10-Q"}},
+					"IntangibleAssetsNetIncludingGoodwill":  {{End: periodEnd, Filed: filed, Val: 50_000, Form: "10-Q"}},
+					"CashAndCashEquivalentsAtCarryingValue": {{End: periodEnd, Filed: filed, Val: 25_000, Form: "10-Q"}},
+					"LiabilitiesCurrent":                    {{End: periodEnd, Filed: filed, Val: 60_000, Form: "10-Q"}},
+				},
+			}
+
+			resolved := ResolveAllFields(icCF, periodEnd, "10-Q")
+
+			// TotalDebt = DebtCurrent(10_000) + DebtNonCurrent(90_000) = 100_000
+			// InvestedCapital = 100_000 + 350_000 - 50_000 - 25_000 - 60_000 = 315_000
+			Expect(resolved).To(HaveKey("InvestedCapital"))
+			Expect(resolved["InvestedCapital"]).To(Equal(315_000.0))
 		})
 
 		It("falls back to basic weighted-average shares when diluted tags are absent", func() {

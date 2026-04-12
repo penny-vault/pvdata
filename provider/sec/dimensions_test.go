@@ -435,8 +435,8 @@ var _ = Describe("Dimensions", func() {
 			// Q1=50, cumulative Q2=110 (Q2 alone=60), cumulative Q3=180 (Q3 alone=70)
 			cf.Facts["NetCashProvidedByUsedInOperatingActivities"] = []Fact{
 				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 50, Form: "10-Q", FP: "Q1"},
-				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 110, Form: "10-Q", FP: "Q2"},  // YTD
-				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 180, Form: "10-Q", FP: "Q3"},  // YTD
+				{Start: fyStart, End: q2End, Filed: q2Filed, Val: 110, Form: "10-Q", FP: "Q2"}, // YTD
+				{Start: fyStart, End: q3End, Filed: q3Filed, Val: 180, Form: "10-Q", FP: "Q3"}, // YTD
 			}
 
 			// CapEx: YTD ONLY
@@ -515,6 +515,101 @@ var _ = Describe("Dimensions", func() {
 		})
 	})
 
+	Describe("ComputePeriodAverages", func() {
+		It("computes all 6 fields from complete inputs", func() {
+			current := map[string]float64{
+				"TotalAssets":          400_000,
+				"Equity":               200_000,
+				"InvestedCapital":      300_000,
+				"NetIncomeCommonStock": 50_000,
+				"EBIT":                 60_000,
+			}
+			prior := map[string]float64{
+				"TotalAssets":     360_000,
+				"Equity":          180_000,
+				"InvestedCapital": 280_000,
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			// Averages
+			Expect(result["AverageAssets"]).To(Equal(380_000.0))
+			Expect(result["EquityAvg"]).To(Equal(190_000.0))
+			Expect(result["InvestedCapitalAverage"]).To(Equal(290_000.0))
+
+			// Ratios
+			Expect(result["ROA"]).To(BeNumerically("~", 50_000.0/380_000.0, 1e-10))
+			Expect(result["ROE"]).To(BeNumerically("~", 50_000.0/190_000.0, 1e-10))
+			Expect(result["ROIC"]).To(BeNumerically("~", 60_000.0/290_000.0, 1e-10))
+		})
+
+		It("omits average when prior is missing the balance sheet field", func() {
+			current := map[string]float64{
+				"TotalAssets":          400_000,
+				"Equity":               200_000,
+				"NetIncomeCommonStock": 50_000,
+				"EBIT":                 60_000,
+			}
+			prior := map[string]float64{
+				"TotalAssets": 360_000,
+				// Equity missing
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			Expect(result).To(HaveKey("AverageAssets"))
+			Expect(result).To(HaveKey("ROA"))
+			Expect(result).NotTo(HaveKey("EquityAvg"))
+			Expect(result).NotTo(HaveKey("ROE"))
+		})
+
+		It("omits ratio when numerator is missing", func() {
+			current := map[string]float64{
+				"TotalAssets": 400_000,
+				"Equity":      200_000,
+				// NetIncomeCommonStock missing
+			}
+			prior := map[string]float64{
+				"TotalAssets": 360_000,
+				"Equity":      180_000,
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			Expect(result).To(HaveKey("AverageAssets"))
+			Expect(result).To(HaveKey("EquityAvg"))
+			Expect(result).NotTo(HaveKey("ROA"))
+			Expect(result).NotTo(HaveKey("ROE"))
+		})
+
+		It("omits ratio when average denominator is zero", func() {
+			current := map[string]float64{
+				"TotalAssets":          100,
+				"NetIncomeCommonStock": 50,
+			}
+			prior := map[string]float64{
+				"TotalAssets": -100, // average = 0
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			Expect(result).To(HaveKey("AverageAssets"))
+			Expect(result["AverageAssets"]).To(Equal(0.0))
+			Expect(result).NotTo(HaveKey("ROA"))
+		})
+
+		It("returns empty map when prior is nil", func() {
+			current := map[string]float64{
+				"TotalAssets":          400_000,
+				"Equity":               200_000,
+				"NetIncomeCommonStock": 50_000,
+			}
+
+			result := ComputePeriodAverages(current, nil)
+			Expect(result).To(BeEmpty())
+		})
+	})
+
 	// BuildFundamental is a long manual switch over fields["X"] keys. Without
 	// this guard, adding a new entry to FieldMappings without a corresponding
 	// clause in BuildFundamental would silently drop the field from emitted
@@ -529,11 +624,11 @@ var _ = Describe("Dimensions", func() {
 			// Intermediate fields used only as operands for derived fields;
 			// they are intentionally not mapped to Fundamental struct fields.
 			intermediate := map[string]bool{
-				"TradeReceivables":            true,
-				"NonTradeReceivables":         true,
-				"ShortTermDebt":               true,
+				"TradeReceivables":              true,
+				"NonTradeReceivables":           true,
+				"ShortTermDebt":                 true,
 				"LongTermDebtCurrentMaturities": true,
-				"CommercialPaperDebt":         true,
+				"CommercialPaperDebt":           true,
 			}
 
 			var missing []string
@@ -551,6 +646,280 @@ var _ = Describe("Dimensions", func() {
 
 			Expect(missing).To(BeEmpty(),
 				"FieldMappings entries not referenced in BuildFundamental: %v", missing)
+		})
+
+		It("references all period-average fields", func() {
+			src, err := os.ReadFile("dimensions.go")
+			Expect(err).NotTo(HaveOccurred())
+			srcStr := string(src)
+
+			avgFields := []string{
+				"AverageAssets", "EquityAvg", "InvestedCapitalAverage",
+				"ROA", "ROE", "ROIC",
+			}
+
+			var missing []string
+			for _, name := range avgFields {
+				pattern := fmt.Sprintf(`fields[%q]`, name)
+				if !strings.Contains(srcStr, pattern) {
+					missing = append(missing, name)
+				}
+			}
+
+			Expect(missing).To(BeEmpty(),
+				"period-average fields not referenced in BuildFundamental: %v", missing)
+		})
+	})
+
+	Describe("quarterly period averages", func() {
+		It("computes averages from consecutive quarters", func() {
+			cf := &CompanyFacts{
+				CIK:        1,
+				EntityName: "Avg Co",
+				Facts:      make(map[string][]Fact),
+			}
+
+			q1End := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+			q2End := time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC)
+			q1Filed := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+			q2Filed := time.Date(2024, 8, 1, 0, 0, 0, 0, time.UTC)
+			fyStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			// Balance sheet (instant)
+			cf.Facts["Assets"] = []Fact{
+				{End: q1End, Filed: q1Filed, Val: 1000, Form: "10-Q"},
+				{End: q2End, Filed: q2Filed, Val: 1200, Form: "10-Q"},
+			}
+			cf.Facts["StockholdersEquity"] = []Fact{
+				{End: q1End, Filed: q1Filed, Val: 500, Form: "10-Q"},
+				{End: q2End, Filed: q2Filed, Val: 600, Form: "10-Q"},
+			}
+
+			// Income statement (duration, quarterly facts)
+			cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 100, Form: "10-Q"},
+				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 120, Form: "10-Q"},
+			}
+			cf.Facts["Revenues"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 500, Form: "10-Q"},
+				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 600, Form: "10-Q"},
+			}
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var q1Fund, q2Fund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					f := obs.Fundamental
+					dateKey := obs.ObservationDate.Format("2006-01-02")
+					if f.Dimension == "ARQ" && dateKey == "2024-03-31" {
+						q1Fund = f
+					}
+					if f.Dimension == "ARQ" && dateKey == "2024-06-30" {
+						q2Fund = f
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// Q1: no prior quarter, averages should be zero (absent)
+			Expect(q1Fund).NotTo(BeNil())
+			Expect(q1Fund.AverageAssets).To(Equal(int64(0)))
+			Expect(q1Fund.ROA).To(Equal(0.0))
+
+			// Q2: has prior quarter
+			Expect(q2Fund).NotTo(BeNil())
+			Expect(q2Fund.AverageAssets).To(Equal(int64(1100))) // (1000+1200)/2
+			Expect(q2Fund.EquityAvg).To(Equal(int64(550)))      // (500+600)/2
+			Expect(q2Fund.ROA).To(BeNumerically("~", 120.0/1100.0, 1e-10))
+			Expect(q2Fund.ROE).To(BeNumerically("~", 120.0/550.0, 1e-10))
+		})
+	})
+
+	Describe("annual period averages", func() {
+		It("computes averages from consecutive annual periods", func() {
+			cf := &CompanyFacts{
+				CIK:        1,
+				EntityName: "Annual Co",
+				Facts:      make(map[string][]Fact),
+			}
+
+			fy1End := time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC)
+			fy2End := time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC)
+			fy1Filed := time.Date(2023, 11, 1, 0, 0, 0, 0, time.UTC)
+			fy2Filed := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
+
+			// Balance sheet (instant)
+			cf.Facts["Assets"] = []Fact{
+				{End: fy1End, Filed: fy1Filed, Val: 2000, Form: "10-K"},
+				{End: fy2End, Filed: fy2Filed, Val: 2400, Form: "10-K"},
+			}
+			cf.Facts["StockholdersEquity"] = []Fact{
+				{End: fy1End, Filed: fy1Filed, Val: 800, Form: "10-K"},
+				{End: fy2End, Filed: fy2Filed, Val: 1000, Form: "10-K"},
+			}
+
+			// Income statement (duration)
+			cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"] = []Fact{
+				{Start: time.Date(2022, 10, 1, 0, 0, 0, 0, time.UTC), End: fy1End, Filed: fy1Filed, Val: 200, Form: "10-K"},
+				{Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC), End: fy2End, Filed: fy2Filed, Val: 250, Form: "10-K"},
+			}
+			cf.Facts["Revenues"] = []Fact{
+				{Start: time.Date(2022, 10, 1, 0, 0, 0, 0, time.UTC), End: fy1End, Filed: fy1Filed, Val: 1000, Form: "10-K"},
+				{Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC), End: fy2End, Filed: fy2Filed, Val: 1200, Form: "10-K"},
+			}
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var fy1Fund, fy2Fund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					f := obs.Fundamental
+					dateKey := obs.ObservationDate.Format("2006-01-02")
+					if f.Dimension == "ARY" && dateKey == "2023-12-31" {
+						fy1Fund = f
+					}
+					if f.Dimension == "ARY" && dateKey == "2024-12-31" {
+						fy2Fund = f
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// FY1: no prior year, averages absent
+			Expect(fy1Fund).NotTo(BeNil())
+			Expect(fy1Fund.AverageAssets).To(Equal(int64(0)))
+
+			// FY2: has prior year
+			Expect(fy2Fund).NotTo(BeNil())
+			Expect(fy2Fund.AverageAssets).To(Equal(int64(2200))) // (2000+2400)/2
+			Expect(fy2Fund.EquityAvg).To(Equal(int64(900)))      // (800+1000)/2
+			Expect(fy2Fund.ROA).To(BeNumerically("~", 250.0/2200.0, 1e-10))
+			Expect(fy2Fund.ROE).To(BeNumerically("~", 250.0/900.0, 1e-10))
+		})
+	})
+
+	Describe("TTM period averages", func() {
+		It("computes averages using quarter before TTM window", func() {
+			cf := &CompanyFacts{
+				CIK:        1,
+				EntityName: "TTM Co",
+				Facts:      make(map[string][]Fact),
+			}
+
+			// 5 consecutive quarters: q0 through q4.
+			// TTM window for q4 = [q1..q4], prior balance sheet = q0.
+			ends := []time.Time{
+				time.Date(2023, 3, 31, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 6, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC),
+				time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+			}
+
+			for i, end := range ends {
+				start := end.AddDate(0, 0, -89)
+				filed := end.AddDate(0, 0, 30)
+				assets := float64(1000 + i*100) // 1000, 1100, 1200, 1300, 1400
+				equity := float64(500 + i*50)   // 500, 550, 600, 650, 700
+
+				cf.Facts["Assets"] = append(cf.Facts["Assets"],
+					Fact{End: end, Filed: filed, Val: assets, Form: "10-Q"})
+				cf.Facts["StockholdersEquity"] = append(cf.Facts["StockholdersEquity"],
+					Fact{End: end, Filed: filed, Val: equity, Form: "10-Q"})
+				cf.Facts["Revenues"] = append(cf.Facts["Revenues"],
+					Fact{Start: start, End: end, Filed: filed, Val: 200, Form: "10-Q"})
+				cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"] = append(
+					cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"],
+					Fact{Start: start, End: end, Filed: filed, Val: 50, Form: "10-Q"})
+				cf.Facts["NetIncomeLoss"] = append(cf.Facts["NetIncomeLoss"],
+					Fact{Start: start, End: end, Filed: filed, Val: 50, Form: "10-Q"})
+			}
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var ttmFund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					if obs.Fundamental.Dimension == "ART" {
+						ttmFund = obs.Fundamental
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// TTM window = q1..q4, prior = q0
+			// AverageAssets = (q0 assets + q4 assets) / 2 = (1000 + 1400) / 2 = 1200
+			// EquityAvg = (q0 equity + q4 equity) / 2 = (500 + 700) / 2 = 600
+			// TTM NetIncomeCommonStock = 50*4 = 200
+			// ROA = 200 / 1200
+			Expect(ttmFund).NotTo(BeNil())
+			Expect(ttmFund.AverageAssets).To(Equal(int64(1200)))
+			Expect(ttmFund.EquityAvg).To(Equal(int64(600)))
+			Expect(ttmFund.ROA).To(BeNumerically("~", 200.0/1200.0, 1e-10))
+			Expect(ttmFund.ROE).To(BeNumerically("~", 200.0/600.0, 1e-10))
+		})
+
+		It("skips TTM averages when fewer than 5 quarters", func() {
+			// Only 4 quarters -- enough for TTM sums but no prior for averages
+			cf := buildSyntheticQuarterlyFacts([]time.Time{
+				time.Date(2023, 6, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC),
+				time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC),
+				time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+			})
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var ttmFund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					if obs.Fundamental.Dimension == "ART" {
+						ttmFund = obs.Fundamental
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// TTM should exist but without averages
+			Expect(ttmFund).NotTo(BeNil())
+			Expect(ttmFund.AverageAssets).To(Equal(int64(0)))
 		})
 	})
 })

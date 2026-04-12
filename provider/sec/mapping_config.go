@@ -36,9 +36,10 @@ const (
 type FormulaOp string
 
 const (
-	OpAdd      FormulaOp = "add"      // A + B + ...
-	OpSubtract FormulaOp = "subtract" // A - B
-	OpDivide   FormulaOp = "divide"   // A / B
+	OpAdd               FormulaOp = "add"                // A + B + ...
+	OpSubtract          FormulaOp = "subtract"           // A - B
+	OpDivide            FormulaOp = "divide"             // A / B
+	OpLinearCombination FormulaOp = "linear_combination" // C0*A + C1*B + ...
 )
 
 // FieldMapping maps a data.Fundamental field to XBRL tag(s) or a formula.
@@ -57,8 +58,9 @@ type FieldMapping struct {
 	Negate bool
 
 	// For derived mappings: formula
-	Op       FormulaOp // Operation to apply
-	Operands []string  // Field names to use as operands
+	Op           FormulaOp // Operation to apply
+	Operands     []string  // Field names to use as operands
+	Coefficients []float64 // Per-operand multipliers (for OpLinearCombination)
 
 	// For derived mappings that also have a direct XBRL fallback
 	FallbackTags []string
@@ -587,11 +589,16 @@ var FieldMappings = []FieldMapping{
 		Op:       OpSubtract,
 		Operands: []string{"TotalAssets", "Intangibles"},
 	},
-	// InvestedCapital is intentionally omitted: the proper formula is
-	//   TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
-	// which requires multi-term subtract support that the derivation engine does
-	// not yet have. Add it back in a follow-up once the engine can express that
-	// formula correctly; computing only TotalDebt + TotalAssets would be wrong.
+	// InvestedCapital = TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
+	// OptionalOperands: some companies (e.g. Apple) have no intangible assets
+	// and do not report the Intangibles XBRL tag; treat missing components as 0.
+	{
+		FieldName: "InvestedCapital", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		Op:               OpLinearCombination,
+		Operands:         []string{"TotalDebt", "TotalAssets", "Intangibles", "CashAndEquivalents", "CurrentLiabilities"},
+		Coefficients:     []float64{1, 1, -1, -1, -1},
+		OptionalOperands: true,
+	},
 
 	// ==================== RATIO METRICS (derived) ====================
 
@@ -670,9 +677,4 @@ var FieldMappings = []FieldMapping{
 	// - MarketCapitalization, EnterpriseValue, PE, PB, PS, PE1, PS1
 	// - EVtoEBIT, EVtoEBITDA, DividendYield, PayoutRatio, Price
 	// - ShareFactor, FxUSD
-	// - ROA, ROE, ROIC (these need average values across periods)
-	// - AverageAssets, EquityAvg, InvestedCapitalAverage (need prior period)
-	//
-	// These will be computed in a later pass once we have multi-period data
-	// available (see dimensions.go for average computations).
 }

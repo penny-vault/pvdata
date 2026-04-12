@@ -476,6 +476,16 @@ const coverageWarnThresholdPct = 50
 // MRFiledDate is used for the comparison so that restatements filed after
 // since are re-emitted even if the period itself is older.
 //
+// copyFieldMap returns a shallow copy of a resolved field map.
+func copyFieldMap(m map[string]float64) map[string]float64 {
+	cp := make(map[string]float64, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+
+	return cp
+}
+
 // Returns the number of fields resolved for the company's most recent period
 // and the count of non-TTM periods emitted (ARQ + ARY). The caller uses these
 // to track coverage statistics across the run. latestPeriodCoverage is zero if
@@ -502,17 +512,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 	var quarters []quarterData
 
-	type annualData struct {
-		period   Period
-		arFields map[string]float64
-		mrFields map[string]float64
-	}
-
-	var annuals []annualData
+	var annuals []quarterData
 
 	for _, p := range periods {
-		calendarDate := NormalizeEventDate(p.PeriodEnd, p.FormType)
-
 		// AR: resolve using only facts available at the earliest filing date
 		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
 
@@ -541,40 +543,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			latestPeriodCoverage = len(arFields)
 		}
 
-		// Emit annual observations immediately (10-K data is always full-year,
-		// no de-cumulation needed).
 		if p.FormType == "10-K" {
-			annuals = append(annuals, annualData{period: p, arFields: arFields, mrFields: mrFields})
-
-			if !since.IsZero() && p.MRFiledDate.Before(since) {
-				continue
-			}
-
-			// ARY
-			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARY",
-				p.ARFiledDate, calendarDate, p.PeriodEnd, p.ARFiledDate)
-			out <- &data.Observation{
-				Fundamental:      fundamental,
-				ObservationDate:  calendarDate,
-				SubscriptionID:   sub.ID,
-				SubscriptionName: sub.Name,
-			}
-
-			*numObservations++
-
-			// MRY
-			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRY",
-				p.PeriodEnd, calendarDate, p.PeriodEnd, p.MRFiledDate)
-			out <- &data.Observation{
-				Fundamental:      fundamental,
-				ObservationDate:  calendarDate,
-				SubscriptionID:   sub.ID,
-				SubscriptionName: sub.Name,
-			}
-
-			*numObservations++
-
-			periodsEmitted++
+			annuals = append(annuals, quarterData{period: p, arFields: arFields, mrFields: mrFields})
 		}
 	}
 
@@ -667,6 +637,93 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		quarters = append(quarters, quarterData{})
 		copy(quarters[idx+1:], quarters[idx:])
 		quarters[idx] = q4
+	}
+
+	// Compute period-average fields (AverageAssets, EquityAvg,
+	// InvestedCapitalAverage) and derived ratios (ROA, ROE, ROIC) from
+	// consecutive quarterly balance sheet values.
+	for i := range quarters {
+		q := &quarters[i]
+
+		if i == 0 {
+			continue
+		}
+
+		prev := &quarters[i-1]
+		gapDays := q.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
+
+		if gapDays > maxQuarterGapDays {
+			continue
+		}
+
+		for k, v := range ComputePeriodAverages(q.arEmit, prev.arEmit) {
+			q.arEmit[k] = v
+		}
+
+		for k, v := range ComputePeriodAverages(q.mrEmit, prev.mrEmit) {
+			q.mrEmit[k] = v
+		}
+	}
+
+	// Compute period averages and emit annual observations.
+	const maxAnnualGapDays = 425 // ~14 months, handles fiscal year shifts
+
+	for i := range annuals {
+		a := &annuals[i]
+
+		// Annual data is full-year; no de-cumulation needed. Copy into
+		// arEmit/mrEmit so that merging period averages does not mutate
+		// the original arFields (which may be read as prev in the next
+		// iteration).
+		a.arEmit = copyFieldMap(a.arFields)
+		a.mrEmit = copyFieldMap(a.mrFields)
+
+		if i > 0 {
+			prev := &annuals[i-1]
+			gapDays := a.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
+
+			if gapDays <= maxAnnualGapDays {
+				for k, v := range ComputePeriodAverages(a.arEmit, prev.arEmit) {
+					a.arEmit[k] = v
+				}
+
+				for k, v := range ComputePeriodAverages(a.mrEmit, prev.mrEmit) {
+					a.mrEmit[k] = v
+				}
+			}
+		}
+
+		calendarDate := NormalizeEventDate(a.period.PeriodEnd, a.period.FormType)
+
+		if !since.IsZero() && a.period.MRFiledDate.Before(since) {
+			continue
+		}
+
+		// ARY
+		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
+			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
+		out <- &data.Observation{
+			Fundamental:      fundamental,
+			ObservationDate:  calendarDate,
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		*numObservations++
+
+		// MRY
+		fundamental = BuildFundamental(a.mrEmit, asset.Ticker, asset.CompositeFigi, "MRY",
+			a.period.PeriodEnd, calendarDate, a.period.PeriodEnd, a.period.MRFiledDate)
+		out <- &data.Observation{
+			Fundamental:      fundamental,
+			ObservationDate:  calendarDate,
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		*numObservations++
+
+		periodsEmitted++
 	}
 
 	// Emit quarterly observations using de-cumulated values.
@@ -772,6 +829,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(arQSlice); ttm != nil {
+			if i >= 4 {
+				for k, v := range ComputePeriodAverages(ttm, quarters[i-4].arEmit) {
+					ttm[k] = v
+				}
+			}
+
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "ART",
 				q.period.ARFiledDate, calendarDate, q.period.PeriodEnd, latestARFiled)
 			out <- &data.Observation{
@@ -791,6 +854,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(mrQSlice); ttm != nil {
+			if i >= 4 {
+				for k, v := range ComputePeriodAverages(ttm, quarters[i-4].mrEmit) {
+					ttm[k] = v
+				}
+			}
+
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "MRT",
 				q.period.PeriodEnd, calendarDate, q.period.PeriodEnd, latestMRFiled)
 			out <- &data.Observation{

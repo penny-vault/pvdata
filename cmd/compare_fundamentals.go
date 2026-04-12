@@ -982,9 +982,8 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		domesticSQL := fmt.Sprintf("SELECT DISTINCT ticker FROM %s WHERE dimension = 'ARQ'", secTable)
 
 		arqRows, arqErr := conn.Query(ctx, domesticSQL)
-		conn.Release()
-
 		if arqErr != nil {
+			conn.Release()
 			log.Fatal().Err(arqErr).Msg("could not query domestic tickers from sec table")
 		}
 
@@ -994,6 +993,7 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 			var t string
 			if scanErr := arqRows.Scan(&t); scanErr != nil {
 				arqRows.Close()
+				conn.Release()
 				log.Fatal().Err(scanErr).Msg("could not scan domestic ticker")
 			}
 
@@ -1003,8 +1003,11 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		arqRows.Close()
 
 		if arqErr = arqRows.Err(); arqErr != nil {
+			conn.Release()
 			log.Fatal().Err(arqErr).Msg("error reading domestic ticker rows")
 		}
+
+		conn.Release()
 
 		log.Info().Int("count", len(domesticTickers)).Msg("domestic tickers found (have ARQ data in sec table)")
 

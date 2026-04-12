@@ -225,17 +225,23 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 
 // computeDerived evaluates a derived field's formula using already-resolved values.
 func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool) {
-	// When OptionalOperands is set, OpAdd sums whatever operands are present
-	// and resolves if at least one exists. This handles fields like
-	// Investments = InvestmentsCurrent + InvestmentsNonCurrent where a
-	// company may report only one component.
-	if m.OptionalOperands && m.Op == OpAdd {
+	// When OptionalOperands is set, missing operands are treated as 0 and the
+	// formula resolves if at least one operand is present. This handles fields
+	// like Investments = InvestmentsCurrent + InvestmentsNonCurrent where a
+	// company may report only one component, and InvestedCapital where
+	// Intangibles may be absent (the company has none).
+	if m.OptionalOperands && (m.Op == OpAdd || m.Op == OpLinearCombination) {
 		sum := 0.0
 		found := false
 
-		for _, op := range m.Operands {
+		for i, op := range m.Operands {
 			if v, ok := resolved[op]; ok {
-				sum += v
+				if m.Op == OpLinearCombination {
+					sum += m.Coefficients[i] * v
+				} else {
+					sum += v
+				}
+
 				found = true
 			}
 		}
@@ -280,6 +286,18 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 		}
 
 		return vals[0] / vals[1], true
+
+	case OpLinearCombination:
+		if len(vals) != len(m.Coefficients) {
+			return 0, false
+		}
+
+		sum := 0.0
+		for i, v := range vals {
+			sum += m.Coefficients[i] * v
+		}
+
+		return sum, true
 	}
 
 	return 0, false
