@@ -52,6 +52,7 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		// Subtract 4 from width to account for ContentStyle padding (2 left + 2 right)
 		m.viewport = viewport.New(viewport.WithWidth(msg.Width-4), viewport.WithHeight(msg.Height-6))
+		m.viewport.SoftWrap = true
 		m.viewport.SetContent(strings.Join(m.lines, ""))
 		m.ready = true
 
