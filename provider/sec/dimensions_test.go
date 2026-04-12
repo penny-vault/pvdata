@@ -629,6 +629,10 @@ var _ = Describe("Dimensions", func() {
 				"ShortTermDebt":                 true,
 				"LongTermDebtCurrentMaturities": true,
 				"CommercialPaperDebt":           true,
+				"_proceedsDebt":                 true,
+				"_repaymentsDebt":               true,
+				"_paymentsInvest":               true,
+				"_proceedsInvest":               true,
 			}
 
 			var missing []string

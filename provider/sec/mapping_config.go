@@ -505,12 +505,31 @@ var FieldMappings = []FieldMapping{
 			"PaymentsForRepurchaseOfCommonStock",
 		},
 	},
+	// --- Internal sub-fields for NetCashFlowDebt derivation ---
 	{
-		FieldName: "NetCashFlowDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_proceedsDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"ProceedsFromIssuanceOfLongTermDebt",
-			"RepaymentsOfLongTermDebt",
+			"ProceedsFromIssuanceOfDebt",
+			"ProceedsFromDebtNetOfIssuanceCosts",
 		},
+	},
+	{
+		FieldName: "_repaymentsDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"RepaymentsOfLongTermDebt",
+			"RepaymentsOfDebt",
+			"RepaymentsOfLongTermDebtAndCapitalSecurities",
+		},
+	},
+	// NetCashFlowDebt = proceeds - repayments (Sharadar NCFDEBT:
+	// "net cash inflow (outflow) from issuance (repayment) of debt securities")
+	{
+		FieldName: "NetCashFlowDebt", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		Op:               OpLinearCombination,
+		Operands:         []string{"_proceedsDebt", "_repaymentsDebt"},
+		Coefficients:     []float64{1, -1},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -520,15 +539,30 @@ var FieldMappings = []FieldMapping{
 			"PaymentsOfDividends",
 		},
 	},
+	// --- Internal sub-fields for NetCashFlowInvest derivation ---
 	{
-		FieldName: "NetCashFlowInvest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_paymentsInvest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"PaymentsToAcquireInvestments",
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
+		},
+	},
+	{
+		FieldName: "_proceedsInvest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
 			"ProceedsFromSaleAndMaturityOfMarketableSecurities",
 			"ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities",
 			"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
 		},
+	},
+	// NetCashFlowInvest = -payments + proceeds (Sharadar NCFINV:
+	// "net cash inflow (outflow) associated with acquisition & disposal of investments")
+	{
+		FieldName: "NetCashFlowInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		Op:               OpLinearCombination,
+		Operands:         []string{"_paymentsInvest", "_proceedsInvest"},
+		Coefficients:     []float64{-1, 1},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "NetCashFlowFx", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
