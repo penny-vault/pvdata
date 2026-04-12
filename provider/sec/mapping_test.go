@@ -212,4 +212,45 @@ var _ = Describe("Mapping Engine", func() {
 			Expect(val).To(Equal(float64(157_000_000)))
 		})
 	})
+
+	Describe("Sign negation for cash outflow fields", func() {
+		It("negates CapitalExpenditure, NetCashFlowBusiness, NetCashFlowCommon, and NetCashFlowDividend", func() {
+			// Apple FY2018 10-K: these XBRL tags report outflows as positive,
+			// but after negation they should be negative per Sharadar convention.
+			periodEnd := time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC)
+			resolved := ResolveAllFields(cf, periodEnd, "10-K")
+
+			capex, hasCapex := resolved["CapitalExpenditure"]
+			Expect(hasCapex).To(BeTrue())
+			Expect(capex).To(BeNumerically("<", 0),
+				"CapitalExpenditure should be negative (cash outflow)")
+
+			ncfCommon, hasCommon := resolved["NetCashFlowCommon"]
+			Expect(hasCommon).To(BeTrue())
+			Expect(ncfCommon).To(BeNumerically("<", 0),
+				"NetCashFlowCommon should be negative (stock buyback)")
+
+			ncfDiv, hasDiv := resolved["NetCashFlowDividend"]
+			Expect(hasDiv).To(BeTrue())
+			Expect(ncfDiv).To(BeNumerically("<", 0),
+				"NetCashFlowDividend should be negative (dividend payment)")
+		})
+
+		It("produces positive FreeCashFlow from negated CapitalExpenditure", func() {
+			periodEnd := time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC)
+			resolved := ResolveAllFields(cf, periodEnd, "10-K")
+
+			ops, hasOps := resolved["NetCashFlowFromOperations"]
+			Expect(hasOps).To(BeTrue())
+			Expect(ops).To(BeNumerically(">", 0))
+
+			capex := resolved["CapitalExpenditure"]
+			fcf, hasFCF := resolved["FreeCashFlow"]
+			Expect(hasFCF).To(BeTrue())
+			// FCF = Operations + CapEx (where CapEx is negative)
+			Expect(fcf).To(BeNumerically("~", ops+capex, 1.0))
+			Expect(fcf).To(BeNumerically(">", 0),
+				"FreeCashFlow should be positive for a profitable company like Apple")
+		})
+	})
 })
