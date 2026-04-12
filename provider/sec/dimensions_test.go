@@ -744,6 +744,78 @@ var _ = Describe("Dimensions", func() {
 			Expect(q2Fund.ROE).To(BeNumerically("~", 120.0/550.0, 1e-10))
 		})
 	})
+
+	Describe("annual period averages", func() {
+		It("computes averages from consecutive annual periods", func() {
+			cf := &CompanyFacts{
+				CIK:        1,
+				EntityName: "Annual Co",
+				Facts:      make(map[string][]Fact),
+			}
+
+			fy1End := time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC)
+			fy2End := time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC)
+			fy1Filed := time.Date(2023, 11, 1, 0, 0, 0, 0, time.UTC)
+			fy2Filed := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
+
+			// Balance sheet (instant)
+			cf.Facts["Assets"] = []Fact{
+				{End: fy1End, Filed: fy1Filed, Val: 2000, Form: "10-K"},
+				{End: fy2End, Filed: fy2Filed, Val: 2400, Form: "10-K"},
+			}
+			cf.Facts["StockholdersEquity"] = []Fact{
+				{End: fy1End, Filed: fy1Filed, Val: 800, Form: "10-K"},
+				{End: fy2End, Filed: fy2Filed, Val: 1000, Form: "10-K"},
+			}
+
+			// Income statement (duration)
+			cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"] = []Fact{
+				{Start: time.Date(2022, 10, 1, 0, 0, 0, 0, time.UTC), End: fy1End, Filed: fy1Filed, Val: 200, Form: "10-K"},
+				{Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC), End: fy2End, Filed: fy2Filed, Val: 250, Form: "10-K"},
+			}
+			cf.Facts["Revenues"] = []Fact{
+				{Start: time.Date(2022, 10, 1, 0, 0, 0, 0, time.UTC), End: fy1End, Filed: fy1Filed, Val: 1000, Form: "10-K"},
+				{Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC), End: fy2End, Filed: fy2Filed, Val: 1200, Form: "10-K"},
+			}
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var fy1Fund, fy2Fund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					f := obs.Fundamental
+					dateKey := obs.ObservationDate.Format("2006-01-02")
+					if f.Dimension == "ARY" && dateKey == "2023-12-31" {
+						fy1Fund = f
+					}
+					if f.Dimension == "ARY" && dateKey == "2024-12-31" {
+						fy2Fund = f
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// FY1: no prior year, averages absent
+			Expect(fy1Fund).NotTo(BeNil())
+			Expect(fy1Fund.AverageAssets).To(Equal(int64(0)))
+
+			// FY2: has prior year
+			Expect(fy2Fund).NotTo(BeNil())
+			Expect(fy2Fund.AverageAssets).To(Equal(int64(2200)))  // (2000+2400)/2
+			Expect(fy2Fund.EquityAvg).To(Equal(int64(900)))       // (800+1000)/2
+			Expect(fy2Fund.ROA).To(BeNumerically("~", 250.0/2200.0, 1e-10))
+			Expect(fy2Fund.ROE).To(BeNumerically("~", 250.0/900.0, 1e-10))
+		})
+	})
 })
 
 // buildSyntheticQuarterlyFacts constructs a minimal CompanyFacts containing one

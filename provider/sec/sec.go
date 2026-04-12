@@ -502,9 +502,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 	var quarters []quarterData
 
-	for _, p := range periods {
-		calendarDate := NormalizeEventDate(p.PeriodEnd, p.FormType)
+	var annuals []quarterData
 
+	for _, p := range periods {
 		// AR: resolve using only facts available at the earliest filing date
 		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
 
@@ -533,38 +533,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			latestPeriodCoverage = len(arFields)
 		}
 
-		// Emit annual observations immediately (10-K data is always full-year,
-		// no de-cumulation needed).
 		if p.FormType == "10-K" {
-			if !since.IsZero() && p.MRFiledDate.Before(since) {
-				continue
-			}
-
-			// ARY
-			fundamental := BuildFundamental(arFields, asset.Ticker, asset.CompositeFigi, "ARY",
-				p.ARFiledDate, calendarDate, p.PeriodEnd, p.ARFiledDate)
-			out <- &data.Observation{
-				Fundamental:      fundamental,
-				ObservationDate:  calendarDate,
-				SubscriptionID:   sub.ID,
-				SubscriptionName: sub.Name,
-			}
-
-			*numObservations++
-
-			// MRY
-			fundamental = BuildFundamental(mrFields, asset.Ticker, asset.CompositeFigi, "MRY",
-				p.PeriodEnd, calendarDate, p.PeriodEnd, p.MRFiledDate)
-			out <- &data.Observation{
-				Fundamental:      fundamental,
-				ObservationDate:  calendarDate,
-				SubscriptionID:   sub.ID,
-				SubscriptionName: sub.Name,
-			}
-
-			*numObservations++
-
-			periodsEmitted++
+			annuals = append(annuals, quarterData{period: p, arFields: arFields, mrFields: mrFields})
 		}
 	}
 
@@ -625,6 +595,65 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		for k, v := range ComputePeriodAverages(q.mrEmit, prev.mrEmit) {
 			q.mrEmit[k] = v
 		}
+	}
+
+	// Compute period averages and emit annual observations.
+	const maxAnnualGapDays = 425 // ~14 months, handles fiscal year shifts
+
+	for i := range annuals {
+		a := &annuals[i]
+
+		// Annual data is full-year; no de-cumulation needed. Store
+		// directly in arEmit/mrEmit.
+		a.arEmit = a.arFields
+		a.mrEmit = a.mrFields
+
+		if i > 0 {
+			prev := &annuals[i-1]
+			gapDays := a.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
+
+			if gapDays <= maxAnnualGapDays {
+				for k, v := range ComputePeriodAverages(a.arEmit, prev.arEmit) {
+					a.arEmit[k] = v
+				}
+
+				for k, v := range ComputePeriodAverages(a.mrEmit, prev.mrEmit) {
+					a.mrEmit[k] = v
+				}
+			}
+		}
+
+		calendarDate := NormalizeEventDate(a.period.PeriodEnd, a.period.FormType)
+
+		if !since.IsZero() && a.period.MRFiledDate.Before(since) {
+			continue
+		}
+
+		// ARY
+		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
+			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
+		out <- &data.Observation{
+			Fundamental:      fundamental,
+			ObservationDate:  calendarDate,
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		*numObservations++
+
+		// MRY
+		fundamental = BuildFundamental(a.mrEmit, asset.Ticker, asset.CompositeFigi, "MRY",
+			a.period.PeriodEnd, calendarDate, a.period.PeriodEnd, a.period.MRFiledDate)
+		out <- &data.Observation{
+			Fundamental:      fundamental,
+			ObservationDate:  calendarDate,
+			SubscriptionID:   sub.ID,
+			SubscriptionName: sub.Name,
+		}
+
+		*numObservations++
+
+		periodsEmitted++
 	}
 
 	// Emit quarterly observations using de-cumulated values.
