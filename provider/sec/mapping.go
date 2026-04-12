@@ -310,3 +310,39 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 
 	return 0, false
 }
+
+// resolveSharesBasicAsOf returns the EntityCommonStockSharesOutstanding
+// value from the most recently filed 10-K or 10-Q as of the given date.
+// Sharadar's MR dimensions use "latest known cover-page shares as of the
+// period end" rather than the shares from the filing that reports the
+// period's own data. Returns (0, false) when no suitable fact is found.
+func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool) {
+	facts, ok := cf.Facts["EntityCommonStockSharesOutstanding"]
+	if !ok {
+		return 0, false
+	}
+
+	var best *Fact
+
+	for i := range facts {
+		f := &facts[i]
+
+		if f.Form != "10-K" && f.Form != "10-Q" {
+			continue
+		}
+
+		if f.Filed.After(asOfDate) {
+			continue
+		}
+
+		if best == nil || f.Filed.After(best.Filed) {
+			best = f
+		}
+	}
+
+	if best == nil {
+		return 0, false
+	}
+
+	return best.Val, true
+}

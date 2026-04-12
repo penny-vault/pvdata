@@ -881,4 +881,59 @@ var _ = Describe("Mapping Engine", func() {
 				"FreeCashFlow should be positive for a profitable company like Apple")
 		})
 	})
+
+	Describe("resolveSharesBasicAsOf", func() {
+		It("returns the EntityCommonStockSharesOutstanding from the most recently filed report as of the given date", func() {
+			synthCF := &CompanyFacts{
+				CIK: 320193, EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"EntityCommonStockSharesOutstanding": {
+						{End: time.Date(2024, 7, 19, 0, 0, 0, 0, time.UTC), Filed: time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC), Val: 15_204_137_000, Form: "10-Q"},
+						{End: time.Date(2024, 10, 18, 0, 0, 0, 0, time.UTC), Filed: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC), Val: 15_115_823_000, Form: "10-K"},
+						{End: time.Date(2025, 1, 17, 0, 0, 0, 0, time.UTC), Filed: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC), Val: 15_022_073_000, Form: "10-Q"},
+						{End: time.Date(2025, 4, 18, 0, 0, 0, 0, time.UTC), Filed: time.Date(2025, 5, 2, 0, 0, 0, 0, time.UTC), Val: 14_935_826_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			// As of Dec 28, 2024 (Q1 FY2025 period end), the most recent
+			// filing is the FY2024 10-K (filed Nov 1, 2024).
+			val, ok := resolveSharesBasicAsOf(synthCF, time.Date(2024, 12, 28, 0, 0, 0, 0, time.UTC))
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(15_115_823_000.0))
+
+			// As of Mar 29, 2025 (Q2 FY2025 period end), the most recent
+			// filing is the Q1 FY2025 10-Q (filed Jan 31, 2025).
+			val, ok = resolveSharesBasicAsOf(synthCF, time.Date(2025, 3, 29, 0, 0, 0, 0, time.UTC))
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(15_022_073_000.0))
+
+			// As of Jun 28, 2025, the most recent is the Q2 10-Q (filed May 2).
+			val, ok = resolveSharesBasicAsOf(synthCF, time.Date(2025, 6, 28, 0, 0, 0, 0, time.UTC))
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(14_935_826_000.0))
+		})
+
+		It("returns false when no EntityCommonStockSharesOutstanding facts exist", func() {
+			synthCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{},
+			}
+			_, ok := resolveSharesBasicAsOf(synthCF, time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC))
+			Expect(ok).To(BeFalse())
+		})
+
+		It("returns false when all filings are after the as-of date", func() {
+			synthCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"EntityCommonStockSharesOutstanding": {
+						{End: time.Date(2025, 1, 17, 0, 0, 0, 0, time.UTC), Filed: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC), Val: 15_000_000_000, Form: "10-Q"},
+					},
+				},
+			}
+			_, ok := resolveSharesBasicAsOf(synthCF, time.Date(2024, 12, 28, 0, 0, 0, 0, time.UTC))
+			Expect(ok).To(BeFalse())
+		})
+	})
 })

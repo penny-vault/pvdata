@@ -651,6 +651,18 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		quarters[idx] = q4
 	}
 
+	// Override SharesBasic in mrEmit for MR dimensions. Sharadar's MR
+	// semantics use the EntityCommonStockSharesOutstanding from the most
+	// recently filed 10-K/10-Q as of the period end date (the latest known
+	// cover-page shares), NOT from the filing that reports the period's own
+	// data. Apply the override before annual averaging and emission so MRQ,
+	// MRT, and MRY all see the corrected value.
+	for i := range quarters {
+		if val, ok := resolveSharesBasicAsOf(cf, quarters[i].period.PeriodEnd); ok {
+			quarters[i].mrEmit["SharesBasic"] = val
+		}
+	}
+
 	// Period-average fields (AverageAssets, EquityAvg, InvestedCapitalAverage)
 	// and derived ratios (ROA, ROE, ROIC) are intentionally NOT computed for
 	// quarterly dimensions (ARQ/MRQ). See #56 for rationale.
@@ -658,6 +670,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// findConstituentQuarters returns the quarterly entries whose PeriodEnd
 	// falls within ~365 days before annualEnd (inclusive). This gives us the
 	// 4 fiscal-year quarters for 4-quarter balance sheet averaging.
+	//
+	// The 370-day window can pick up the prior year's synthesized Q4 (which
+	// shares the same period end as the prior annual). If that happens the
+	// slice is capped to the 4 most recent quarters so the average matches
+	// Sharadar's 4-point methodology (current FY quarters only, excluding
+	// the prior year-end snapshot).
 	findConstituentQuarters := func(qs []quarterData, annualEnd time.Time) []quarterData {
 		const maxDays = 370
 
@@ -668,6 +686,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			if days >= 0 && days <= maxDays {
 				result = append(result, qs[idx])
 			}
+		}
+
+		// Cap to the 4 most recent quarters (qs is sorted by PeriodEnd
+		// ascending, so take the tail).
+		if len(result) > 4 {
+			result = result[len(result)-4:]
 		}
 
 		return result
@@ -742,7 +766,11 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		*numObservations++
 
-		// MRY
+		// MRY — override SharesBasic for MR semantics (see quarterly override above).
+		if val, ok := resolveSharesBasicAsOf(cf, a.period.PeriodEnd); ok {
+			a.mrEmit["SharesBasic"] = val
+		}
+
 		fundamental = BuildFundamental(a.mrEmit, asset.Ticker, asset.CompositeFigi, "MRY",
 			a.period.PeriodEnd, calendarDate, a.period.PeriodEnd, a.period.MRFiledDate)
 		buffered = append(buffered, &data.Observation{
