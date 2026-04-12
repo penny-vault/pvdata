@@ -670,8 +670,8 @@ func (m *mdDiffWriter) Close() error {
 		}
 
 		fmt.Fprintf(m.w, "## %s (%s)\n\n", k.ticker, k.figi)
-		fmt.Fprintln(m.w, "| Dimension | Date Key | Field | SEC | Sharadar | Diff % |")
-		fmt.Fprintln(m.w, "|-----------|----------|-------|-----|----------|--------|")
+		fmt.Fprintln(m.w, "| Dimension | Date Key | Field                          | SEC                    | Sharadar               | Diff % |")
+		fmt.Fprintln(m.w, "|-----------|----------|--------------------------------|------------------------|------------------------|--------|")
 
 		for _, r := range groups[k] {
 			switch r.kind {
@@ -771,17 +771,46 @@ func formatValue(v *float64) string {
 }
 
 // formatValueCompact renders a *float64 with limited precision for
-// human-readable text output (6 significant digits).
+// human-readable text output (6 significant digits). Whole numbers are
+// formatted with comma separators (e.g. 348,020,000,000).
 func formatValueCompact(v *float64) string {
 	if v == nil {
 		return ""
 	}
 
 	if *v == math.Trunc(*v) && math.Abs(*v) < 1e18 {
-		return fmt.Sprintf("%d", int64(*v))
+		return formatIntWithCommas(int64(*v))
 	}
 
 	return fmt.Sprintf("%.6g", *v)
+}
+
+// formatIntWithCommas renders an int64 with thousands separators.
+func formatIntWithCommas(n int64) string {
+	s := fmt.Sprintf("%d", n)
+
+	negative := false
+	if s[0] == '-' {
+		negative = true
+		s = s[1:]
+	}
+
+	// Insert commas from the right every 3 digits.
+	var b strings.Builder
+
+	for i, ch := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+
+		b.WriteRune(ch)
+	}
+
+	if negative {
+		return "-" + b.String()
+	}
+
+	return b.String()
 }
 
 // diffStats returns (|a-b|, |a-b|/max(|a|,|b|)). Caller must ensure a and b
