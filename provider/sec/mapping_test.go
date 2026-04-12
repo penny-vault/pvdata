@@ -67,6 +67,16 @@ var _ = Describe("Mapping Config", func() {
 		}
 	})
 
+	It("OpLinearCombination mappings have matching Coefficients length", func() {
+		for _, m := range FieldMappings {
+			if m.Op == OpLinearCombination {
+				Expect(len(m.Coefficients)).To(Equal(len(m.Operands)),
+					"mapping %s: Coefficients length (%d) must match Operands length (%d)",
+					m.FieldName, len(m.Coefficients), len(m.Operands))
+			}
+		}
+	})
+
 	It("all mappings have a valid statement type", func() {
 		for _, m := range FieldMappings {
 			Expect(m.StatementType).To(BeElementOf(StmtFlow, StmtPointInTime, StmtMetric),
