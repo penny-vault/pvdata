@@ -476,6 +476,16 @@ const coverageWarnThresholdPct = 50
 // MRFiledDate is used for the comparison so that restatements filed after
 // since are re-emitted even if the period itself is older.
 //
+// copyFieldMap returns a shallow copy of a resolved field map.
+func copyFieldMap(m map[string]float64) map[string]float64 {
+	cp := make(map[string]float64, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+
+	return cp
+}
+
 // Returns the number of fields resolved for the company's most recent period
 // and the count of non-TTM periods emitted (ARQ + ARY). The caller uses these
 // to track coverage statistics across the run. latestPeriodCoverage is zero if
@@ -603,10 +613,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	for i := range annuals {
 		a := &annuals[i]
 
-		// Annual data is full-year; no de-cumulation needed. Store
-		// directly in arEmit/mrEmit.
-		a.arEmit = a.arFields
-		a.mrEmit = a.mrFields
+		// Annual data is full-year; no de-cumulation needed. Copy into
+		// arEmit/mrEmit so that merging period averages does not mutate
+		// the original arFields (which may be read as prev in the next
+		// iteration).
+		a.arEmit = copyFieldMap(a.arFields)
+		a.mrEmit = copyFieldMap(a.mrFields)
 
 		if i > 0 {
 			prev := &annuals[i-1]
