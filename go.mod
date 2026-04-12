@@ -11,6 +11,7 @@ require (
 	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/adrg/strutil v0.3.1
 	github.com/alphadose/haxmap v1.4.1
+	github.com/charmbracelet/x/term v0.2.2
 	github.com/go-co-op/gocron/v2 v2.20.0
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/goccy/go-json v0.10.6
@@ -39,7 +40,6 @@ require (
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/exp/slice v0.0.0-20260406091427-a791e22d5143 // indirect
 	github.com/charmbracelet/x/exp/strings v0.1.0 // indirect
-	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect

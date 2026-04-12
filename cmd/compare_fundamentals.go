@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"charm.land/glamour/v2"
+	"github.com/charmbracelet/x/term"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mattn/go-isatty"
@@ -670,8 +671,8 @@ func (m *mdDiffWriter) Close() error {
 		}
 
 		fmt.Fprintf(m.w, "## %s (%s)\n\n", k.ticker, k.figi)
-		fmt.Fprintln(m.w, "| Dimension | Date Key | Field                          | SEC                    | Sharadar               | Diff % |")
-		fmt.Fprintln(m.w, "|-----------|----------|--------------------------------|------------------------|------------------------|--------|")
+		fmt.Fprintln(m.w, "| Dimension | Date Key | Field | SEC | Sharadar | Diff % |")
+		fmt.Fprintln(m.w, "|-----------|----------|-------|----:|--------:|-------:|")
 
 		for _, r := range groups[k] {
 			switch r.kind {
@@ -690,6 +691,8 @@ func (m *mdDiffWriter) Close() error {
 			}
 		}
 	}
+
+	fmt.Fprintf(m.w, "\n**Total diffs: %d**\n", len(m.recs))
 
 	return nil
 }
@@ -1003,10 +1006,22 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 
 	// Render markdown through glamour when writing to a TTY.
 	output := buf.Bytes()
+
 	if isTTY && opts.format != "csv" {
-		rendered, gerr := glamour.RenderBytes(output, "dark")
-		if gerr == nil {
-			output = rendered
+		width := 120
+		if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
+			width = w
+		}
+
+		tr, trErr := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(width),
+			glamour.WithTableWrap(false),
+		)
+		if trErr == nil {
+			if rendered, gerr := tr.RenderBytes(output); gerr == nil {
+				output = rendered
+			}
 		}
 	}
 
