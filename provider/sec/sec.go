@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -164,6 +165,51 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		Int("from_db", len(dbCIKMap)).
 		Int("from_sec", fromSEC).
 		Msg("built combined CIK map")
+
+	// Apply ticker/FIGI filter if set
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		filtered := make(map[int]AssetInfo)
+
+		for cik, info := range cikMap {
+			if tickerFilter != "" && strings.EqualFold(info.Ticker, tickerFilter) {
+				filtered[cik] = info
+			} else if figiFilter != "" && info.CompositeFigi == figiFilter {
+				filtered[cik] = info
+			}
+		}
+
+		if len(filtered) == 0 {
+			candidates := make([]string, 0, len(cikMap))
+			for _, info := range cikMap {
+				if tickerFilter != "" {
+					candidates = append(candidates, info.Ticker)
+				} else {
+					candidates = append(candidates, info.CompositeFigi)
+				}
+			}
+
+			input := tickerFilter
+			if input == "" {
+				input = figiFilter
+			}
+
+			suggestions := provider.SuggestMatch(input, candidates)
+			if len(suggestions) > 0 {
+				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in SEC universe; did you mean one of these?")
+			} else {
+				log.Error().Str("input", input).Msg("security not found in SEC universe")
+			}
+
+			runSummary.Status = data.RunFailed
+
+			return
+		}
+
+		cikMap = filtered
+
+		log.Info().Int("filtered_ciks", len(filtered)).Msg("applied security filter to CIK map")
+	}
 
 	skippedMissingFIGI := 0
 
