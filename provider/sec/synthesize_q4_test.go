@@ -20,6 +20,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/library"
 )
 
 var _ = Describe("SynthesizeQ4", func() {
@@ -206,5 +209,166 @@ var _ = Describe("SynthesizeQ4", func() {
 			// MR: 520 - (105+125+115) = 175
 			Expect(mrResult["Revenues"]).To(BeNumerically("~", 175, 0.001))
 		})
+	})
+})
+
+var _ = Describe("emitFundamentals Q4 synthesis", func() {
+	// Model a company with FY ending September (like Apple).
+	//
+	// Periods:
+	//   10-Q Q1: Oct-Dec 2023  (period end Dec 30 2023)
+	//   10-Q Q2: Jan-Mar 2024  (period end Mar 30 2024)
+	//   10-Q Q3: Apr-Jun 2024  (period end Jun 29 2024)
+	//   10-K FY: Oct 2023-Sep 2024 (period end Sep 28 2024, annual total)
+	//   10-Q Q1 next FY: Oct-Dec 2024 (period end Dec 28 2024)
+	//
+	// Revenues (flow):
+	//   Q1=110000, Q2=95000, Q3=90000, FY=400000 => Q4=105000
+	//   Q1 next FY=115000
+	//
+	// NetIncomeCommonStock (flow, mapped via NetIncomeLossAvailableToCommonStockholdersBasic):
+	//   Q1=30000, Q2=25000, Q3=22000, FY=100000 => Q4=23000
+	//   Q1 next FY=32000
+
+	d := func(y, m, day int) time.Time {
+		return time.Date(y, time.Month(m), day, 0, 0, 0, 0, time.UTC)
+	}
+
+	// Period boundaries
+	q1End := d(2023, 12, 30)
+	q1Start := d(2023, 10, 1)
+	q1Filed := d(2024, 1, 15)
+
+	q2End := d(2024, 3, 30)
+	q2Start := d(2024, 1, 1)
+	q2Filed := d(2024, 4, 15)
+
+	q3End := d(2024, 6, 29)
+	q3Start := d(2024, 4, 1)
+	q3Filed := d(2024, 7, 15)
+
+	fyEnd := d(2024, 9, 28)
+	fyStart := d(2023, 10, 1)
+	fyFiled := d(2024, 11, 15)
+
+	q1NextEnd := d(2024, 12, 28)
+	q1NextStart := d(2024, 10, 1)
+	q1NextFiled := d(2025, 1, 15)
+
+	// Build CompanyFacts with Revenues and NetIncomeLossAvailableToCommonStockholdersBasic
+	// facts. Facts must be sorted by Filed within each concept.
+	buildCF := func() *CompanyFacts {
+		return &CompanyFacts{
+			CIK:        12345,
+			EntityName: "Test Corp",
+			Facts: map[string][]Fact{
+				"Revenues": {
+					// Q1 single-quarter
+					{Start: q1Start, End: q1End, Val: 110000, Form: "10-Q", Filed: q1Filed, FP: "Q1", FY: 2024},
+					// Q2 single-quarter
+					{Start: q2Start, End: q2End, Val: 95000, Form: "10-Q", Filed: q2Filed, FP: "Q2", FY: 2024},
+					// Q3 single-quarter
+					{Start: q3Start, End: q3End, Val: 90000, Form: "10-Q", Filed: q3Filed, FP: "Q3", FY: 2024},
+					// 10-K full year
+					{Start: fyStart, End: fyEnd, Val: 400000, Form: "10-K", Filed: fyFiled, FP: "FY", FY: 2024},
+					// Q1 next FY
+					{Start: q1NextStart, End: q1NextEnd, Val: 115000, Form: "10-Q", Filed: q1NextFiled, FP: "Q1", FY: 2025},
+				},
+				"NetIncomeLossAvailableToCommonStockholdersBasic": {
+					{Start: q1Start, End: q1End, Val: 30000, Form: "10-Q", Filed: q1Filed, FP: "Q1", FY: 2024},
+					{Start: q2Start, End: q2End, Val: 25000, Form: "10-Q", Filed: q2Filed, FP: "Q2", FY: 2024},
+					{Start: q3Start, End: q3End, Val: 22000, Form: "10-Q", Filed: q3Filed, FP: "Q3", FY: 2024},
+					{Start: fyStart, End: fyEnd, Val: 100000, Form: "10-K", Filed: fyFiled, FP: "FY", FY: 2024},
+					{Start: q1NextStart, End: q1NextEnd, Val: 32000, Form: "10-Q", Filed: q1NextFiled, FP: "Q1", FY: 2025},
+				},
+			},
+		}
+	}
+
+	It("emits synthesized Q4 ARQ/MRQ observations", func() {
+		cf := buildCF()
+		sub := &library.Subscription{Name: "test"}
+		out := make(chan *data.Observation, 100)
+		numObs := 0
+
+		emitFundamentals(cf, AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST", CIK: 12345},
+			sub, time.Time{}, out, &numObs)
+		close(out)
+
+		// Collect observations by dimension and date_key.
+		type obsKey struct {
+			dimension string
+			dateKey   time.Time
+		}
+
+		observations := make(map[obsKey]*data.Fundamental)
+		for obs := range out {
+			key := obsKey{
+				dimension: obs.Fundamental.Dimension,
+				dateKey:   obs.Fundamental.DateKey,
+			}
+			observations[key] = obs.Fundamental
+		}
+
+		// Synthesized Q4 should have FormType "10-Q" so NormalizeEventDate snaps
+		// Sep 28 2024 to Sep 30 2024.
+		q4DateKey := d(2024, 9, 30)
+
+		// Verify Q4 ARQ exists with correct values.
+		arqQ4 := observations[obsKey{dimension: "ARQ", dateKey: q4DateKey}]
+		Expect(arqQ4).NotTo(BeNil(), "expected ARQ observation for Q4 at 2024-09-30")
+		Expect(arqQ4.Revenues).To(BeNumerically("==", 105000),
+			"Q4 Revenues = FY 400000 - (Q1 110000 + Q2 95000 + Q3 90000)")
+		Expect(arqQ4.NetIncomeCommonStock).To(BeNumerically("==", 23000),
+			"Q4 NetIncome = FY 100000 - (Q1 30000 + Q2 25000 + Q3 22000)")
+
+		// Verify Q4 MRQ exists with same values (no restatements in this test).
+		mrqQ4 := observations[obsKey{dimension: "MRQ", dateKey: q4DateKey}]
+		Expect(mrqQ4).NotTo(BeNil(), "expected MRQ observation for Q4 at 2024-09-30")
+		Expect(mrqQ4.Revenues).To(BeNumerically("==", 105000))
+		Expect(mrqQ4.NetIncomeCommonStock).To(BeNumerically("==", 23000))
+	})
+
+	It("includes synthesized Q4 in TTM computation", func() {
+		cf := buildCF()
+		sub := &library.Subscription{Name: "test"}
+		out := make(chan *data.Observation, 100)
+		numObs := 0
+
+		emitFundamentals(cf, AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST", CIK: 12345},
+			sub, time.Time{}, out, &numObs)
+		close(out)
+
+		type obsKey struct {
+			dimension string
+			dateKey   time.Time
+		}
+
+		observations := make(map[obsKey]*data.Fundamental)
+		for obs := range out {
+			key := obsKey{
+				dimension: obs.Fundamental.Dimension,
+				dateKey:   obs.Fundamental.DateKey,
+			}
+			observations[key] = obs.Fundamental
+		}
+
+		// The Q1 next FY (Oct-Dec 2024) normalized date is 2024-12-31.
+		// TTM at that date = Q1NextFY + Q4 + Q3 + Q2
+		//   Revenues: 115000 + 105000 + 90000 + 95000 = 405000
+		//   NetIncome: 32000 + 23000 + 22000 + 25000 = 102000
+		q1NextDateKey := d(2024, 12, 31)
+
+		artQ1Next := observations[obsKey{dimension: "ART", dateKey: q1NextDateKey}]
+		Expect(artQ1Next).NotTo(BeNil(), "expected ART observation at 2024-12-31")
+		Expect(artQ1Next.Revenues).To(BeNumerically("==", 405000),
+			"ART Revenues = Q1Next 115000 + Q4 105000 + Q3 90000 + Q2 95000")
+		Expect(artQ1Next.NetIncomeCommonStock).To(BeNumerically("==", 102000),
+			"ART NetIncome = Q1Next 32000 + Q4 23000 + Q3 22000 + Q2 25000")
+
+		mrtQ1Next := observations[obsKey{dimension: "MRT", dateKey: q1NextDateKey}]
+		Expect(mrtQ1Next).NotTo(BeNil(), "expected MRT observation at 2024-12-31")
+		Expect(mrtQ1Next.Revenues).To(BeNumerically("==", 405000))
+		Expect(mrtQ1Next.NetIncomeCommonStock).To(BeNumerically("==", 102000))
 	})
 })
