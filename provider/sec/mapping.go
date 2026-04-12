@@ -16,6 +16,7 @@
 package sec
 
 import (
+	"math"
 	"time"
 )
 
@@ -285,7 +286,14 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 			return 0, false
 		}
 
-		return vals[0] / vals[1], true
+		result := vals[0] / vals[1]
+
+		if m.RoundDigits > 0 {
+			pow := math.Pow(10, float64(m.RoundDigits))
+			result = math.Round(result*pow) / pow
+		}
+
+		return result, true
 
 	case OpLinearCombination:
 		if len(vals) != len(m.Coefficients) {

@@ -260,6 +260,58 @@ var _ = Describe("Mapping Engine", func() {
 		})
 	})
 
+	Describe("computeDerived rounding", func() {
+		It("rounds division result when RoundDigits is set", func() {
+			resolved := map[string]float64{
+				"A": 100,
+				"B": 3,
+			}
+			m := FieldMapping{
+				FieldName:   "Ratio",
+				Type:        MappingDerived,
+				Op:          OpDivide,
+				Operands:    []string{"A", "B"},
+				RoundDigits: 4,
+			}
+			val, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(33.3333))
+		})
+
+		It("does not round when RoundDigits is zero", func() {
+			resolved := map[string]float64{
+				"A": 100,
+				"B": 3,
+			}
+			m := FieldMapping{
+				FieldName: "Ratio",
+				Type:      MappingDerived,
+				Op:        OpDivide,
+				Operands:  []string{"A", "B"},
+			}
+			val, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(100.0 / 3.0))
+		})
+
+		It("rounds to 3 decimal places", func() {
+			resolved := map[string]float64{
+				"A": 74_236_000_000,
+				"B": 15_408_095_000,
+			}
+			m := FieldMapping{
+				FieldName:   "BVPS",
+				Type:        MappingDerived,
+				Op:          OpDivide,
+				Operands:    []string{"A", "B"},
+				RoundDigits: 3,
+			}
+			val, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(4.818))
+		})
+	})
+
 	Describe("ResolveAllFields", func() {
 		It("resolves both direct and derived fields", func() {
 			periodEnd := time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC)

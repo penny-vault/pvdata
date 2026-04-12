@@ -68,6 +68,10 @@ type FieldMapping struct {
 	// OptionalOperands makes OpAdd treat missing operands as 0 and resolve
 	// when at least one operand is present, instead of requiring all.
 	OptionalOperands bool
+
+	// RoundDigits rounds OpDivide results to this many decimal places.
+	// Zero (the default) means no rounding.
+	RoundDigits int
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
