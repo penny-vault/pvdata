@@ -381,6 +381,30 @@ var _ = Describe("Mapping Engine", func() {
 				"TotalDebt should cascade from corrected DebtCurrent + DebtNonCurrent")
 		})
 
+		It("resolves InvestedCapital from component fields", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			icCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"LongTermDebtCurrent":                   {{End: periodEnd, Filed: filed, Val: 10_000, Form: "10-Q"}},
+					"LongTermDebtNoncurrent":                {{End: periodEnd, Filed: filed, Val: 90_000, Form: "10-Q"}},
+					"Assets":                                {{End: periodEnd, Filed: filed, Val: 350_000, Form: "10-Q"}},
+					"IntangibleAssetsNetIncludingGoodwill":  {{End: periodEnd, Filed: filed, Val: 50_000, Form: "10-Q"}},
+					"CashAndCashEquivalentsAtCarryingValue": {{End: periodEnd, Filed: filed, Val: 25_000, Form: "10-Q"}},
+					"LiabilitiesCurrent":                   {{End: periodEnd, Filed: filed, Val: 60_000, Form: "10-Q"}},
+				},
+			}
+
+			resolved := ResolveAllFields(icCF, periodEnd, "10-Q")
+
+			// TotalDebt = DebtCurrent(10_000) + DebtNonCurrent(90_000) = 100_000
+			// InvestedCapital = 100_000 + 350_000 - 50_000 - 25_000 - 60_000 = 315_000
+			Expect(resolved).To(HaveKey("InvestedCapital"))
+			Expect(resolved["InvestedCapital"]).To(Equal(315_000.0))
+		})
+
 		It("falls back to basic weighted-average shares when diluted tags are absent", func() {
 			// Simulates a loss-quarter filer (e.g. Nordstrom during COVID,
 			// Vaxart as a pre-revenue biotech) that reports only the basic

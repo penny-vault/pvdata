@@ -589,11 +589,13 @@ var FieldMappings = []FieldMapping{
 		Op:       OpSubtract,
 		Operands: []string{"TotalAssets", "Intangibles"},
 	},
-	// InvestedCapital is intentionally omitted: the proper formula is
-	//   TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
-	// which requires multi-term subtract support that the derivation engine does
-	// not yet have. Add it back in a follow-up once the engine can express that
-	// formula correctly; computing only TotalDebt + TotalAssets would be wrong.
+	// InvestedCapital = TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
+	{
+		FieldName: "InvestedCapital", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		Op:           OpLinearCombination,
+		Operands:     []string{"TotalDebt", "TotalAssets", "Intangibles", "CashAndEquivalents", "CurrentLiabilities"},
+		Coefficients: []float64{1, 1, -1, -1, -1},
+	},
 
 	// ==================== RATIO METRICS (derived) ====================
 
@@ -672,9 +674,4 @@ var FieldMappings = []FieldMapping{
 	// - MarketCapitalization, EnterpriseValue, PE, PB, PS, PE1, PS1
 	// - EVtoEBIT, EVtoEBITDA, DividendYield, PayoutRatio, Price
 	// - ShareFactor, FxUSD
-	// - ROA, ROE, ROIC (these need average values across periods)
-	// - AverageAssets, EquityAvg, InvestedCapitalAverage (need prior period)
-	//
-	// These will be computed in a later pass once we have multi-period data
-	// available (see dimensions.go for average computations).
 }
