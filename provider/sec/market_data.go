@@ -31,6 +31,16 @@ import (
 // Returns 0 if no price is available.
 type PriceLookupFn func(compositeFigi string, eventDate time.Time) float64
 
+// priceLookupFn is the active price lookup function. Set by fetchFundamentals
+// when the published EOD view is available.
+var priceLookupFn PriceLookupFn
+
+// SetPriceLookupFn sets the package-level price lookup function. Passing nil
+// disables market-data enrichment.
+func SetPriceLookupFn(fn PriceLookupFn) {
+	priceLookupFn = fn
+}
+
 // EnrichMarketData populates price-derived market-data fields on each
 // Fundamental record. It groups records by DateKey and processes them in
 // three phases:

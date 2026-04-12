@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/library"
 )
 
 var _ = Describe("EnrichMarketData", func() {
@@ -345,5 +346,69 @@ var _ = Describe("EnrichMarketData", func() {
 			Expect(arq.PB).To(BeNumerically("~", expectedARQPB, 1e-9))
 			Expect(arq.PB).NotTo(BeNumerically("~", artPB, 1e-9))
 		})
+	})
+})
+
+var _ = Describe("emitFundamentals market-data enrichment", func() {
+	It("populates price on emitted fundamentals when priceLookupFn is set", func() {
+		cf := &CompanyFacts{
+			CIK:        999,
+			EntityName: "TestCo",
+			Facts: map[string][]Fact{
+				"Revenues": {
+					{Val: 100000, Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC), Form: "10-Q", Filed: time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)},
+				},
+			},
+		}
+
+		asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST01", CIK: 999}
+		sub := &library.Subscription{Name: "test"}
+		out := make(chan *data.Observation, 100)
+		numObs := 0
+
+		SetPriceLookupFn(func(compositeFigi string, eventDate time.Time) float64 {
+			return 150.0
+		})
+		defer SetPriceLookupFn(nil)
+
+		emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+		close(out)
+
+		foundPriced := false
+		for obs := range out {
+			if obs.Fundamental != nil && obs.Fundamental.Price > 0 {
+				foundPriced = true
+				Expect(obs.Fundamental.Price).To(BeNumerically("~", 150.0, 0.001))
+			}
+		}
+		Expect(foundPriced).To(BeTrue(), "at least one observation should have a non-zero price")
+	})
+
+	It("emits fundamentals with zero price when no lookup function is set", func() {
+		cf := &CompanyFacts{
+			CIK:        999,
+			EntityName: "TestCo",
+			Facts: map[string][]Fact{
+				"Revenues": {
+					{Val: 100000, Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC), Form: "10-Q", Filed: time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)},
+				},
+			},
+		}
+
+		asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST01", CIK: 999}
+		sub := &library.Subscription{Name: "test"}
+		out := make(chan *data.Observation, 100)
+		numObs := 0
+
+		SetPriceLookupFn(nil)
+
+		emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+		close(out)
+
+		for obs := range out {
+			if obs.Fundamental != nil {
+				Expect(obs.Fundamental.Price).To(BeNumerically("==", 0))
+			}
+		}
 	})
 })

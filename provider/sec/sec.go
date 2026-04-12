@@ -211,6 +211,16 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		log.Info().Int("filtered_ciks", len(filtered)).Msg("applied security filter to CIK map")
 	}
 
+	// Set up EOD price lookup for market-data enrichment.
+	eodView := FindEODViewName(ctx, sub.Library.Pool)
+	if eodView != "" {
+		SetPriceLookupFn(NewEODPriceLookup(ctx, sub.Library.Pool, eodView))
+		log.Info().Str("eod_view", eodView).Msg("market-data enrichment enabled")
+	} else {
+		SetPriceLookupFn(nil)
+		log.Warn().Msg("no published EOD view found; market-data fields will be zero")
+	}
+
 	skippedMissingFIGI := 0
 
 	// Determine the cutoff date for which periods to emit. If --lookback is
@@ -514,6 +524,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 	var annuals []quarterData
 
+	var buffered []*data.Observation
+
 	for _, p := range periods {
 		// AR: resolve using only facts available at the earliest filing date
 		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
@@ -702,24 +714,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// ARY
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
-		out <- &data.Observation{
+		buffered = append(buffered, &data.Observation{
 			Fundamental:      fundamental,
 			ObservationDate:  calendarDate,
 			SubscriptionID:   sub.ID,
 			SubscriptionName: sub.Name,
-		}
+		})
 
 		*numObservations++
 
 		// MRY
 		fundamental = BuildFundamental(a.mrEmit, asset.Ticker, asset.CompositeFigi, "MRY",
 			a.period.PeriodEnd, calendarDate, a.period.PeriodEnd, a.period.MRFiledDate)
-		out <- &data.Observation{
+		buffered = append(buffered, &data.Observation{
 			Fundamental:      fundamental,
 			ObservationDate:  calendarDate,
 			SubscriptionID:   sub.ID,
 			SubscriptionName: sub.Name,
-		}
+		})
 
 		*numObservations++
 
@@ -738,24 +750,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",
 			q.period.ARFiledDate, calendarDate, q.period.PeriodEnd, q.period.ARFiledDate)
-		out <- &data.Observation{
+		buffered = append(buffered, &data.Observation{
 			Fundamental:      fundamental,
 			ObservationDate:  calendarDate,
 			SubscriptionID:   sub.ID,
 			SubscriptionName: sub.Name,
-		}
+		})
 
 		*numObservations++
 
 		// MRQ
 		fundamental = BuildFundamental(q.mrEmit, asset.Ticker, asset.CompositeFigi, "MRQ",
 			q.period.PeriodEnd, calendarDate, q.period.PeriodEnd, q.period.MRFiledDate)
-		out <- &data.Observation{
+		buffered = append(buffered, &data.Observation{
 			Fundamental:      fundamental,
 			ObservationDate:  calendarDate,
 			SubscriptionID:   sub.ID,
 			SubscriptionName: sub.Name,
-		}
+		})
 
 		*numObservations++
 
@@ -837,12 +849,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "ART",
 				q.period.ARFiledDate, calendarDate, q.period.PeriodEnd, latestARFiled)
-			out <- &data.Observation{
+			buffered = append(buffered, &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
-			}
+			})
 
 			*numObservations++
 		}
@@ -862,15 +874,34 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "MRT",
 				q.period.PeriodEnd, calendarDate, q.period.PeriodEnd, latestMRFiled)
-			out <- &data.Observation{
+			buffered = append(buffered, &data.Observation{
 				Fundamental:      fundamental,
 				ObservationDate:  calendarDate,
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
-			}
+			})
 
 			*numObservations++
 		}
+	}
+
+	// Enrich buffered observations with market-data fields if a price
+	// lookup function is available.
+	if priceLookupFn != nil {
+		var fundamentals []*data.Fundamental
+
+		for _, obs := range buffered {
+			if obs.Fundamental != nil {
+				fundamentals = append(fundamentals, obs.Fundamental)
+			}
+		}
+
+		EnrichMarketData(fundamentals, priceLookupFn)
+	}
+
+	// Send all buffered observations to the output channel.
+	for _, obs := range buffered {
+		out <- obs
 	}
 
 	// Log per-company coverage. We use Debug for healthy companies (most of
