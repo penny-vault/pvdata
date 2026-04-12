@@ -759,6 +759,55 @@ var _ = Describe("Mapping Engine", func() {
 			Expect(ok).To(BeTrue())
 			Expect(val).To(Equal(float64(157_000_000)))
 		})
+
+		It("resolves TaxAssets from IncomeTaxesReceivable, not deferred tax tags", func() {
+			// Sharadar defines taxassets as "tax assets and receivables" --
+			// current tax receivables, not deferred tax assets. A company
+			// that reports both should resolve TaxAssets from
+			// IncomeTaxesReceivable and ignore DeferredTaxAssetsNet.
+			periodEnd := time.Date(2024, 9, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
+
+			taxCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"IncomeTaxesReceivable": {
+						{End: periodEnd, Filed: filed, Val: 450_000_000, Form: "10-K"},
+					},
+					"DeferredTaxAssetsNet": {
+						{End: periodEnd, Filed: filed, Val: 27_451_000_000, Form: "10-K"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(taxCF, periodEnd, "10-K")
+			Expect(resolved).To(HaveKey("TaxAssets"))
+			Expect(resolved["TaxAssets"]).To(Equal(450_000_000.0),
+				"TaxAssets should resolve from IncomeTaxesReceivable (450M), not DeferredTaxAssetsNet (27.5B)")
+		})
+
+		It("does not resolve TaxAssets from deferred tax tags alone", func() {
+			// When only deferred tax tags are present (like AAPL), TaxAssets
+			// should not resolve -- matching Sharadar's 0 for such companies.
+			periodEnd := time.Date(2024, 9, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
+
+			deferredOnlyCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"DeferredTaxAssetsNet": {
+						{End: periodEnd, Filed: filed, Val: 27_451_000_000, Form: "10-K"},
+					},
+					"DeferredIncomeTaxAssetsNet": {
+						{End: periodEnd, Filed: filed, Val: 20_777_000_000, Form: "10-K"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(deferredOnlyCF, periodEnd, "10-K")
+			Expect(resolved).NotTo(HaveKey("TaxAssets"),
+				"TaxAssets should not resolve when only deferred tax tags are present")
+		})
 	})
 
 	Describe("Sign negation for cash outflow fields", func() {
