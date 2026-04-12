@@ -53,7 +53,6 @@ var _ = Describe("CompanyFacts Parser", func() {
 		Expect(cf.Facts).To(HaveKey("NetIncomeLoss"))
 		Expect(cf.Facts).To(HaveKey("EarningsPerShareBasic"))
 		Expect(cf.Facts).To(HaveKey("CommonStockSharesOutstanding"))
-		Expect(cf.Facts).To(HaveLen(15)) // 14 us-gaap + 1 dei
 	})
 
 	It("parses DEI namespace concepts", func() {

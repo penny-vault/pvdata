@@ -16,6 +16,7 @@
 package sec
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -422,34 +423,40 @@ func ComputeTTM(quarters []map[string]float64) map[string]float64 {
 	return result
 }
 
-// ComputePeriodAverages computes period-average balance sheet fields and the
-// ratios that depend on them. current is the emit-ready field map for the
-// period being computed; prior is the emit-ready field map for the immediately
-// preceding period of the same type (prior quarter for quarterly, prior year
-// for annual, quarter before the TTM window for TTM).
+// ComputeMultiQAverages computes period-average balance sheet fields by
+// averaging across multiple quarterly snapshots (typically 4 for TTM and
+// annual dimensions). current is the emit-ready field map (TTM aggregate or
+// annual) used for ratio numerators; quarterMaps are the individual quarterly
+// emit maps whose balance sheet fields are averaged.
 //
 // Returns a map containing only the computed fields; the caller merges these
 // into the emit map. Fields whose inputs are missing are silently omitted.
-func ComputePeriodAverages(current, prior map[string]float64) map[string]float64 {
+func ComputeMultiQAverages(current map[string]float64, quarterMaps []map[string]float64) map[string]float64 {
 	result := make(map[string]float64)
 
-	if prior == nil {
+	if len(quarterMaps) == 0 {
 		return result
 	}
 
-	// Helper: compute (prior[field] + current[field]) / 2 if both exist.
+	// Helper: average field across all quarter maps that contain it.
 	avg := func(field string) (float64, bool) {
-		cv, cOK := current[field]
-		pv, pOK := prior[field]
+		sum := 0.0
+		count := 0
 
-		if !cOK || !pOK {
+		for _, qm := range quarterMaps {
+			if v, ok := qm[field]; ok {
+				sum += v
+				count++
+			}
+		}
+
+		if count == 0 {
 			return 0, false
 		}
 
-		return (pv + cv) / 2, true
+		return sum / float64(count), true
 	}
 
-	// Averages
 	if v, ok := avg("TotalAssets"); ok {
 		result["AverageAssets"] = v
 	}
@@ -462,7 +469,7 @@ func ComputePeriodAverages(current, prior map[string]float64) map[string]float64
 		result["InvestedCapitalAverage"] = v
 	}
 
-	// Ratios (only when both numerator and denominator are available and non-zero)
+	// Ratios use the aggregate (TTM/annual) numerator and the averaged denominator.
 	ratio := func(numField, denomField string) (float64, bool) {
 		num, nOK := current[numField]
 		denom, dOK := result[denomField]
@@ -484,6 +491,11 @@ func ComputePeriodAverages(current, prior map[string]float64) map[string]float64
 
 	if v, ok := ratio("EBIT", "InvestedCapitalAverage"); ok {
 		result["ROIC"] = v
+	}
+
+	if v, ok := ratio("Revenues", "AverageAssets"); ok {
+		pow := float64(10 * 10 * 10)
+		result["AssetTurnover"] = math.Round(v*pow) / pow
 	}
 
 	return result

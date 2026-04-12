@@ -528,13 +528,20 @@ var FieldMappings = []FieldMapping{
 			"RepaymentsOfLongTermDebtAndCapitalSecurities",
 		},
 	},
-	// NetCashFlowDebt = proceeds - repayments (Sharadar NCFDEBT:
+	{
+		FieldName: "_netShortTermDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"ProceedsFromRepaymentsOfCommercialPaper",
+			"ProceedsFromRepaymentsOfShortTermDebt",
+		},
+	},
+	// NetCashFlowDebt = proceeds - repayments + netShortTermDebt (Sharadar NCFDEBT:
 	// "net cash inflow (outflow) from issuance (repayment) of debt securities")
 	{
 		FieldName: "NetCashFlowDebt", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,
-		Operands:         []string{"_proceedsDebt", "_repaymentsDebt"},
-		Coefficients:     []float64{1, -1},
+		Operands:         []string{"_proceedsDebt", "_repaymentsDebt", "_netShortTermDebt"},
+		Coefficients:     []float64{1, -1, 1},
 		OptionalOperands: true,
 	},
 	{
@@ -553,13 +560,29 @@ var FieldMappings = []FieldMapping{
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
 		},
 	},
+	// Some companies report a combined maturities+sales tag; others report them
+	// separately. Split into two sub-fields and sum, with the combined tag as a
+	// fallback on _proceedsInvest so both cases are handled.
 	{
-		FieldName: "_proceedsInvest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_proceedsInvestMaturities", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
-			"ProceedsFromSaleAndMaturityOfMarketableSecurities",
 			"ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities",
+		},
+	},
+	{
+		FieldName: "_proceedsInvestSales", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
 			"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
 		},
+	},
+	{
+		FieldName: "_proceedsInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{
+			"ProceedsFromSaleAndMaturityOfMarketableSecurities",
+		},
+		Op:               OpAdd,
+		Operands:         []string{"_proceedsInvestMaturities", "_proceedsInvestSales"},
+		OptionalOperands: true,
 	},
 	// NetCashFlowInvest = -payments + proceeds (Sharadar NCFINV:
 	// "net cash inflow (outflow) associated with acquisition & disposal of investments")

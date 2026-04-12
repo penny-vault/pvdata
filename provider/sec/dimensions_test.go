@@ -563,8 +563,8 @@ var _ = Describe("Dimensions", func() {
 		})
 	})
 
-	Describe("ComputePeriodAverages", func() {
-		It("computes all 6 fields from complete inputs", func() {
+	Describe("ComputeMultiQAverages", func() {
+		It("computes all 6 fields from 4 quarterly snapshots", func() {
 			current := map[string]float64{
 				"TotalAssets":          400_000,
 				"Equity":               200_000,
@@ -572,57 +572,51 @@ var _ = Describe("Dimensions", func() {
 				"NetIncomeCommonStock": 50_000,
 				"EBIT":                 60_000,
 			}
-			prior := map[string]float64{
-				"TotalAssets":     360_000,
-				"Equity":          180_000,
-				"InvestedCapital": 280_000,
-			}
+			q1 := map[string]float64{"TotalAssets": 340_000, "Equity": 170_000, "InvestedCapital": 260_000}
+			q2 := map[string]float64{"TotalAssets": 360_000, "Equity": 180_000, "InvestedCapital": 280_000}
+			q3 := map[string]float64{"TotalAssets": 380_000, "Equity": 190_000, "InvestedCapital": 290_000}
+			q4 := map[string]float64{"TotalAssets": 400_000, "Equity": 200_000, "InvestedCapital": 300_000}
 
-			result := ComputePeriodAverages(current, prior)
+			result := ComputeMultiQAverages(current, []map[string]float64{q1, q2, q3, q4})
 
-			// Averages
-			Expect(result["AverageAssets"]).To(Equal(380_000.0))
-			Expect(result["EquityAvg"]).To(Equal(190_000.0))
-			Expect(result["InvestedCapitalAverage"]).To(Equal(290_000.0))
+			// Averages: (340+360+380+400)/4=370, (170+180+190+200)/4=185, (260+280+290+300)/4=282.5
+			Expect(result["AverageAssets"]).To(Equal(370_000.0))
+			Expect(result["EquityAvg"]).To(Equal(185_000.0))
+			Expect(result["InvestedCapitalAverage"]).To(Equal(282_500.0))
 
 			// Ratios
-			Expect(result["ROA"]).To(BeNumerically("~", 50_000.0/380_000.0, 1e-10))
-			Expect(result["ROE"]).To(BeNumerically("~", 50_000.0/190_000.0, 1e-10))
-			Expect(result["ROIC"]).To(BeNumerically("~", 60_000.0/290_000.0, 1e-10))
+			Expect(result["ROA"]).To(BeNumerically("~", 50_000.0/370_000.0, 1e-10))
+			Expect(result["ROE"]).To(BeNumerically("~", 50_000.0/185_000.0, 1e-10))
+			Expect(result["ROIC"]).To(BeNumerically("~", 60_000.0/282_500.0, 1e-10))
 		})
 
-		It("omits average when prior is missing the balance sheet field", func() {
+		It("averages only quarters that contain the field", func() {
 			current := map[string]float64{
 				"TotalAssets":          400_000,
 				"Equity":               200_000,
 				"NetIncomeCommonStock": 50_000,
 				"EBIT":                 60_000,
 			}
-			prior := map[string]float64{
-				"TotalAssets": 360_000,
-				// Equity missing
-			}
+			q1 := map[string]float64{"TotalAssets": 360_000}
+			q2 := map[string]float64{"TotalAssets": 400_000, "Equity": 200_000}
 
-			result := ComputePeriodAverages(current, prior)
+			result := ComputeMultiQAverages(current, []map[string]float64{q1, q2})
 
-			Expect(result).To(HaveKey("AverageAssets"))
+			Expect(result["AverageAssets"]).To(Equal(380_000.0))
 			Expect(result).To(HaveKey("ROA"))
-			Expect(result).NotTo(HaveKey("EquityAvg"))
-			Expect(result).NotTo(HaveKey("ROE"))
+			Expect(result["EquityAvg"]).To(Equal(200_000.0)) // only 1 quarter has it
+			Expect(result).To(HaveKey("ROE"))
 		})
 
 		It("omits ratio when numerator is missing", func() {
 			current := map[string]float64{
 				"TotalAssets": 400_000,
 				"Equity":      200_000,
-				// NetIncomeCommonStock missing
 			}
-			prior := map[string]float64{
-				"TotalAssets": 360_000,
-				"Equity":      180_000,
-			}
+			q1 := map[string]float64{"TotalAssets": 360_000, "Equity": 180_000}
+			q2 := map[string]float64{"TotalAssets": 400_000, "Equity": 200_000}
 
-			result := ComputePeriodAverages(current, prior)
+			result := ComputeMultiQAverages(current, []map[string]float64{q1, q2})
 
 			Expect(result).To(HaveKey("AverageAssets"))
 			Expect(result).To(HaveKey("EquityAvg"))
@@ -635,25 +629,24 @@ var _ = Describe("Dimensions", func() {
 				"TotalAssets":          100,
 				"NetIncomeCommonStock": 50,
 			}
-			prior := map[string]float64{
-				"TotalAssets": -100, // average = 0
-			}
+			q1 := map[string]float64{"TotalAssets": 100}
+			q2 := map[string]float64{"TotalAssets": -100}
 
-			result := ComputePeriodAverages(current, prior)
+			result := ComputeMultiQAverages(current, []map[string]float64{q1, q2})
 
 			Expect(result).To(HaveKey("AverageAssets"))
 			Expect(result["AverageAssets"]).To(Equal(0.0))
 			Expect(result).NotTo(HaveKey("ROA"))
 		})
 
-		It("returns empty map when prior is nil", func() {
+		It("returns empty map when quarter slice is empty", func() {
 			current := map[string]float64{
 				"TotalAssets":          400_000,
 				"Equity":               200_000,
 				"NetIncomeCommonStock": 50_000,
 			}
 
-			result := ComputePeriodAverages(current, nil)
+			result := ComputeMultiQAverages(current, nil)
 			Expect(result).To(BeEmpty())
 		})
 	})
@@ -679,8 +672,11 @@ var _ = Describe("Dimensions", func() {
 				"CommercialPaperDebt":           true,
 				"_proceedsDebt":                 true,
 				"_repaymentsDebt":               true,
+				"_netShortTermDebt":             true,
 				"_paymentsInvest":               true,
 				"_proceedsInvest":               true,
+				"_proceedsInvestMaturities":     true,
+				"_proceedsInvestSales":          true,
 			}
 
 			var missing []string
@@ -928,20 +924,20 @@ var _ = Describe("Dimensions", func() {
 			close(out)
 			<-done
 
-			// TTM window = q1..q4, prior = q0
-			// AverageAssets = (q0 assets + q4 assets) / 2 = (1000 + 1400) / 2 = 1200
-			// EquityAvg = (q0 equity + q4 equity) / 2 = (500 + 700) / 2 = 600
+			// TTM window = q1..q4 (4-quarter average of balance sheets)
+			// AverageAssets = (1100+1200+1300+1400)/4 = 1250
+			// EquityAvg = (550+600+650+700)/4 = 625
 			// TTM NetIncomeCommonStock = 50*4 = 200
-			// ROA = 200 / 1200
+			// ROA = 200 / 1250
 			Expect(ttmFund).NotTo(BeNil())
-			Expect(ttmFund.AverageAssets).To(Equal(int64(1200)))
-			Expect(ttmFund.EquityAvg).To(Equal(int64(600)))
-			Expect(ttmFund.ROA).To(BeNumerically("~", 200.0/1200.0, 1e-10))
-			Expect(ttmFund.ROE).To(BeNumerically("~", 200.0/600.0, 1e-10))
+			Expect(ttmFund.AverageAssets).To(Equal(int64(1250)))
+			Expect(ttmFund.EquityAvg).To(Equal(int64(625)))
+			Expect(ttmFund.ROA).To(BeNumerically("~", 200.0/1250.0, 1e-10))
+			Expect(ttmFund.ROE).To(BeNumerically("~", 200.0/625.0, 1e-10))
 		})
 
-		It("skips TTM averages when fewer than 5 quarters", func() {
-			// Only 4 quarters -- enough for TTM sums but no prior for averages
+		It("computes TTM averages with exactly 4 quarters", func() {
+			// 4 quarters is sufficient for 4-quarter averaging (no extra prior needed)
 			cf := buildSyntheticQuarterlyFacts([]time.Time{
 				time.Date(2023, 6, 30, 0, 0, 0, 0, time.UTC),
 				time.Date(2023, 9, 30, 0, 0, 0, 0, time.UTC),
@@ -970,9 +966,93 @@ var _ = Describe("Dimensions", func() {
 			close(out)
 			<-done
 
-			// TTM should exist but without averages
+			// All synthetic quarters have Assets=1000, so 4-quarter avg = 1000
 			Expect(ttmFund).NotTo(BeNil())
-			Expect(ttmFund.AverageAssets).To(Equal(int64(0)))
+			Expect(ttmFund.AverageAssets).To(Equal(int64(1000)))
+		})
+	})
+
+	Describe("AAPL validation against Sharadar", func() {
+		// These tests run emitFundamentals on real Apple XBRL data and
+		// verify the output matches known Sharadar values.
+
+		var observations map[string]*data.Fundamental // key: "YYYY-MM-DD:DIM"
+
+		BeforeEach(func() {
+			jsonData, err := os.ReadFile("testdata/CIK0000320193.json")
+			Expect(err).NotTo(HaveOccurred())
+			aaplCF, err := ParseCompanyFacts(jsonData)
+			Expect(err).NotTo(HaveOccurred())
+
+			asset := AssetInfo{
+				Ticker:        "AAPL",
+				CompositeFigi: "BBG000B9XRY4",
+				CIK:           320193,
+			}
+			out := make(chan *data.Observation, 4096)
+			sub := &library.Subscription{Name: "SEC Fundamentals"}
+
+			done := make(chan struct{})
+			observations = make(map[string]*data.Fundamental)
+
+			go func() {
+				for obs := range out {
+					key := obs.ObservationDate.Format("2006-01-02") + ":" + obs.Fundamental.Dimension
+					observations[key] = obs.Fundamental
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(aaplCF, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+		})
+
+		It("computes NetCashFlowDebt including commercial paper", func() {
+			// Q2 FY2025 (2025-03-31 ARQ): Sharadar NCFDEBT = 976,000,000
+			// = ProceedsLongTerm(0) - RepaymentsLongTerm(3,000M) + CommercialPaper(3,976M)
+			f := observations["2025-03-31:ARQ"]
+			Expect(f).NotTo(BeNil())
+			Expect(f.NetCashFlowDebt).To(Equal(int64(976_000_000)))
+
+			// Q3 FY2025 (2025-06-30 ARQ): Sharadar NCFDEBT = 2,711,000,000
+			f = observations["2025-06-30:ARQ"]
+			Expect(f).NotTo(BeNil())
+			Expect(f.NetCashFlowDebt).To(Equal(int64(2_711_000_000)))
+
+			// Q4 FY2025 (2025-09-30 ARQ): Sharadar NCFDEBT = -3,217,000,000
+			f = observations["2025-09-30:ARQ"]
+			Expect(f).NotTo(BeNil())
+			Expect(f.NetCashFlowDebt).To(Equal(int64(-3_217_000_000)))
+		})
+
+		It("computes NetCashFlowInvest as sum of maturities + sales - purchases", func() {
+			// Q2 FY2025 (2025-03-31 ARQ): Sharadar NCFINV = 6,020,000,000
+			f := observations["2025-03-31:ARQ"]
+			Expect(f).NotTo(BeNil())
+			Expect(f.NetCashFlowInvest).To(Equal(int64(6_020_000_000)))
+
+			// Q3 FY2025 (2025-06-30 ARQ): Sharadar NCFINV = 8,875,000,000
+			f = observations["2025-06-30:ARQ"]
+			Expect(f).NotTo(BeNil())
+			Expect(f.NetCashFlowInvest).To(Equal(int64(8_875_000_000)))
+		})
+
+		It("computes 4-quarter AverageAssets for ART", func() {
+			// 2025-09-30 ART: Sharadar average_assets = 341,513,500,000
+			// = (Q1:344,085M + Q2:331,233M + Q3:331,495M + Q4:359,241M) / 4
+			f := observations["2025-09-30:ART"]
+			Expect(f).NotTo(BeNil())
+			Expect(f.AverageAssets).To(Equal(int64(341_513_500_000)))
+		})
+
+		It("computes 4-quarter EquityAvg for ART", func() {
+			// 2025-03-31 ART: Sharadar equity_avg = 64,303,000,000
+			// = (Q3_FY24:66,708M + Q4_FY24:56,950M + Q1_FY25:66,758M + Q2_FY25:66,796M) / 4
+			f := observations["2025-03-31:ART"]
+			Expect(f).NotTo(BeNil())
+			Expect(f.EquityAvg).To(Equal(int64(64_303_000_000)))
 		})
 	})
 })

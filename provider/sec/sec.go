@@ -655,6 +655,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// and derived ratios (ROA, ROE, ROIC) are intentionally NOT computed for
 	// quarterly dimensions (ARQ/MRQ). See #56 for rationale.
 
+	// findConstituentQuarters returns the quarterly entries whose PeriodEnd
+	// falls within ~365 days before annualEnd (inclusive). This gives us the
+	// 4 fiscal-year quarters for 4-quarter balance sheet averaging.
+	findConstituentQuarters := func(qs []quarterData, annualEnd time.Time) []quarterData {
+		const maxDays = 370
+
+		var result []quarterData
+
+		for idx := range qs {
+			days := annualEnd.Sub(qs[idx].period.PeriodEnd).Hours() / 24
+			if days >= 0 && days <= maxDays {
+				result = append(result, qs[idx])
+			}
+		}
+
+		return result
+	}
+
 	// Compute period averages and emit annual observations.
 	const maxAnnualGapDays = 425 // ~14 months, handles fiscal year shifts
 
@@ -668,16 +686,39 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		a.arEmit = copyFieldMap(a.arFields)
 		a.mrEmit = copyFieldMap(a.mrFields)
 
-		if i > 0 {
+		// Find the 4 constituent quarters for this fiscal year to compute
+		// 4-quarter balance sheet averages (matching Sharadar methodology).
+		// Fall back to 2-point (prior annual + current annual) averaging when
+		// quarterly data is not available (e.g. companies with only 10-K filings).
+		annualQs := findConstituentQuarters(quarters, a.period.PeriodEnd)
+		if len(annualQs) > 0 {
+			arMaps := make([]map[string]float64, len(annualQs))
+			mrMaps := make([]map[string]float64, len(annualQs))
+
+			for j, qd := range annualQs {
+				arMaps[j] = qd.arEmit
+				mrMaps[j] = qd.mrEmit
+			}
+
+			for k, v := range ComputeMultiQAverages(a.arEmit, arMaps) {
+				a.arEmit[k] = v
+			}
+
+			for k, v := range ComputeMultiQAverages(a.mrEmit, mrMaps) {
+				a.mrEmit[k] = v
+			}
+		} else if i > 0 {
 			prev := &annuals[i-1]
 			gapDays := a.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
 
 			if gapDays <= maxAnnualGapDays {
-				for k, v := range ComputePeriodAverages(a.arEmit, prev.arEmit) {
+				arFallback := []map[string]float64{prev.arEmit, a.arEmit}
+				for k, v := range ComputeMultiQAverages(a.arEmit, arFallback) {
 					a.arEmit[k] = v
 				}
 
-				for k, v := range ComputePeriodAverages(a.mrEmit, prev.mrEmit) {
+				mrFallback := []map[string]float64{prev.mrEmit, a.mrEmit}
+				for k, v := range ComputeMultiQAverages(a.mrEmit, mrFallback) {
 					a.mrEmit[k] = v
 				}
 			}
@@ -831,10 +872,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(arQSlice); ttm != nil {
-			if i >= 4 {
-				for k, v := range ComputePeriodAverages(ttm, quarters[i-4].arEmit) {
-					ttm[k] = v
-				}
+			for k, v := range ComputeMultiQAverages(ttm, arQSlice) {
+				ttm[k] = v
 			}
 
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "ART",
@@ -856,10 +895,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(mrQSlice); ttm != nil {
-			if i >= 4 {
-				for k, v := range ComputePeriodAverages(ttm, quarters[i-4].mrEmit) {
-					ttm[k] = v
-				}
+			for k, v := range ComputeMultiQAverages(ttm, mrQSlice) {
+				ttm[k] = v
 			}
 
 			fundamental := BuildFundamental(ttm, asset.Ticker, asset.CompositeFigi, "MRT",
