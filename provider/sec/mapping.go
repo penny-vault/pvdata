@@ -50,6 +50,11 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 		tags = m.FallbackTags
 	}
 
+	// Normalize the target period end once so we match facts whose raw end
+	// date differs by a day or two but belongs to the same fiscal period
+	// (ghost-period variation across XBRL concepts).
+	normalPeriodEnd := NormalizeEventDate(periodEnd, formType)
+
 	for _, tag := range tags {
 		facts, ok := cf.Facts[tag]
 		if !ok {
@@ -62,8 +67,8 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 		for i := range facts {
 			f := &facts[i]
 
-			// Must match the period end date
-			if !f.End.Equal(periodEnd) {
+			// Must match the normalized period end date
+			if !NormalizeEventDate(f.End, formType).Equal(normalPeriodEnd) {
 				continue
 			}
 
