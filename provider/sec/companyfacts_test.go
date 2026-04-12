@@ -53,7 +53,7 @@ var _ = Describe("CompanyFacts Parser", func() {
 		Expect(cf.Facts).To(HaveKey("NetIncomeLoss"))
 		Expect(cf.Facts).To(HaveKey("EarningsPerShareBasic"))
 		Expect(cf.Facts).To(HaveKey("CommonStockSharesOutstanding"))
-		Expect(cf.Facts).To(HaveLen(10))
+		Expect(cf.Facts).To(HaveLen(14))
 	})
 
 	It("parses instant facts (balance sheet items with only end date)", func() {

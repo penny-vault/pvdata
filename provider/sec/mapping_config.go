@@ -51,6 +51,11 @@ type FieldMapping struct {
 	// For direct mappings: ordered list of XBRL concept names to try
 	XBRLTags []string
 
+	// Negate flips the sign of the resolved value. Use this for XBRL tags
+	// that report cash outflows as positive (e.g. PaymentsToAcquire...)
+	// to match Sharadar's negative-outflow convention.
+	Negate bool
+
 	// For derived mappings: formula
 	Op       FormulaOp // Operation to apply
 	Operands []string  // Field names to use as operands
@@ -424,6 +429,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "CapitalExpenditure", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsToAcquirePropertyPlantAndEquipment",
 			"PaymentsToAcquireProductiveAssets",
@@ -439,6 +445,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetCashFlowBusiness", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsToAcquireBusinessesNetOfCashAcquired",
 			"PaymentsToAcquireBusinessesGross",
@@ -446,9 +453,9 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetCashFlowCommon", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsForRepurchaseOfCommonStock",
-			"ProceedsFromIssuanceOfCommonStock",
 		},
 	},
 	{
@@ -460,6 +467,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		Negate: true,
 		XBRLTags: []string{
 			"PaymentsOfDividendsCommonStock",
 			"PaymentsOfDividends",
@@ -519,10 +527,11 @@ var FieldMappings = []FieldMapping{
 		Op:       OpAdd,
 		Operands: []string{"NetIncome", "IncomeTaxExpense"},
 	},
-	// FreeCashFlow = NetCashFlowFromOperations - CapitalExpenditure
+	// FreeCashFlow = NetCashFlowFromOperations + CapitalExpenditure
+	// (CapitalExpenditure is already negative after Negate, so addition is correct)
 	{
 		FieldName: "FreeCashFlow", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:       OpSubtract,
+		Op:       OpAdd,
 		Operands: []string{"NetCashFlowFromOperations", "CapitalExpenditure"},
 	},
 	// WorkingCapital = CurrentAssets - CurrentLiabilities

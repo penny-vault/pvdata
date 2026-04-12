@@ -484,7 +484,8 @@ var _ = Describe("Dimensions", func() {
 			Expect(q1ARQ).NotTo(BeNil())
 			Expect(q1ARQ.Revenues).To(Equal(int64(100)))
 			Expect(q1ARQ.NetCashFlowFromOperations).To(Equal(int64(50)))
-			Expect(q1ARQ.CapitalExpenditure).To(Equal(int64(10)))
+			Expect(q1ARQ.CapitalExpenditure).To(Equal(int64(-10)),
+				"cap-ex should be negated: -(10) = -10")
 
 			// Q2 (2024-06-30): should be de-cumulated
 			q2ARQ := results["ARQ:2024-06-30"]["ARQ"]
@@ -493,8 +494,8 @@ var _ = Describe("Dimensions", func() {
 				"revenues should be quarterly (shorter-duration preference), not YTD")
 			Expect(q2ARQ.NetCashFlowFromOperations).To(Equal(int64(60)),
 				"cash flow should be de-cumulated: 110 (YTD) - 50 (Q1) = 60")
-			Expect(q2ARQ.CapitalExpenditure).To(Equal(int64(12)),
-				"cap-ex should be de-cumulated: 22 (YTD) - 10 (Q1) = 12")
+			Expect(q2ARQ.CapitalExpenditure).To(Equal(int64(-12)),
+				"cap-ex should be de-cumulated then negated: -(22 - 10) = -12")
 
 			// Q3 (2024-09-30): should be de-cumulated using Q2's ORIGINAL YTD
 			q3ARQ := results["ARQ:2024-09-30"]["ARQ"]
@@ -503,14 +504,14 @@ var _ = Describe("Dimensions", func() {
 				"revenues should be quarterly")
 			Expect(q3ARQ.NetCashFlowFromOperations).To(Equal(int64(70)),
 				"cash flow should be de-cumulated: 180 (YTD) - 110 (Q2 YTD) = 70")
-			Expect(q3ARQ.CapitalExpenditure).To(Equal(int64(13)),
-				"cap-ex should be de-cumulated: 35 (YTD) - 22 (Q2 YTD) = 13")
+			Expect(q3ARQ.CapitalExpenditure).To(Equal(int64(-13)),
+				"cap-ex should be de-cumulated then negated: -(35 - 22) = -13")
 
-			// FreeCashFlow is derived: NetCashFlowFromOperations - CapitalExpenditure
+			// FreeCashFlow = NetCashFlowFromOperations + CapitalExpenditure (CapEx is negative)
 			Expect(q2ARQ.FreeCashFlow).To(Equal(int64(48)),
-				"free cash flow should be re-derived from de-cumulated components: 60 - 12 = 48")
+				"free cash flow should be re-derived from de-cumulated components: 60 + (-12) = 48")
 			Expect(q3ARQ.FreeCashFlow).To(Equal(int64(57)),
-				"free cash flow should be re-derived: 70 - 13 = 57")
+				"free cash flow should be re-derived: 70 + (-13) = 57")
 		})
 	})
 
