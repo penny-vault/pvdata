@@ -118,6 +118,52 @@ var _ = Describe("Mapping Engine", func() {
 			}, periodEnd, "10-K")
 			Expect(ok).To(BeFalse())
 		})
+
+		It("prefers single-quarter facts over YTD cumulative facts in 10-Q", func() {
+			// Simulate Apple's Q2 10-Q where both a 90-day single-quarter
+			// fact and a 181-day YTD cumulative fact exist for the same
+			// period end and filing date. ResolveDirect must pick the
+			// single-quarter value.
+			q2End := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			ytdCF := &CompanyFacts{
+				CIK:        320193,
+				EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"RevenueFromContractWithCustomerExcludingAssessedTax": {
+						// YTD 6-month cumulative (Q1+Q2)
+						{
+							Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+							End:   q2End,
+							Filed: filed,
+							Val:   210_328_000_000,
+							Form:  "10-Q",
+							FP:    "Q2",
+						},
+						// Single quarter (Q2 only)
+						{
+							Start: time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC),
+							End:   q2End,
+							Filed: filed,
+							Val:   90_753_000_000,
+							Form:  "10-Q",
+							FP:    "Q2",
+						},
+					},
+				},
+			}
+
+			val, ok := ResolveDirect(ytdCF, FieldMapping{
+				FieldName: "Revenues",
+				Type:      MappingDirect,
+				XBRLTags:  []string{"RevenueFromContractWithCustomerExcludingAssessedTax"},
+			}, q2End, "10-Q")
+
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(90_753_000_000.0),
+				"should pick single-quarter revenue, not YTD cumulative")
+		})
 	})
 
 	Describe("ResolveAllFields", func() {
@@ -131,6 +177,39 @@ var _ = Describe("Mapping Engine", func() {
 
 			_, hasAssets := resolved["TotalAssets"]
 			Expect(hasAssets).To(BeTrue())
+		})
+
+		It("falls back to basic weighted-average shares when diluted tags are absent", func() {
+			// Simulates a loss-quarter filer (e.g. Nordstrom during COVID,
+			// Vaxart as a pre-revenue biotech) that reports only the basic
+			// weighted-average share count because the diluted figure is
+			// antidilutive. The fallback must still produce a positive value
+			// so PositiveShares does not reject the observation.
+			periodStart := time.Date(2020, 2, 2, 0, 0, 0, 0, time.UTC)
+			periodEnd := time.Date(2020, 5, 2, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2020, 6, 10, 0, 0, 0, 0, time.UTC)
+
+			lossCF := &CompanyFacts{
+				CIK:        12345,
+				EntityName: "Loss Co",
+				Facts: map[string][]Fact{
+					"WeightedAverageNumberOfSharesOutstandingBasic": {
+						{
+							Start: periodStart,
+							End:   periodEnd,
+							Filed: filed,
+							Val:   157_000_000,
+							Form:  "10-Q",
+						},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(lossCF, periodEnd, "10-Q")
+
+			val, ok := resolved["WeightedAverageSharesDiluted"]
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(float64(157_000_000)))
 		})
 	})
 })

@@ -79,10 +79,24 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 
 	// First pass: group raw facts by exact (end, form) pair so we collect
 	// AR/MR filed dates per raw period end.
+	//
+	// Only duration concepts (those with a non-zero Start date) drive period
+	// identification. Instant concepts (balance sheet items like Assets that
+	// have no Start date) supplement existing periods during field resolution
+	// but must not create new periods on their own. Without this filter,
+	// comparative balance sheet data included in 10-Q filings (which reports
+	// instant values as of the prior fiscal year-end) would create spurious
+	// 10-Q periods at fiscal year-end dates. Those fake periods resolve only
+	// balance sheet fields, leaving revenues and shares at zero, which trips
+	// inline data quality checks.
 	rawPeriods := make(map[periodKey]*Period)
 
 	for _, facts := range cf.Facts {
 		for _, f := range facts {
+			if f.Start.IsZero() {
+				continue
+			}
+
 			key := periodKey{end: f.End, form: f.Form}
 
 			p, exists := rawPeriods[key]
@@ -265,6 +279,75 @@ func ResolveFieldsForFiling(cf *CompanyFacts, periodEnd time.Time, formType stri
 	}
 
 	return ResolveAllFields(filtered, periodEnd, formType)
+}
+
+// DecumulateYTD converts YTD cumulative values in a 10-Q resolved field map to
+// single-quarter values by subtracting the prior quarter's (also YTD) values.
+//
+// SEC 10-Q filings report cash flow items as year-to-date cumulative values
+// only -- no single-quarter fact exists. Income statement items typically have
+// both a single-quarter and a YTD fact; ResolveDirect's shorter-duration
+// preference already picks the quarterly fact for those. This function handles
+// the remaining YTD-only fields.
+//
+// current and prior are the original resolved field maps (prior may contain YTD
+// values). cf is the unfiltered CompanyFacts used to determine which fields are
+// YTD via needsDecumulation. The returned map is a copy; current and prior are
+// not modified.
+//
+// After de-cumulating direct fields, derived flow fields are recomputed from the
+// de-cumulated components. Metric-type derived fields (ratios) are then
+// recomputed from the updated flow/point-in-time values.
+func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEnd time.Time, formType string) map[string]float64 {
+	result := make(map[string]float64, len(current))
+	for k, v := range current {
+		result[k] = v
+	}
+
+	// Pass 1: de-cumulate direct and fallback-resolved flow fields.
+	for _, m := range FieldMappings {
+		if m.StatementType != StmtFlow {
+			continue
+		}
+
+		if !needsDecumulation(cf, m, periodEnd, formType) {
+			continue
+		}
+
+		currVal, hasCurr := current[m.FieldName]
+		priorVal, hasPrior := prior[m.FieldName]
+
+		if hasCurr && hasPrior {
+			result[m.FieldName] = currVal - priorVal
+		}
+	}
+
+	// Pass 2: recompute derived flow fields from (now de-cumulated) components.
+	// This handles cases like FreeCashFlow = NetCashFlowFromOperations -
+	// CapitalExpenditure where both operands are cash flow YTD values.
+	for _, m := range FieldMappings {
+		if m.Type != MappingDerived || m.StatementType != StmtFlow {
+			continue
+		}
+
+		if val, ok := computeDerived(m, result); ok {
+			result[m.FieldName] = val
+		}
+	}
+
+	// Pass 3: recompute metric-type derived fields (ratios like EBITDAMargin)
+	// since their flow operands may have changed.
+	for _, m := range FieldMappings {
+		if m.Type != MappingDerived || m.StatementType != StmtMetric {
+			continue
+		}
+
+		if val, ok := computeDerived(m, result); ok {
+			result[m.FieldName] = val
+		}
+	}
+
+	return result
 }
 
 // ComputeTTM computes trailing twelve month values from the 4 most recent quarterly

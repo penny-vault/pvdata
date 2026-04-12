@@ -77,22 +77,31 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 				continue
 			}
 
-			// For duration concepts, verify the period length is reasonable
-			// (roughly a quarter for 10-Q, roughly a year for 10-K)
+			// For duration concepts, verify the period length is reasonable.
 			if !f.Start.IsZero() {
 				days := f.End.Sub(f.Start).Hours() / 24
 				if formType == "10-K" && days < 300 {
 					continue // Skip quarterly data in an annual filing
 				}
-
-				if formType == "10-Q" && days > 200 {
-					continue // Skip annual data in a quarterly filing
-				}
 			}
 
-			// Prefer the fact with the latest filing date (most recent data)
+			// Prefer the fact with the latest filing date (most recent data).
+			// When filing dates are equal, prefer the shorter duration. SEC
+			// 10-Q filings report both single-quarter (~90 days) and YTD
+			// cumulative (Q2: ~180, Q3: ~270 days) facts for income statement
+			// items. Cash flow items only have YTD facts. By preferring the
+			// shortest duration among same-filing-date facts, we pick the
+			// single-quarter value when available and fall through to the
+			// YTD value when it's the only option.
 			if best == nil || f.Filed.After(best.Filed) {
 				best = f
+			} else if f.Filed.Equal(best.Filed) && !f.Start.IsZero() && !best.Start.IsZero() {
+				fDays := f.End.Sub(f.Start).Hours() / 24
+				bestDays := best.End.Sub(best.Start).Hours() / 24
+
+				if fDays < bestDays {
+					best = f
+				}
 			}
 		}
 
@@ -102,6 +111,75 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 	}
 
 	return 0, false
+}
+
+// ytdThresholdDays is the maximum duration (in days) of a single-quarter fact.
+// Facts longer than this in a 10-Q filing are treated as YTD cumulative values
+// that need de-cumulation. A standard quarter is ~90 days; 120 provides margin
+// for unusual fiscal calendars while cleanly excluding 2-quarter YTD (~180 days).
+const ytdThresholdDays = 120
+
+// needsDecumulation reports whether a flow field's best-matching fact for the
+// given 10-Q period is a YTD cumulative value. It mirrors ResolveDirect's tag
+// priority: the first tag with matching facts determines the answer.
+//
+// Returns true when the matching tag has duration facts for the period end but
+// none of them are single-quarter (all > ytdThresholdDays). This indicates the
+// SEC filing only reported YTD cumulative values for this concept, as is
+// standard for cash flow statement items.
+func needsDecumulation(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) bool {
+	if formType != "10-Q" {
+		return false
+	}
+
+	if m.StatementType != StmtFlow {
+		return false
+	}
+
+	normalPeriodEnd := NormalizeEventDate(periodEnd, formType)
+
+	tags := m.XBRLTags
+	if m.Type == MappingDerived {
+		tags = m.FallbackTags
+	}
+
+	for _, tag := range tags {
+		facts, ok := cf.Facts[tag]
+		if !ok {
+			continue
+		}
+
+		var hasMatch bool
+
+		for i := range facts {
+			f := &facts[i]
+
+			if f.Form != formType {
+				continue
+			}
+
+			if !NormalizeEventDate(f.End, formType).Equal(normalPeriodEnd) {
+				continue
+			}
+
+			if f.Start.IsZero() {
+				continue // instant concept, not applicable
+			}
+
+			hasMatch = true
+
+			days := f.End.Sub(f.Start).Hours() / 24
+			if days <= ytdThresholdDays {
+				return false // found a quarterly fact, no de-cumulation needed
+			}
+		}
+
+		if hasMatch {
+			return true // this tag has only YTD facts
+		}
+	}
+
+	return false
 }
 
 // ResolveAllFields resolves all configured field mappings for a given period.
