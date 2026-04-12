@@ -25,6 +25,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
@@ -82,6 +83,12 @@ func downloadAllSharadarTickers(ctx context.Context, subscription *library.Subsc
 
 		exitNotification <- runSummary
 	}()
+
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		log.Info().Str("provider", "sharadar").Str("dataset", "Stock Tickers").Msg("ticker/FIGI filtering not applicable to asset catalog downloads, skipping")
+		return
+	}
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {

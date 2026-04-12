@@ -31,6 +31,7 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type TradingView struct{}
@@ -185,6 +186,12 @@ func downloadTradingViewConstituents(ctx context.Context, subscription *library.
 		runSummary.NumObservations = numObs
 		exitNotification <- runSummary
 	}()
+
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		log.Info().Str("provider", "tradingview").Msg("ticker/FIGI filtering not applicable to this provider, skipping")
+		return
+	}
 
 	// Parse index symbols from config; default to all supported indexes.
 	indexStr := subscription.Config["indexes"]

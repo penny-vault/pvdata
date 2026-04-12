@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -165,16 +166,69 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		Int("from_sec", fromSEC).
 		Msg("built combined CIK map")
 
+	// Apply ticker/FIGI filter if set
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		filtered := make(map[int]AssetInfo)
+
+		for cik, info := range cikMap {
+			if tickerFilter != "" && strings.EqualFold(info.Ticker, tickerFilter) {
+				filtered[cik] = info
+			} else if figiFilter != "" && info.CompositeFigi == figiFilter {
+				filtered[cik] = info
+			}
+		}
+
+		if len(filtered) == 0 {
+			candidates := make([]string, 0, len(cikMap))
+			for _, info := range cikMap {
+				if tickerFilter != "" {
+					candidates = append(candidates, info.Ticker)
+				} else {
+					candidates = append(candidates, info.CompositeFigi)
+				}
+			}
+
+			input := tickerFilter
+			if input == "" {
+				input = figiFilter
+			}
+
+			suggestions := provider.SuggestMatch(input, candidates)
+			if len(suggestions) > 0 {
+				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in SEC universe; did you mean one of these?")
+			} else {
+				log.Error().Str("input", input).Msg("security not found in SEC universe")
+			}
+
+			runSummary.Status = data.RunFailed
+
+			return
+		}
+
+		cikMap = filtered
+
+		log.Info().Int("filtered_ciks", len(filtered)).Msg("applied security filter to CIK map")
+	}
+
 	skippedMissingFIGI := 0
+
+	// Determine the cutoff date for which periods to emit. If --lookback is
+	// set it takes precedence; otherwise fall back to the subscription's
+	// last observation date (zero means full backfill).
+	since := sub.LastObsDate
+	if lookback := provider.LookbackFromContext(ctx, 0); lookback > 0 {
+		since = time.Now().Add(-lookback)
+	}
 
 	isBackfill := sub.LastObsDate.IsZero()
 	if isBackfill {
-		if err := runBackfill(ctx, client, cikMap, sub, out, &numObservations, &skippedMissingFIGI); err != nil {
+		if err := runBackfill(ctx, client, cikMap, sub, since, out, &numObservations, &skippedMissingFIGI); err != nil {
 			runSummary.Status = data.RunFailed
 			return
 		}
 	} else {
-		if err := runIncremental(ctx, client, cikMap, sub, sub.LastObsDate, out, &numObservations, &skippedMissingFIGI); err != nil {
+		if err := runIncremental(ctx, client, cikMap, sub, since, out, &numObservations, &skippedMissingFIGI); err != nil {
 			runSummary.Status = data.RunFailed
 			return
 		}
@@ -187,7 +241,7 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	}
 }
 
-func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
+func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
 	processed := 0
 	processErrors := 0
 
@@ -223,7 +277,7 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			return nil
 		}
 
-		latestCoverage, periodsEmitted := emitFundamentals(cf, asset, sub, time.Time{}, out, numObservations)
+		latestCoverage, periodsEmitted := emitFundamentals(cf, asset, sub, since, out, numObservations)
 		if periodsEmitted > 0 {
 			coverageSamples = append(coverageSamples, latestCoverage)
 		}

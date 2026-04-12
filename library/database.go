@@ -204,14 +204,25 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 						Str("check", r.CheckName).
 						Str("severity", r.Severity.String()).
 						Str("ticker", r.Ticker).
+						Str("dimension", r.Dimension).
 						Str("field", r.Field).
 						Msg(r.Message)
 				}
 			}
 
 			if block {
+				blockedTicker := elem.SubscriptionName
+				blockedDimension := ""
+
+				if len(results) > 0 {
+					blockedTicker = results[0].Ticker
+					blockedDimension = results[0].Dimension
+				}
+
 				log.Error().
-					Str("ticker", elem.SubscriptionName).
+					Str("ticker", blockedTicker).
+					Str("dimension", blockedDimension).
+					Str("subscription", elem.SubscriptionName).
 					Msg("observation blocked by inline check")
 
 				continue
@@ -372,6 +383,7 @@ func (myLibrary *Library) SubscriptionFromID(ctx context.Context, id string) (*S
 		Library: myLibrary,
 	}
 
+	// Try UUID prefix match first
 	rows, err := conn.Query(ctx, fmt.Sprintf(`SELECT id, name, provider, dataset, config,
 	data_tables, data_types, total_records, num_records_last_import, total_securities,
 	num_securities_last_import, coalesce(first_obs_date, '0001-01-01'::timestamp) as first_obs_date,
@@ -383,11 +395,31 @@ func (myLibrary *Library) SubscriptionFromID(ctx context.Context, id string) (*S
 	}
 
 	err = pgxscan.ScanOne(subscription, rows)
+	if err == nil {
+		subscription.DataTablesMap = make(map[string]string, len(subscription.DataTables))
+		for idx, dataType := range subscription.DataTypes {
+			subscription.DataTablesMap[dataType] = subscription.DataTables[idx]
+		}
+
+		return subscription, nil
+	}
+
+	// Fallback: try case-insensitive name match
+	rows, err = conn.Query(ctx, `SELECT id, name, provider, dataset, config,
+	data_tables, data_types, total_records, num_records_last_import, total_securities,
+	num_securities_last_import, coalesce(first_obs_date, '0001-01-01'::timestamp) as first_obs_date,
+	coalesce(last_obs_date, '0001-01-01'::timestamp) as last_obs_date,
+	schedule, health_check_id, coalesce(last_run, '0001-01-01'::timestamp) as last_run, active,
+	schema_version, created_on, created_by FROM subscriptions WHERE lower(name) = lower($1) LIMIT 1`, id)
 	if err != nil {
 		return nil, err
 	}
 
-	// build DataTablesMap
+	err = pgxscan.ScanOne(subscription, rows)
+	if err != nil {
+		return nil, fmt.Errorf("subscription not found (tried ID prefix and name match): %s", id)
+	}
+
 	subscription.DataTablesMap = make(map[string]string, len(subscription.DataTables))
 	for idx, dataType := range subscription.DataTypes {
 		subscription.DataTablesMap[dataType] = subscription.DataTables[idx]

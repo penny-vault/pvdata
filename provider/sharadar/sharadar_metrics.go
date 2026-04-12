@@ -23,6 +23,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
@@ -97,6 +98,53 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
 		figiMap[asset.Ticker] = asset.CompositeFigi
+	}
+
+	// Apply ticker/FIGI filter if set
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		filtered := make(map[string]string)
+
+		for ticker, figi := range figiMap {
+			if tickerFilter != "" && strings.EqualFold(ticker, tickerFilter) {
+				filtered[ticker] = figi
+			} else if figiFilter != "" && figi == figiFilter {
+				filtered[ticker] = figi
+			}
+		}
+
+		if len(filtered) == 0 {
+			candidates := make([]string, 0, len(figiMap))
+			if tickerFilter != "" {
+				for ticker := range figiMap {
+					candidates = append(candidates, ticker)
+				}
+			} else {
+				for _, figi := range figiMap {
+					candidates = append(candidates, figi)
+				}
+			}
+
+			input := tickerFilter
+			if input == "" {
+				input = figiFilter
+			}
+
+			suggestions := provider.SuggestMatch(input, candidates)
+			if len(suggestions) > 0 {
+				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Sharadar universe; did you mean one of these?")
+			} else {
+				log.Error().Str("input", input).Msg("security not found in Sharadar universe")
+			}
+
+			runSummary.Status = data.RunFailed
+
+			return
+		}
+
+		figiMap = filtered
+
+		log.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
 	}
 
 	// fetch current SP500 constituents and emit index snapshots

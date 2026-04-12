@@ -121,6 +121,53 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 		figiMap[asset.Ticker] = asset.CompositeFigi
 	}
 
+	// Apply ticker/FIGI filter if set
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		filtered := make(map[string]string)
+
+		for ticker, figi := range figiMap {
+			if tickerFilter != "" && strings.EqualFold(ticker, tickerFilter) {
+				filtered[ticker] = figi
+			} else if figiFilter != "" && figi == figiFilter {
+				filtered[ticker] = figi
+			}
+		}
+
+		if len(filtered) == 0 {
+			candidates := make([]string, 0, len(figiMap))
+			if tickerFilter != "" {
+				for ticker := range figiMap {
+					candidates = append(candidates, ticker)
+				}
+			} else {
+				for _, figi := range figiMap {
+					candidates = append(candidates, figi)
+				}
+			}
+
+			input := tickerFilter
+			if input == "" {
+				input = figiFilter
+			}
+
+			suggestions := provider.SuggestMatch(input, candidates)
+			if len(suggestions) > 0 {
+				logger.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Nasdaq universe; did you mean one of these?")
+			} else {
+				logger.Error().Str("input", input).Msg("security not found in Nasdaq universe")
+			}
+
+			runSummary.Status = data.RunFailed
+
+			return
+		}
+
+		figiMap = filtered
+
+		logger.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
+	}
+
 	// Start Playwright
 	page, browserContext, browser, pw := playwright_helpers.StartPlaywright(viper.GetBool("playwright.headless"))
 	defer playwright_helpers.StopPlaywright(page, browserContext, browser, pw)

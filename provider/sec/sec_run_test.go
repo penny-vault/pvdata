@@ -138,7 +138,7 @@ type fakeSECServer struct {
 	feedHandler      http.HandlerFunc
 	companyFactsFunc http.HandlerFunc
 
-	feedRequests        int
+	feedRequests         int
 	companyFactsRequests map[int]int
 }
 
@@ -268,7 +268,7 @@ var _ = Describe("runBackfill", func() {
 			_, _ = w.Write(zipBytes)
 		}
 
-		err := runBackfill(context.Background(), client, cikMap, sub, out, &numObs, &skipped)
+		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())
 
 		obs := drainObservations(out)
@@ -301,7 +301,7 @@ var _ = Describe("runBackfill", func() {
 			_, _ = w.Write(zipBytes)
 		}
 
-		err := runBackfill(context.Background(), client, cikMap, sub, out, &numObs, &skipped)
+		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(drainObservations(out)).To(BeEmpty())
@@ -324,7 +324,7 @@ var _ = Describe("runBackfill", func() {
 			_, _ = w.Write(zipBytes)
 		}
 
-		err := runBackfill(context.Background(), client, cikMap, sub, out, &numObs, &skipped)
+		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(drainObservations(out)).To(BeEmpty())
@@ -336,7 +336,7 @@ var _ = Describe("runBackfill", func() {
 			_, _ = w.Write([]byte("this is not a zip file"))
 		}
 
-		err := runBackfill(context.Background(), client, cikMap, sub, out, &numObs, &skipped)
+		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).To(HaveOccurred())
 	})
 
@@ -365,7 +365,7 @@ var _ = Describe("runBackfill", func() {
 			_, _ = w.Write(zipBytes)
 		}
 
-		err := runBackfill(context.Background(), client, cikMap, sub, out, &numObs, &skipped)
+		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())
 
 		obs := drainObservations(out)

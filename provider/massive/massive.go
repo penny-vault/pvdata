@@ -200,6 +200,51 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 	logger.Info().Int("Count", len(assets)).Msg("got assets from massive")
 
+	// Apply ticker/FIGI filter if set
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		var filtered []*data.Asset
+
+		for _, asset := range assets {
+			if tickerFilter != "" && strings.EqualFold(asset.Ticker, tickerFilter) {
+				filtered = append(filtered, asset)
+			} else if figiFilter != "" && asset.CompositeFigi == figiFilter {
+				filtered = append(filtered, asset)
+			}
+		}
+
+		if len(filtered) == 0 {
+			candidates := make([]string, 0, len(assets))
+			for _, asset := range assets {
+				if tickerFilter != "" {
+					candidates = append(candidates, asset.Ticker)
+				} else {
+					candidates = append(candidates, asset.CompositeFigi)
+				}
+			}
+
+			input := tickerFilter
+			if input == "" {
+				input = figiFilter
+			}
+
+			suggestions := provider.SuggestMatch(input, candidates)
+			if len(suggestions) > 0 {
+				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Massive universe; did you mean one of these?")
+			} else {
+				log.Error().Str("input", input).Msg("security not found in Massive universe")
+			}
+
+			runSummary.Status = data.RunFailed
+
+			return
+		}
+
+		assets = filtered
+
+		log.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
+	}
+
 	// remove any assets that haven't been updated since our last
 	// look
 	assetDetail, err = api.filterAssetsByLastUpdated(ctx, assets)
@@ -239,6 +284,12 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 		runSummary.NumObservations = len(holidays)
 		exitNotification <- runSummary
 	}()
+
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		log.Info().Str("provider", "massive").Str("dataset", "Market Holidays").Msg("ticker/FIGI filtering not applicable to this dataset, skipping")
+		return
+	}
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -84,6 +85,12 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 		runSummary.EndTime = time.Now()
 		exit <- runSummary
 	}()
+
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		log.Info().Str("provider", "pvindex").Msg("ticker/FIGI filtering not applicable to this provider, skipping")
+		return
+	}
 
 	indexTicker := defaultIndexTicker
 	chunkSize := defaultChunkSize
