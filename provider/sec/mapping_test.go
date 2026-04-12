@@ -166,6 +166,52 @@ var _ = Describe("Mapping Engine", func() {
 		})
 	})
 
+	Describe("computeDerived with OptionalOperands", func() {
+		It("sums present operands and ignores missing ones", func() {
+			resolved := map[string]float64{
+				"A": 100,
+				"C": 300,
+			}
+			m := FieldMapping{
+				FieldName:        "Sum",
+				Type:             MappingDerived,
+				Op:               OpAdd,
+				Operands:         []string{"A", "B", "C"},
+				OptionalOperands: true,
+			}
+			val, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(400.0))
+		})
+
+		It("returns false when no operands are present", func() {
+			resolved := map[string]float64{}
+			m := FieldMapping{
+				FieldName:        "Sum",
+				Type:             MappingDerived,
+				Op:               OpAdd,
+				Operands:         []string{"A", "B"},
+				OptionalOperands: true,
+			}
+			_, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeFalse())
+		})
+
+		It("does not apply to non-optional OpAdd", func() {
+			resolved := map[string]float64{
+				"A": 100,
+			}
+			m := FieldMapping{
+				FieldName: "Sum",
+				Type:      MappingDerived,
+				Op:        OpAdd,
+				Operands:  []string{"A", "B"},
+			}
+			_, ok := computeDerived(m, resolved)
+			Expect(ok).To(BeFalse())
+		})
+	})
+
 	Describe("ResolveAllFields", func() {
 		It("resolves both direct and derived fields", func() {
 			periodEnd := time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC)
@@ -177,6 +223,124 @@ var _ = Describe("Mapping Engine", func() {
 
 			_, hasAssets := resolved["TotalAssets"]
 			Expect(hasAssets).To(BeTrue())
+		})
+
+		// Verify the four fields that were misaligned with Sharadar due to
+		// narrow XBRL tag scope. Uses synthetic data modeled on AAPL Q2 2024
+		// (period ending 2024-03-30, filed 2024-05-03).
+		It("resolves Investments as sum of current + noncurrent", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			investCF := &CompanyFacts{
+				CIK: 320193, EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"MarketableSecuritiesCurrent": {
+						{End: periodEnd, Filed: filed, Val: 34_455_000_000, Form: "10-Q"},
+					},
+					"MarketableSecuritiesNoncurrent": {
+						{End: periodEnd, Filed: filed, Val: 95_187_000_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(investCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("Investments"))
+			Expect(resolved["Investments"]).To(Equal(129_642_000_000.0),
+				"Investments should sum current + noncurrent marketable securities")
+		})
+
+		It("resolves Investments from single component when only one exists", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			investCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"ShortTermInvestments": {
+						{End: periodEnd, Filed: filed, Val: 50_000_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(investCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("Investments"))
+			Expect(resolved["Investments"]).To(Equal(50_000_000.0),
+				"Investments should resolve from single component via OptionalOperands")
+		})
+
+		It("resolves Receivables as sum of trade + non-trade", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			recvCF := &CompanyFacts{
+				CIK: 320193, EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"AccountsReceivableNetCurrent": {
+						{End: periodEnd, Filed: filed, Val: 21_837_000_000, Form: "10-Q"},
+					},
+					"NontradeReceivablesCurrent": {
+						{End: periodEnd, Filed: filed, Val: 19_313_000_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(recvCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("Receivables"))
+			Expect(resolved["Receivables"]).To(Equal(41_150_000_000.0),
+				"Receivables should sum trade + non-trade receivables")
+		})
+
+		It("resolves DeferredRevenue as current portion", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			defRevCF := &CompanyFacts{
+				CIK: 320193, EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"ContractWithCustomerLiabilityCurrent": {
+						{End: periodEnd, Filed: filed, Val: 8_012_000_000, Form: "10-Q"},
+					},
+					"ContractWithCustomerLiability": {
+						{End: periodEnd, Filed: filed, Val: 12_600_000_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(defRevCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("DeferredRevenue"))
+			Expect(resolved["DeferredRevenue"]).To(Equal(8_012_000_000.0),
+				"DeferredRevenue should pick current-specific tag over total")
+		})
+
+		It("resolves DebtCurrent as sum of components", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			debtCF := &CompanyFacts{
+				CIK: 320193, EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"LongTermDebtCurrent": {
+						{End: periodEnd, Filed: filed, Val: 10_762_000_000, Form: "10-Q"},
+					},
+					"CommercialPaper": {
+						{End: periodEnd, Filed: filed, Val: 1_997_000_000, Form: "10-Q"},
+					},
+					"LongTermDebtNoncurrent": {
+						{End: periodEnd, Filed: filed, Val: 91_831_000_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(debtCF, periodEnd, "10-Q")
+
+			Expect(resolved).To(HaveKey("DebtCurrent"))
+			Expect(resolved["DebtCurrent"]).To(Equal(12_759_000_000.0),
+				"DebtCurrent should sum current maturities + commercial paper")
+
+			Expect(resolved).To(HaveKey("TotalDebt"))
+			Expect(resolved["TotalDebt"]).To(Equal(104_590_000_000.0),
+				"TotalDebt should cascade from corrected DebtCurrent + DebtNonCurrent")
 		})
 
 		It("falls back to basic weighted-average shares when diluted tags are absent", func() {
