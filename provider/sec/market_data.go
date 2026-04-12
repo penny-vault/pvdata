@@ -50,10 +50,15 @@ func SetPriceLookupFn(fn PriceLookupFn) {
 //     Records with a zero price are skipped entirely.
 //
 //  2. Phase 2 (trailing/annual: ART, MRT, ARY, MRY): compute ratio fields
-//     PE, PS, PE1, PS1, EVtoEBIT, EVtoEBITDA, DividendYield, PayoutRatio.
+//     PE, PS, PE1, PS1, EVtoEBIT, EVtoEBITDA, DividendYield.
 //
-//  3. Phase 3 (quarterly: ARQ, MRQ): copy ratio fields (but NOT PB) from
-//     the corresponding trailing dimension within the same DateKey group.
+//  2b. PayoutRatio (all dimensions): DPS / EPSDiluted is computed
+//     independently for every dimension (quarterly values differ from
+//     trailing values).
+//
+//  3. Phase 3 (quarterly: ARQ, MRQ): copy ratio fields (but NOT PB or
+//     PayoutRatio) from the corresponding trailing dimension within the
+//     same DateKey group.
 func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupFn) {
 	// Group fundamentals by DateKey.
 	type dateKey = time.Time
@@ -130,6 +135,11 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 				f.DividendYield = f.DividendsPerBasicCommonShare / f.Price
 			}
 
+		}
+
+		// PayoutRatio = DPS / EPSDiluted -- does not depend on price or
+		// market-data, so compute it for every dimension independently.
+		for _, f := range group {
 			if f.EPSDiluted != 0 {
 				f.PayoutRatio = f.DividendsPerBasicCommonShare / f.EPSDiluted
 			}
@@ -164,7 +174,6 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			dst.EVtoEBIT = src.EVtoEBIT
 			dst.EVtoEBITDA = src.EVtoEBITDA
 			dst.DividendYield = src.DividendYield
-			dst.PayoutRatio = src.PayoutRatio
 		}
 	}
 }

@@ -757,6 +757,8 @@ var FieldMappings = []FieldMapping{
 	// Note: The following Sharadar fields require market price data and are
 	// NOT computable from SEC filings alone. They are intentionally omitted:
 	// - MarketCapitalization, EnterpriseValue, PE, PB, PS, PE1, PS1
-	// - EVtoEBIT, EVtoEBITDA, DividendYield, PayoutRatio, Price
+	// - EVtoEBIT, EVtoEBITDA, DividendYield, Price
 	// - ShareFactor, FxUSD
+	// PayoutRatio is also omitted here because it is a derived ratio
+	// (DPS / EPSDiluted) computed in EnrichMarketData for all dimensions.
 }

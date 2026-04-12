@@ -107,7 +107,7 @@ var _ = Describe("EnrichMarketData", func() {
 	})
 
 	Describe("ARQ copies ratio fields from ART", func() {
-		It("ARQ gets its own price/mktcap/EV/PB but copies PE/PS/PE1/PS1/EVtoEBIT/EVtoEBITDA/DividendYield/PayoutRatio from ART", func() {
+		It("ARQ gets its own price/mktcap/EV/PB/PayoutRatio but copies PE/PS/PE1/PS1/EVtoEBIT/EVtoEBITDA/DividendYield from ART", func() {
 			art := &data.Fundamental{
 				CompositeFigi:                "BBG000B9XRY4",
 				Dimension:                    "ART",
@@ -128,14 +128,16 @@ var _ = Describe("EnrichMarketData", func() {
 			}
 
 			arq := &data.Fundamental{
-				CompositeFigi:      "BBG000B9XRY4",
-				Dimension:          "ARQ",
-				DateKey:            dateKey,
-				EventDate:          eventDate,
-				SharesBasic:        int64(1_000_000),
-				TotalDebt:          int64(500_000_000),
-				CashAndEquivalents: int64(200_000_000),
-				Equity:             int64(1_800_000_000), // different equity for own PB
+				CompositeFigi:                "BBG000B9XRY4",
+				Dimension:                    "ARQ",
+				DateKey:                      dateKey,
+				EventDate:                    eventDate,
+				SharesBasic:                  int64(1_000_000),
+				TotalDebt:                    int64(500_000_000),
+				CashAndEquivalents:           int64(200_000_000),
+				Equity:                       int64(1_800_000_000), // different equity for own PB
+				EPSDiluted:                   0.80,
+				DividendsPerBasicCommonShare: 0.30,
 			}
 
 			price := 236.0
@@ -159,12 +161,16 @@ var _ = Describe("EnrichMarketData", func() {
 			Expect(arq.EVtoEBIT).To(Equal(art.EVtoEBIT))
 			Expect(arq.EVtoEBITDA).To(BeNumerically("~", art.EVtoEBITDA, 1e-9))
 			Expect(arq.DividendYield).To(BeNumerically("~", art.DividendYield, 1e-9))
-			Expect(arq.PayoutRatio).To(BeNumerically("~", art.PayoutRatio, 1e-9))
+
+			// PayoutRatio is computed independently per dimension
+			expectedARQPayout := arq.DividendsPerBasicCommonShare / arq.EPSDiluted
+			Expect(arq.PayoutRatio).To(BeNumerically("~", expectedARQPayout, 1e-9))
+			Expect(arq.PayoutRatio).NotTo(BeNumerically("~", art.PayoutRatio, 1e-9))
 		})
 	})
 
 	Describe("MRT->MRQ copy", func() {
-		It("MRQ gets its own price/mktcap/EV/PB but copies ratio fields from MRT", func() {
+		It("MRQ gets its own price/mktcap/EV/PB/PayoutRatio but copies ratio fields from MRT", func() {
 			mrt := &data.Fundamental{
 				CompositeFigi:                "BBG000B9XRY4",
 				Dimension:                    "MRT",
@@ -185,14 +191,16 @@ var _ = Describe("EnrichMarketData", func() {
 			}
 
 			mrq := &data.Fundamental{
-				CompositeFigi:      "BBG000B9XRY4",
-				Dimension:          "MRQ",
-				DateKey:            dateKey,
-				EventDate:          eventDate,
-				SharesBasic:        int64(1_000_000),
-				TotalDebt:          int64(300_000_000),
-				CashAndEquivalents: int64(100_000_000),
-				Equity:             int64(1_200_000_000),
+				CompositeFigi:                "BBG000B9XRY4",
+				Dimension:                    "MRQ",
+				DateKey:                      dateKey,
+				EventDate:                    eventDate,
+				SharesBasic:                  int64(1_000_000),
+				TotalDebt:                    int64(300_000_000),
+				CashAndEquivalents:           int64(100_000_000),
+				Equity:                       int64(1_200_000_000),
+				EPSDiluted:                   0.50,
+				DividendsPerBasicCommonShare: 0.20,
 			}
 
 			price := 180.0
@@ -214,7 +222,11 @@ var _ = Describe("EnrichMarketData", func() {
 			Expect(mrq.EVtoEBIT).To(Equal(mrt.EVtoEBIT))
 			Expect(mrq.EVtoEBITDA).To(BeNumerically("~", mrt.EVtoEBITDA, 1e-9))
 			Expect(mrq.DividendYield).To(BeNumerically("~", mrt.DividendYield, 1e-9))
-			Expect(mrq.PayoutRatio).To(BeNumerically("~", mrt.PayoutRatio, 1e-9))
+
+			// PayoutRatio is computed independently per dimension
+			expectedMRQPayout := mrq.DividendsPerBasicCommonShare / mrq.EPSDiluted
+			Expect(mrq.PayoutRatio).To(BeNumerically("~", expectedMRQPayout, 1e-9))
+			Expect(mrq.PayoutRatio).NotTo(BeNumerically("~", mrt.PayoutRatio, 1e-9))
 		})
 	})
 
