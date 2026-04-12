@@ -214,7 +214,7 @@ var _ = Describe("Mapping Engine", func() {
 	})
 
 	Describe("Sign negation for cash outflow fields", func() {
-		It("negates CapitalExpenditure, NetCashFlowBusiness, NetCashFlowCommon, and NetCashFlowDividend", func() {
+		It("negates CapitalExpenditure, NetCashFlowCommon, and NetCashFlowDividend for AAPL", func() {
 			// Apple FY2018 10-K: these XBRL tags report outflows as positive,
 			// but after negation they should be negative per Sharadar convention.
 			periodEnd := time.Date(2018, 9, 29, 0, 0, 0, 0, time.UTC)
@@ -234,6 +234,37 @@ var _ = Describe("Mapping Engine", func() {
 			Expect(hasDiv).To(BeTrue())
 			Expect(ncfDiv).To(BeNumerically("<", 0),
 				"NetCashFlowDividend should be negative (dividend payment)")
+		})
+
+		It("negates NetCashFlowBusiness using synthetic data", func() {
+			// Apple testdata lacks PaymentsToAcquireBusinessesNetOfCashAcquired,
+			// so use a synthetic CompanyFacts to verify negation.
+			periodEnd := time.Date(2024, 9, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
+
+			synthCF := &CompanyFacts{
+				CIK:        1,
+				EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"PaymentsToAcquireBusinessesNetOfCashAcquired": {
+						{
+							Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   500_000_000,
+							Form:  "10-K",
+							FP:    "FY",
+						},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(synthCF, periodEnd, "10-K")
+
+			ncfBiz, hasBiz := resolved["NetCashFlowBusiness"]
+			Expect(hasBiz).To(BeTrue())
+			Expect(ncfBiz).To(Equal(-500_000_000.0),
+				"NetCashFlowBusiness should be negated (acquisition outflow)")
 		})
 
 		It("produces positive FreeCashFlow from negated CapitalExpenditure", func() {
