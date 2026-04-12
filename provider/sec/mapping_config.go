@@ -622,10 +622,14 @@ var FieldMappings = []FieldMapping{
 		Operands: []string{"CurrentAssets", "CurrentLiabilities"},
 	},
 	// TangibleAssetValue = TotalAssets - Intangibles
+	// OptionalOperands: companies like Apple have no intangible assets and
+	// do not report any Intangibles XBRL tags; treat missing Intangibles as 0.
 	{
 		FieldName: "TangibleAssetValue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:       OpSubtract,
-		Operands: []string{"TotalAssets", "Intangibles"},
+		Op:               OpLinearCombination,
+		Operands:         []string{"TotalAssets", "Intangibles"},
+		Coefficients:     []float64{1, -1},
+		OptionalOperands: true,
 	},
 	// InvestedCapital = TotalDebt + TotalAssets - Intangibles - CashAndEquivalents - CurrentLiabilities
 	// OptionalOperands: some companies (e.g. Apple) have no intangible assets

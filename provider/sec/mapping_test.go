@@ -655,6 +655,78 @@ var _ = Describe("Mapping Engine", func() {
 				"NetCashFlowInvest = proceeds(7B) when no payments exist")
 		})
 
+		It("resolves TangibleAssetValue when Intangibles is absent", func() {
+			// Companies like Apple have no intangible assets or goodwill,
+			// so none of the Intangibles XBRL tags are reported. In that
+			// case TangibleAssetValue should equal TotalAssets.
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			noIntangiblesCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"Assets": {
+						{End: periodEnd, Filed: filed, Val: 331_233_000_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(noIntangiblesCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("TangibleAssetValue"))
+			Expect(resolved["TangibleAssetValue"]).To(Equal(331_233_000_000.0),
+				"TangibleAssetValue should equal TotalAssets when Intangibles is absent")
+		})
+
+		It("resolves TangibleAssetValue when Intangibles is present", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			withIntangiblesCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"Assets": {
+						{End: periodEnd, Filed: filed, Val: 350_000_000_000, Form: "10-Q"},
+					},
+					"IntangibleAssetsNetIncludingGoodwill": {
+						{End: periodEnd, Filed: filed, Val: 18_767_000_000, Form: "10-Q"},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(withIntangiblesCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("TangibleAssetValue"))
+			Expect(resolved["TangibleAssetValue"]).To(Equal(331_233_000_000.0),
+				"TangibleAssetValue = 350B - 18.767B = 331.233B")
+		})
+
+		It("resolves TangibleAssetsBookValuePerShare from TangibleAssetValue", func() {
+			periodEnd := time.Date(2024, 3, 30, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 5, 3, 0, 0, 0, 0, time.UTC)
+
+			bvpsCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"Assets": {
+						{End: periodEnd, Filed: filed, Val: 331_233_000_000, Form: "10-Q"},
+					},
+					"WeightedAverageNumberOfSharesOutstandingBasic": {
+						{
+							Start: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+							End:   periodEnd,
+							Filed: filed,
+							Val:   15_408_095_000,
+							Form:  "10-Q",
+						},
+					},
+				},
+			}
+
+			resolved := ResolveAllFields(bvpsCF, periodEnd, "10-Q")
+			Expect(resolved).To(HaveKey("TangibleAssetsBookValuePerShare"))
+			Expect(resolved["TangibleAssetsBookValuePerShare"]).To(Equal(21.497),
+				"TangibleAssetsBookValuePerShare = 331.233B / 15.408B shares, rounded to 3 digits")
+		})
+
 		It("falls back to basic weighted-average shares when diluted tags are absent", func() {
 			// Simulates a loss-quarter filer (e.g. Nordstrom during COVID,
 			// Vaxart as a pre-revenue biotech) that reports only the basic
