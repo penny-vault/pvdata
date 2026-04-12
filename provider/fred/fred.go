@@ -25,6 +25,7 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
 
@@ -87,6 +88,12 @@ func downloadAllFredIndicators(ctx context.Context, subscription *library.Subscr
 
 		exitNotification <- runSummary
 	}()
+
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		log.Info().Str("provider", "fred").Msg("ticker/FIGI filtering not applicable to this provider, skipping")
+		return
+	}
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
