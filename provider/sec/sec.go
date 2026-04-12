@@ -610,24 +610,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		arQ4, mrQ4 := SynthesizeQ4(a.arFields, a.mrFields, a.period, inputs)
 		if arQ4 == nil {
-			log.Debug().
-				Str("ticker", asset.Ticker).
-				Time("annual_period_end", a.period.PeriodEnd).
-				Int("quarters_available", len(inputs)).
-				Msg("Q4 synthesis returned nil (insufficient preceding quarters)")
-
 			continue
 		}
-
-		log.Debug().
-			Str("ticker", asset.Ticker).
-			Time("annual_period_end", a.period.PeriodEnd).
-			Int("ar_fields", len(arQ4)).
-			Int("mr_fields", len(mrQ4)).
-			Float64("ar_revenues", arQ4["Revenues"]).
-			Float64("ar_total_assets", arQ4["TotalAssets"]).
-			Float64("annual_total_assets", a.arFields["TotalAssets"]).
-			Msg("Q4 synthesis result")
 
 		// Skip if a quarter already exists at this period end (e.g. if a
 		// company unusually filed a 10-Q for Q4 alongside its 10-K).
