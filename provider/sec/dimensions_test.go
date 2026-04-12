@@ -647,6 +647,102 @@ var _ = Describe("Dimensions", func() {
 			Expect(missing).To(BeEmpty(),
 				"FieldMappings entries not referenced in BuildFundamental: %v", missing)
 		})
+
+		It("references all period-average fields", func() {
+			src, err := os.ReadFile("dimensions.go")
+			Expect(err).NotTo(HaveOccurred())
+			srcStr := string(src)
+
+			avgFields := []string{
+				"AverageAssets", "EquityAvg", "InvestedCapitalAverage",
+				"ROA", "ROE", "ROIC",
+			}
+
+			var missing []string
+			for _, name := range avgFields {
+				pattern := fmt.Sprintf(`fields[%q]`, name)
+				if !strings.Contains(srcStr, pattern) {
+					missing = append(missing, name)
+				}
+			}
+
+			Expect(missing).To(BeEmpty(),
+				"period-average fields not referenced in BuildFundamental: %v", missing)
+		})
+	})
+
+	Describe("quarterly period averages", func() {
+		It("computes averages from consecutive quarters", func() {
+			cf := &CompanyFacts{
+				CIK:        1,
+				EntityName: "Avg Co",
+				Facts:      make(map[string][]Fact),
+			}
+
+			q1End := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+			q2End := time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC)
+			q1Filed := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+			q2Filed := time.Date(2024, 8, 1, 0, 0, 0, 0, time.UTC)
+			fyStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+			// Balance sheet (instant)
+			cf.Facts["Assets"] = []Fact{
+				{End: q1End, Filed: q1Filed, Val: 1000, Form: "10-Q"},
+				{End: q2End, Filed: q2Filed, Val: 1200, Form: "10-Q"},
+			}
+			cf.Facts["StockholdersEquity"] = []Fact{
+				{End: q1End, Filed: q1Filed, Val: 500, Form: "10-Q"},
+				{End: q2End, Filed: q2Filed, Val: 600, Form: "10-Q"},
+			}
+
+			// Income statement (duration, quarterly facts)
+			cf.Facts["NetIncomeLossAvailableToCommonStockholdersBasic"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 100, Form: "10-Q"},
+				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 120, Form: "10-Q"},
+			}
+			cf.Facts["Revenues"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 500, Form: "10-Q"},
+				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 600, Form: "10-Q"},
+			}
+
+			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
+			out := make(chan *data.Observation, 256)
+			sub := &library.Subscription{Name: "test"}
+
+			done := make(chan struct{})
+			var q1Fund, q2Fund *data.Fundamental
+
+			go func() {
+				for obs := range out {
+					f := obs.Fundamental
+					dateKey := obs.ObservationDate.Format("2006-01-02")
+					if f.Dimension == "ARQ" && dateKey == "2024-03-31" {
+						q1Fund = f
+					}
+					if f.Dimension == "ARQ" && dateKey == "2024-06-30" {
+						q2Fund = f
+					}
+				}
+				close(done)
+			}()
+
+			numObs := 0
+			emitFundamentals(cf, asset, sub, time.Time{}, out, &numObs)
+			close(out)
+			<-done
+
+			// Q1: no prior quarter, averages should be zero (absent)
+			Expect(q1Fund).NotTo(BeNil())
+			Expect(q1Fund.AverageAssets).To(Equal(int64(0)))
+			Expect(q1Fund.ROA).To(Equal(0.0))
+
+			// Q2: has prior quarter
+			Expect(q2Fund).NotTo(BeNil())
+			Expect(q2Fund.AverageAssets).To(Equal(int64(1100)))  // (1000+1200)/2
+			Expect(q2Fund.EquityAvg).To(Equal(int64(550)))       // (500+600)/2
+			Expect(q2Fund.ROA).To(BeNumerically("~", 120.0/1100.0, 1e-10))
+			Expect(q2Fund.ROE).To(BeNumerically("~", 120.0/550.0, 1e-10))
+		})
 	})
 })
 

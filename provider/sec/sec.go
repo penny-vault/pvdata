@@ -601,6 +601,32 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		q.mrEmit = q.mrFields
 	}
 
+	// Compute period-average fields (AverageAssets, EquityAvg,
+	// InvestedCapitalAverage) and derived ratios (ROA, ROE, ROIC) from
+	// consecutive quarterly balance sheet values.
+	for i := range quarters {
+		q := &quarters[i]
+
+		if i == 0 {
+			continue
+		}
+
+		prev := &quarters[i-1]
+		gapDays := q.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
+
+		if gapDays > maxQuarterGapDays {
+			continue
+		}
+
+		for k, v := range ComputePeriodAverages(q.arEmit, prev.arEmit) {
+			q.arEmit[k] = v
+		}
+
+		for k, v := range ComputePeriodAverages(q.mrEmit, prev.mrEmit) {
+			q.mrEmit[k] = v
+		}
+	}
+
 	// Emit quarterly observations using de-cumulated values.
 	for i := range quarters {
 		q := &quarters[i]

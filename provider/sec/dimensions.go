@@ -803,5 +803,29 @@ func BuildFundamental(fields map[string]float64, ticker, compositeFigi, dimensio
 		f.InvestedCapital = int64(v)
 	}
 
+	if v, ok := fields["AverageAssets"]; ok {
+		f.AverageAssets = int64(v)
+	}
+
+	if v, ok := fields["EquityAvg"]; ok {
+		f.EquityAvg = int64(v)
+	}
+
+	if v, ok := fields["InvestedCapitalAverage"]; ok {
+		f.InvestedCapitalAverage = int64(v)
+	}
+
+	if v, ok := fields["ROA"]; ok {
+		f.ROA = v
+	}
+
+	if v, ok := fields["ROE"]; ok {
+		f.ROE = v
+	}
+
+	if v, ok := fields["ROIC"]; ok {
+		f.ROIC = v
+	}
+
 	return f
 }
