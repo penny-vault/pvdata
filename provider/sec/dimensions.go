@@ -403,6 +403,73 @@ func ComputeTTM(quarters []map[string]float64) map[string]float64 {
 	return result
 }
 
+// ComputePeriodAverages computes period-average balance sheet fields and the
+// ratios that depend on them. current is the emit-ready field map for the
+// period being computed; prior is the emit-ready field map for the immediately
+// preceding period of the same type (prior quarter for quarterly, prior year
+// for annual, quarter before the TTM window for TTM).
+//
+// Returns a map containing only the computed fields; the caller merges these
+// into the emit map. Fields whose inputs are missing are silently omitted.
+func ComputePeriodAverages(current, prior map[string]float64) map[string]float64 {
+	result := make(map[string]float64)
+
+	if prior == nil {
+		return result
+	}
+
+	// Helper: compute (prior[field] + current[field]) / 2 if both exist.
+	avg := func(field string) (float64, bool) {
+		cv, cOK := current[field]
+		pv, pOK := prior[field]
+
+		if !cOK || !pOK {
+			return 0, false
+		}
+
+		return (pv + cv) / 2, true
+	}
+
+	// Averages
+	if v, ok := avg("TotalAssets"); ok {
+		result["AverageAssets"] = v
+	}
+
+	if v, ok := avg("Equity"); ok {
+		result["EquityAvg"] = v
+	}
+
+	if v, ok := avg("InvestedCapital"); ok {
+		result["InvestedCapitalAverage"] = v
+	}
+
+	// Ratios (only when both numerator and denominator are available and non-zero)
+	ratio := func(numField, denomField string) (float64, bool) {
+		num, nOK := current[numField]
+		denom, dOK := result[denomField]
+
+		if !nOK || !dOK || denom == 0 {
+			return 0, false
+		}
+
+		return num / denom, true
+	}
+
+	if v, ok := ratio("NetIncomeCommonStock", "AverageAssets"); ok {
+		result["ROA"] = v
+	}
+
+	if v, ok := ratio("NetIncomeCommonStock", "EquityAvg"); ok {
+		result["ROE"] = v
+	}
+
+	if v, ok := ratio("EBIT", "InvestedCapitalAverage"); ok {
+		result["ROIC"] = v
+	}
+
+	return result
+}
+
 // BuildFundamental converts a resolved field map into a data.Fundamental struct.
 //
 // lastUpdated is the timestamp the caller wants to record as the data's

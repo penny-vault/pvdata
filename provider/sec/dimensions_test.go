@@ -515,6 +515,101 @@ var _ = Describe("Dimensions", func() {
 		})
 	})
 
+	Describe("ComputePeriodAverages", func() {
+		It("computes all 6 fields from complete inputs", func() {
+			current := map[string]float64{
+				"TotalAssets":          400_000,
+				"Equity":               200_000,
+				"InvestedCapital":      300_000,
+				"NetIncomeCommonStock": 50_000,
+				"EBIT":                 60_000,
+			}
+			prior := map[string]float64{
+				"TotalAssets":     360_000,
+				"Equity":          180_000,
+				"InvestedCapital": 280_000,
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			// Averages
+			Expect(result["AverageAssets"]).To(Equal(380_000.0))
+			Expect(result["EquityAvg"]).To(Equal(190_000.0))
+			Expect(result["InvestedCapitalAverage"]).To(Equal(290_000.0))
+
+			// Ratios
+			Expect(result["ROA"]).To(BeNumerically("~", 50_000.0/380_000.0, 1e-10))
+			Expect(result["ROE"]).To(BeNumerically("~", 50_000.0/190_000.0, 1e-10))
+			Expect(result["ROIC"]).To(BeNumerically("~", 60_000.0/290_000.0, 1e-10))
+		})
+
+		It("omits average when prior is missing the balance sheet field", func() {
+			current := map[string]float64{
+				"TotalAssets":          400_000,
+				"Equity":               200_000,
+				"NetIncomeCommonStock": 50_000,
+				"EBIT":                 60_000,
+			}
+			prior := map[string]float64{
+				"TotalAssets": 360_000,
+				// Equity missing
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			Expect(result).To(HaveKey("AverageAssets"))
+			Expect(result).To(HaveKey("ROA"))
+			Expect(result).NotTo(HaveKey("EquityAvg"))
+			Expect(result).NotTo(HaveKey("ROE"))
+		})
+
+		It("omits ratio when numerator is missing", func() {
+			current := map[string]float64{
+				"TotalAssets": 400_000,
+				"Equity":      200_000,
+				// NetIncomeCommonStock missing
+			}
+			prior := map[string]float64{
+				"TotalAssets": 360_000,
+				"Equity":      180_000,
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			Expect(result).To(HaveKey("AverageAssets"))
+			Expect(result).To(HaveKey("EquityAvg"))
+			Expect(result).NotTo(HaveKey("ROA"))
+			Expect(result).NotTo(HaveKey("ROE"))
+		})
+
+		It("omits ratio when average denominator is zero", func() {
+			current := map[string]float64{
+				"TotalAssets":          100,
+				"NetIncomeCommonStock": 50,
+			}
+			prior := map[string]float64{
+				"TotalAssets": -100, // average = 0
+			}
+
+			result := ComputePeriodAverages(current, prior)
+
+			Expect(result).To(HaveKey("AverageAssets"))
+			Expect(result["AverageAssets"]).To(Equal(0.0))
+			Expect(result).NotTo(HaveKey("ROA"))
+		})
+
+		It("returns empty map when prior is nil", func() {
+			current := map[string]float64{
+				"TotalAssets":          400_000,
+				"Equity":               200_000,
+				"NetIncomeCommonStock": 50_000,
+			}
+
+			result := ComputePeriodAverages(current, nil)
+			Expect(result).To(BeEmpty())
+		})
+	})
+
 	// BuildFundamental is a long manual switch over fields["X"] keys. Without
 	// this guard, adding a new entry to FieldMappings without a corresponding
 	// clause in BuildFundamental would silently drop the field from emitted
