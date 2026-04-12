@@ -675,8 +675,8 @@ var _ = Describe("Dimensions", func() {
 		})
 	})
 
-	Describe("quarterly period averages", func() {
-		It("computes averages from consecutive quarters", func() {
+	Describe("quarterly period averages excluded (#56)", func() {
+		It("does not compute averages or ratios for ARQ/MRQ", func() {
 			cf := &CompanyFacts{
 				CIK:        1,
 				EntityName: "Avg Co",
@@ -708,21 +708,22 @@ var _ = Describe("Dimensions", func() {
 				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 500, Form: "10-Q"},
 				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 600, Form: "10-Q"},
 			}
+			cf.Facts["OperatingIncomeLoss"] = []Fact{
+				{Start: fyStart, End: q1End, Filed: q1Filed, Val: 200, Form: "10-Q"},
+				{Start: q1End.AddDate(0, 0, 1), End: q2End, Filed: q2Filed, Val: 250, Form: "10-Q"},
+			}
 
 			asset := AssetInfo{Ticker: "TEST", CompositeFigi: "BBG000TEST00", CIK: 1}
 			out := make(chan *data.Observation, 256)
 			sub := &library.Subscription{Name: "test"}
 
 			done := make(chan struct{})
-			var q1Fund, q2Fund *data.Fundamental
+			var q2Fund *data.Fundamental
 
 			go func() {
 				for obs := range out {
 					f := obs.Fundamental
 					dateKey := obs.ObservationDate.Format("2006-01-02")
-					if f.Dimension == "ARQ" && dateKey == "2024-03-31" {
-						q1Fund = f
-					}
 					if f.Dimension == "ARQ" && dateKey == "2024-06-30" {
 						q2Fund = f
 					}
@@ -735,17 +736,17 @@ var _ = Describe("Dimensions", func() {
 			close(out)
 			<-done
 
-			// Q1: no prior quarter, averages should be zero (absent)
-			Expect(q1Fund).NotTo(BeNil())
-			Expect(q1Fund.AverageAssets).To(Equal(int64(0)))
-			Expect(q1Fund.ROA).To(Equal(0.0))
-
-			// Q2: has prior quarter
+			// Q2 has a prior quarter but averages and ratios must still be
+			// zero because these fields are excluded for ARQ/MRQ (#56).
 			Expect(q2Fund).NotTo(BeNil())
-			Expect(q2Fund.AverageAssets).To(Equal(int64(1100))) // (1000+1200)/2
-			Expect(q2Fund.EquityAvg).To(Equal(int64(550)))      // (500+600)/2
-			Expect(q2Fund.ROA).To(BeNumerically("~", 120.0/1100.0, 1e-10))
-			Expect(q2Fund.ROE).To(BeNumerically("~", 120.0/550.0, 1e-10))
+			Expect(q2Fund.AverageAssets).To(Equal(int64(0)))
+			Expect(q2Fund.EquityAvg).To(Equal(int64(0)))
+			Expect(q2Fund.InvestedCapitalAverage).To(Equal(int64(0)))
+			Expect(q2Fund.ROA).To(Equal(0.0))
+			Expect(q2Fund.ROE).To(Equal(0.0))
+			Expect(q2Fund.ROIC).To(Equal(0.0))
+			Expect(q2Fund.AssetTurnover).To(Equal(0.0))
+			Expect(q2Fund.ReturnOnSales).To(Equal(0.0))
 		})
 	})
 

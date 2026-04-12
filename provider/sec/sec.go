@@ -610,8 +610,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		arQ4, mrQ4 := SynthesizeQ4(a.arFields, a.mrFields, a.period, inputs)
 		if arQ4 == nil {
+			log.Debug().
+				Str("ticker", asset.Ticker).
+				Time("annual_period_end", a.period.PeriodEnd).
+				Int("quarters_available", len(inputs)).
+				Msg("Q4 synthesis returned nil (insufficient preceding quarters)")
+
 			continue
 		}
+
+		log.Debug().
+			Str("ticker", asset.Ticker).
+			Time("annual_period_end", a.period.PeriodEnd).
+			Int("ar_fields", len(arQ4)).
+			Int("mr_fields", len(mrQ4)).
+			Float64("ar_revenues", arQ4["Revenues"]).
+			Float64("ar_total_assets", arQ4["TotalAssets"]).
+			Float64("annual_total_assets", a.arFields["TotalAssets"]).
+			Msg("Q4 synthesis result")
 
 		// Skip if a quarter already exists at this period end (e.g. if a
 		// company unusually filed a 10-Q for Q4 alongside its 10-K).
@@ -651,31 +667,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		quarters[idx] = q4
 	}
 
-	// Compute period-average fields (AverageAssets, EquityAvg,
-	// InvestedCapitalAverage) and derived ratios (ROA, ROE, ROIC) from
-	// consecutive quarterly balance sheet values.
-	for i := range quarters {
-		q := &quarters[i]
-
-		if i == 0 {
-			continue
-		}
-
-		prev := &quarters[i-1]
-		gapDays := q.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
-
-		if gapDays > maxQuarterGapDays {
-			continue
-		}
-
-		for k, v := range ComputePeriodAverages(q.arEmit, prev.arEmit) {
-			q.arEmit[k] = v
-		}
-
-		for k, v := range ComputePeriodAverages(q.mrEmit, prev.mrEmit) {
-			q.mrEmit[k] = v
-		}
-	}
+	// Period-average fields (AverageAssets, EquityAvg, InvestedCapitalAverage)
+	// and derived ratios (ROA, ROE, ROIC) are intentionally NOT computed for
+	// quarterly dimensions (ARQ/MRQ). See #56 for rationale.
 
 	// Compute period averages and emit annual observations.
 	const maxAnnualGapDays = 425 // ~14 months, handles fiscal year shifts
@@ -739,8 +733,20 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	}
 
 	// Emit quarterly observations using de-cumulated values.
+	// Strip fields that are only meaningful for annual/trailing dimensions (#56).
+	quarterOnlyExclude := []string{
+		"AverageAssets", "EquityAvg", "InvestedCapitalAverage",
+		"ROA", "ROE", "ROIC", "AssetTurnover", "ReturnOnSales",
+	}
+
 	for i := range quarters {
 		q := &quarters[i]
+
+		for _, key := range quarterOnlyExclude {
+			delete(q.arEmit, key)
+			delete(q.mrEmit, key)
+		}
+
 		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
 
 		if !since.IsZero() && q.period.MRFiledDate.Before(since) {
