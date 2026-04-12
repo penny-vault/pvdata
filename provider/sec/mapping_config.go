@@ -184,9 +184,9 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "TaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
-			"DeferredTaxAssetsNet",
-			"DeferredTaxAssetsNetCurrent",
-			"DeferredIncomeTaxAssetsNet",
+			"IncomeTaxesReceivable",
+			"IncomeTaxReceivable",
+			"PrepaidTaxes",
 		},
 	},
 	{
