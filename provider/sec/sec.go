@@ -260,7 +260,9 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 	// Companies with no periods emitted are not included.
 	coverageSamples := make([]int, 0, len(cikMap))
 
-	err := DownloadCompanyFactsZip(ctx, client, func(cik int, jsonData []byte) error {
+	localZip := provider.CompanyFactsZipFromContext(ctx)
+
+	err := DownloadCompanyFactsZip(ctx, client, localZip, func(cik int, jsonData []byte) error {
 		asset, ok := cikMap[cik]
 		if !ok {
 			return nil // Unknown company, skip

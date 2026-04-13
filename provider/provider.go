@@ -28,6 +28,19 @@ type PostFetchHook func(context.Context, *library.Subscription) error
 type contextKey string
 
 const LookbackKey contextKey = "lookback"
+const CompanyFactsZipKey contextKey = "companyfacts_zip"
+
+// CompanyFactsZipFromContext returns the local companyfacts.zip path from the
+// context, or empty string if not set.
+func CompanyFactsZipFromContext(ctx context.Context) string {
+	if v := ctx.Value(CompanyFactsZipKey); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+
+	return ""
+}
 
 // LookbackFromContext returns the lookback duration from the context,
 // falling back to the given default if not set.

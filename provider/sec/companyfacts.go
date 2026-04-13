@@ -234,63 +234,77 @@ func FetchCompanyFacts(ctx context.Context, client *resty.Client, cik int) (*Com
 // to a temp file on disk to avoid loading the entire ~1GB archive into memory;
 // the zip itself requires random access (its central directory is at the end of
 // the file), so it is then opened from the temp file using zip.OpenReader.
-func DownloadCompanyFactsZip(ctx context.Context, client *resty.Client, processFn func(cik int, jsonData []byte) error) error {
-	log.Info().Msg("downloading companyfacts.zip from SEC (this may take several minutes)")
+//
+// If localZipPath is non-empty, the local file is used directly instead of
+// downloading from SEC. This is useful during development to avoid re-downloading
+// the ~1GB file on every run.
+func DownloadCompanyFactsZip(ctx context.Context, client *resty.Client, localZipPath string, processFn func(cik int, jsonData []byte) error) error {
+	zipPath := localZipPath
+	removeTmp := false
 
-	tmpFile, err := os.CreateTemp("", "sec-companyfacts-*.zip")
-	if err != nil {
-		return fmt.Errorf("creating temp file for companyfacts.zip: %w", err)
-	}
+	if zipPath == "" {
+		log.Info().Str("url", companyFactsZipURL).Msg("downloading companyfacts.zip from SEC (this may take several minutes)")
 
-	tmpName := tmpFile.Name()
-
-	defer func() {
-		if removeErr := os.Remove(tmpName); removeErr != nil && !os.IsNotExist(removeErr) {
-			log.Warn().Err(removeErr).Str("file", tmpName).Msg("error removing temp file")
-		}
-	}()
-
-	resp, err := client.R().
-		SetContext(ctx).
-		SetDoNotParseResponse(true).
-		Get(companyFactsZipURL)
-	if err != nil {
-		if closeErr := tmpFile.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Str("file", tmpName).Msg("error closing temp file")
+		tmpFile, err := os.CreateTemp("", "sec-companyfacts-*.zip")
+		if err != nil {
+			return fmt.Errorf("creating temp file for companyfacts.zip: %w", err)
 		}
 
-		return fmt.Errorf("downloading companyfacts.zip: %w", err)
-	}
+		zipPath = tmpFile.Name()
+		removeTmp = true
 
-	rawBody := resp.RawBody()
+		resp, err := client.R().
+			SetContext(ctx).
+			SetDoNotParseResponse(true).
+			Get(companyFactsZipURL)
+		if err != nil {
+			if closeErr := tmpFile.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("file", zipPath).Msg("error closing temp file")
+			}
 
-	defer func() {
-		if closeErr := rawBody.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing companyfacts.zip response body")
-		}
-	}()
-
-	if resp.StatusCode() != http.StatusOK {
-		if closeErr := tmpFile.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Str("file", tmpName).Msg("error closing temp file")
-		}
-
-		return fmt.Errorf("SEC returned status %d for companyfacts.zip", resp.StatusCode())
-	}
-
-	if _, err := io.Copy(tmpFile, rawBody); err != nil {
-		if closeErr := tmpFile.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Str("file", tmpName).Msg("error closing temp file")
+			return fmt.Errorf("downloading companyfacts.zip: %w", err)
 		}
 
-		return fmt.Errorf("streaming companyfacts.zip to temp file: %w", err)
+		rawBody := resp.RawBody()
+
+		defer func() {
+			if closeErr := rawBody.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("error closing companyfacts.zip response body")
+			}
+		}()
+
+		if resp.StatusCode() != http.StatusOK {
+			if closeErr := tmpFile.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("file", zipPath).Msg("error closing temp file")
+			}
+
+			return fmt.Errorf("SEC returned status %d for companyfacts.zip", resp.StatusCode())
+		}
+
+		if _, err := io.Copy(tmpFile, rawBody); err != nil {
+			if closeErr := tmpFile.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("file", zipPath).Msg("error closing temp file")
+			}
+
+			return fmt.Errorf("streaming companyfacts.zip to temp file: %w", err)
+		}
+
+		if err := tmpFile.Close(); err != nil {
+			return fmt.Errorf("closing temp file for companyfacts.zip: %w", err)
+		}
+	} else {
+		log.Info().Str("path", zipPath).Msg("using local companyfacts.zip")
 	}
 
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("closing temp file for companyfacts.zip: %w", err)
+	if removeTmp {
+		defer func() {
+			if removeErr := os.Remove(zipPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				log.Warn().Err(removeErr).Str("file", zipPath).Msg("error removing temp file")
+			}
+		}()
 	}
 
-	reader, err := zip.OpenReader(tmpName)
+	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return fmt.Errorf("opening companyfacts.zip: %w", err)
 	}

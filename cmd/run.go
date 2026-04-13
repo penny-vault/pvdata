@@ -61,6 +61,11 @@ provided then each subscription will execute sequentially.`,
 			log.Info().Str("figi", figiFilter).Msg("filtering run to single security")
 		}
 
+		if zipPath := viper.GetString("companyfacts-zip"); zipPath != "" {
+			ctx = context.WithValue(ctx, provider.CompanyFactsZipKey, zipPath)
+			log.Info().Str("path", zipPath).Msg("using local companyfacts.zip")
+		}
+
 		// load the library
 		myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
 		if err != nil {
@@ -109,6 +114,7 @@ func init() {
 	runCmd.Flags().StringP("lookback", "l", "", "Override data lookback period (e.g. 14d, 4w, 6m, 1y)")
 	runCmd.Flags().String("ticker", "", "Filter run to a single security by ticker (e.g. AAPL)")
 	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
+	runCmd.Flags().String("companyfacts-zip", "", "Use a local companyfacts.zip instead of downloading from SEC")
 
 	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind lookback flag")
@@ -120,6 +126,10 @@ func init() {
 
 	if err := viper.BindPFlag("figi", runCmd.Flags().Lookup("figi")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind figi flag")
+	}
+
+	if err := viper.BindPFlag("companyfacts-zip", runCmd.Flags().Lookup("companyfacts-zip")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind companyfacts-zip flag")
 	}
 
 	rootCmd.AddCommand(runCmd)

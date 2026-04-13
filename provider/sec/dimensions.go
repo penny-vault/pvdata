@@ -433,7 +433,12 @@ func ComputeTTM(quarters []map[string]float64) map[string]float64 {
 	for _, m := range FieldMappings {
 		switch m.StatementType {
 		case StmtFlow:
-			// Sum all 4 quarters
+			// Sum quarters that report this field, treating missing quarters
+			// as 0. This handles fields that a company stops reporting mid-
+			// stream (e.g. Apple dropped InterestExpense after FY2023). The
+			// trailing sum should still include the quarters that did report
+			// the field. If NO quarter reports the field, skip it entirely
+			// to avoid creating a spurious zero.
 			sum := 0.0
 			found := 0
 
@@ -444,7 +449,7 @@ func ComputeTTM(quarters []map[string]float64) map[string]float64 {
 				}
 			}
 
-			if found == 4 {
+			if found > 0 {
 				result[m.FieldName] = sum
 			}
 

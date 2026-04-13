@@ -617,13 +617,17 @@ var FieldMappings = []FieldMapping{
 	// These must come AFTER their dependencies in the list.
 
 	// EBIT = NetIncome + IncomeTaxExpense + InterestExpense
+	// InterestExpense is optional because some companies stop reporting it
+	// (e.g. Apple dropped InterestExpense after FY2023). When absent, EBIT = EBT.
+	//
+	// Note: the previous FallbackTag (IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest)
+	// was EBT (pre-tax income), not EBIT. Using it as a fallback caused EBIT
+	// to exclude InterestExpense even when it was available.
 	{
 		FieldName: "EBIT", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		FallbackTags: []string{
-			"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-		},
-		Op:       OpAdd,
-		Operands: []string{"NetIncome", "IncomeTaxExpense", "InterestExpense"},
+		Op:               OpAdd,
+		Operands:         []string{"NetIncome", "IncomeTaxExpense", "InterestExpense"},
+		OptionalOperands: true,
 	},
 	// EBITDA = EBIT + DepreciationAmortizationAndAccretion
 	{
