@@ -120,6 +120,32 @@ func synthesizeFromPreceding(annual map[string]float64, preceding []synthesizeIn
 				result[m.FieldName] = v
 			}
 
+		case m.StatementType == StmtPeriodAverage:
+			// Period-average fields (e.g. weighted average shares): the annual
+			// value is the average of 4 quarterly values, so
+			// Q4 = annual*4 - sum(Q1..Q3).
+			annualVal, hasAnnual := annual[m.FieldName]
+			if !hasAnnual {
+				continue
+			}
+
+			sum := 0.0
+			allFound := true
+
+			for _, q := range preceding {
+				emit := emitFn(q)
+				if v, ok := emit[m.FieldName]; ok {
+					sum += v
+				} else {
+					allFound = false
+					break
+				}
+			}
+
+			if allFound {
+				result[m.FieldName] = annualVal*4 - sum
+			}
+
 		case m.StatementType == StmtMetric && m.Type == MappingDerived:
 			// Recompute from Q4 values after all flow and point-in-time fields
 			// have been populated; handled in a second pass below.

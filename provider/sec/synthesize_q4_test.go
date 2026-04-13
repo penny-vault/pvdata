@@ -176,6 +176,55 @@ var _ = Describe("SynthesizeQ4", func() {
 		})
 	})
 
+	Describe("StmtPeriodAverage field computation (AAPL FY2025)", func() {
+		It("computes Q4 = annual*4 - sum(Q1+Q2+Q3) for period-average fields", func() {
+			// AAPL FY2025 WeightedAverageSharesBasic from SEC XBRL:
+			//   Q1 (90d): 15,081,724,000
+			//   Q2 (90d): 14,994,082,000
+			//   Q3 (90d): 14,902,886,000
+			//   Annual (363d): 14,948,500,000
+			// Sharadar Q4: 14,815,308,000 = 14,948,500,000*4 - sum(Q1..Q3)
+			aaplAnnualPeriod := Period{
+				PeriodEnd:   time.Date(2025, 9, 27, 0, 0, 0, 0, time.UTC),
+				FormType:    "10-K",
+				ARFiledDate: time.Date(2025, 10, 31, 0, 0, 0, 0, time.UTC),
+				MRFiledDate: time.Date(2025, 10, 31, 0, 0, 0, 0, time.UTC),
+			}
+
+			aaplQ1 := synthesizeInput{
+				periodEnd: time.Date(2024, 12, 28, 0, 0, 0, 0, time.UTC),
+				arEmit:    map[string]float64{"WeightedAverageShares": 15_081_724_000},
+				mrEmit:    map[string]float64{"WeightedAverageShares": 15_081_724_000},
+			}
+			aaplQ2 := synthesizeInput{
+				periodEnd: time.Date(2025, 3, 29, 0, 0, 0, 0, time.UTC),
+				arEmit:    map[string]float64{"WeightedAverageShares": 14_994_082_000},
+				mrEmit:    map[string]float64{"WeightedAverageShares": 14_994_082_000},
+			}
+			aaplQ3 := synthesizeInput{
+				periodEnd: time.Date(2025, 6, 28, 0, 0, 0, 0, time.UTC),
+				arEmit:    map[string]float64{"WeightedAverageShares": 14_902_886_000},
+				mrEmit:    map[string]float64{"WeightedAverageShares": 14_902_886_000},
+			}
+
+			annualAR := map[string]float64{"WeightedAverageShares": 14_948_500_000}
+			annualMR := map[string]float64{"WeightedAverageShares": 14_948_500_000}
+
+			quarters := []synthesizeInput{aaplQ1, aaplQ2, aaplQ3}
+			arResult, mrResult := SynthesizeQ4(annualAR, annualMR, aaplAnnualPeriod, quarters)
+
+			Expect(arResult).NotTo(BeNil())
+			Expect(mrResult).NotTo(BeNil())
+
+			// Q4 = annual*4 - (Q1+Q2+Q3) = 14,948,500,000*4 - 44,978,692,000 = 14,815,308,000
+			expectedQ4 := 14_948_500_000.0*4 - 15_081_724_000.0 - 14_994_082_000.0 - 14_902_886_000.0
+			Expect(arResult["WeightedAverageShares"]).To(BeNumerically("~", expectedQ4, 1))
+			Expect(mrResult["WeightedAverageShares"]).To(BeNumerically("~", expectedQ4, 1))
+			Expect(expectedQ4).To(BeNumerically("~", 14_815_308_000.0, 1),
+				"Q4 WeightedAverageShares should match Sharadar's methodology")
+		})
+	})
+
 	Describe("AR and MR emit independence", func() {
 		It("computes AR and MR independently when their values differ", func() {
 			// MR values reflect a restatement: Revenues was restated upward.

@@ -893,6 +893,51 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
+		// When the TTM window coincides with a fiscal year (the latest
+		// quarter is a synthesized Q4 at the 10-K period end), period-average
+		// fields like WeightedAverageShares should use the annual filing's
+		// value rather than the Q4-specific synthesis. The annual value is the
+		// true full-year weighted average, matching Sharadar's trailing output.
+		var matchingAR, matchingMR map[string]float64
+
+		for idx := range annuals {
+			if annuals[idx].period.PeriodEnd.Equal(q.period.PeriodEnd) {
+				matchingAR = annuals[idx].arFields
+				matchingMR = annuals[idx].mrFields
+
+				break
+			}
+		}
+
+		overridePeriodAvg := func(ttm, annualFields map[string]float64) {
+			if annualFields == nil {
+				return
+			}
+
+			for _, m := range FieldMappings {
+				if m.StatementType != StmtPeriodAverage {
+					continue
+				}
+
+				if v, ok := annualFields[m.FieldName]; ok {
+					ttm[m.FieldName] = v
+				}
+			}
+
+			// Recompute derived metric fields since the period-average
+			// fields they depend on (e.g. WeightedAverageShares used by
+			// SalesPerShare, BookValuePerShare, etc.) have changed.
+			for _, m := range FieldMappings {
+				if m.Type != MappingDerived || m.StatementType != StmtMetric {
+					continue
+				}
+
+				if val, ok := computeDerived(m, ttm); ok {
+					ttm[m.FieldName] = val
+				}
+			}
+		}
+
 		// ART — uses de-cumulated quarterly values
 		arQSlice := make([]map[string]float64, 4)
 		for j := 0; j < 4; j++ {
@@ -900,6 +945,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(arQSlice); ttm != nil {
+			overridePeriodAvg(ttm, matchingAR)
+
 			for k, v := range ComputeMultiQAverages(ttm, arQSlice) {
 				ttm[k] = v
 			}
@@ -923,6 +970,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if ttm := ComputeTTM(mrQSlice); ttm != nil {
+			overridePeriodAvg(ttm, matchingMR)
+
 			for k, v := range ComputeMultiQAverages(ttm, mrQSlice) {
 				ttm[k] = v
 			}

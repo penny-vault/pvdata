@@ -27,9 +27,14 @@ const (
 type StatementType string
 
 const (
-	StmtFlow        StatementType = "flow"          // Sum 4 quarters for TTM
-	StmtPointInTime StatementType = "point_in_time" // Use latest quarter for TTM
-	StmtMetric      StatementType = "metric"        // Recomputed from other fields, not summed
+	StmtFlow          StatementType = "flow"           // Sum 4 quarters for TTM
+	StmtPointInTime   StatementType = "point_in_time"  // Use latest quarter for TTM
+	StmtPeriodAverage StatementType = "period_average" // Period-average values (e.g., weighted average shares).
+	//   TTM: latest quarter's value (like StmtPointInTime).
+	//   Q4 synthesis: Q4 = annual*4 - sum(Q1..Q3), since the annual
+	//     value is the period-average of 4 quarters.
+	//   De-cumulation: skipped (like StmtPointInTime).
+	StmtMetric StatementType = "metric" // Recomputed from other fields, not summed
 )
 
 // FormulaOp defines the operation for derived fields.
@@ -424,12 +429,11 @@ var FieldMappings = []FieldMapping{
 		},
 	},
 	{
-		// Weighted average shares are period-average values, not cumulative
-		// flows. StmtPointInTime ensures Q4 synthesis copies the annual value
-		// directly (rather than computing annual - sum(Q1..Q3), which produces
-		// nonsensical negative numbers) and TTM uses the latest quarter's value
-		// (rather than summing 4 quarters, which would quadruple the count).
-		FieldName: "WeightedAverageShares", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		// Weighted average shares are period-average values. StmtPeriodAverage
+		// ensures Q4 synthesis computes Q4 = annual*4 - sum(Q1..Q3) (since the
+		// annual value is the average of 4 quarterly values, not a cumulative
+		// sum) and TTM uses the latest quarter's value.
+		FieldName: "WeightedAverageShares", Type: MappingDirect, StatementType: StmtPeriodAverage, ValueType: "int64",
 		XBRLTags: []string{
 			"WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
 			"WeightedAverageNumberOfSharesOutstandingBasic",
@@ -437,7 +441,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		// See WeightedAverageShares comment above for StatementType rationale.
-		FieldName: "WeightedAverageSharesDiluted", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "WeightedAverageSharesDiluted", Type: MappingDirect, StatementType: StmtPeriodAverage, ValueType: "int64",
 		// WeightedAverageNumberOfSharesOutstandingBasic is the final fallback
 		// because in loss periods the diluted count is antidilutive and many
 		// filers omit the diluted tag entirely; in those cases basic ≡ diluted.

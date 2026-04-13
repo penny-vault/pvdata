@@ -79,7 +79,7 @@ var _ = Describe("Mapping Config", func() {
 
 	It("all mappings have a valid statement type", func() {
 		for _, m := range FieldMappings {
-			Expect(m.StatementType).To(BeElementOf(StmtFlow, StmtPointInTime, StmtMetric),
+			Expect(m.StatementType).To(BeElementOf(StmtFlow, StmtPointInTime, StmtPeriodAverage, StmtMetric),
 				"mapping %s has invalid statement type: %s", m.FieldName, m.StatementType)
 		}
 	})

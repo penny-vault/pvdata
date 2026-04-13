@@ -400,7 +400,7 @@ func ComputeTTM(quarters []map[string]float64) map[string]float64 {
 				result[m.FieldName] = sum
 			}
 
-		case StmtPointInTime:
+		case StmtPointInTime, StmtPeriodAverage:
 			// Use the latest quarter's value
 			if v, ok := recent[3][m.FieldName]; ok {
 				result[m.FieldName] = v
