@@ -17,6 +17,7 @@ package sec
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -584,10 +585,10 @@ var _ = Describe("Dimensions", func() {
 			Expect(result["EquityAvg"]).To(Equal(185_000.0))
 			Expect(result["InvestedCapitalAverage"]).To(Equal(282_500.0))
 
-			// Ratios
-			Expect(result["ROA"]).To(BeNumerically("~", 50_000.0/370_000.0, 1e-10))
-			Expect(result["ROE"]).To(BeNumerically("~", 50_000.0/185_000.0, 1e-10))
-			Expect(result["ROIC"]).To(BeNumerically("~", 60_000.0/282_500.0, 1e-10))
+			// Ratios (rounded to 3 decimal places)
+			Expect(result["ROA"]).To(BeNumerically("~", math.Round(50_000.0/370_000.0*1000)/1000, 1e-10))
+			Expect(result["ROE"]).To(BeNumerically("~", math.Round(50_000.0/185_000.0*1000)/1000, 1e-10))
+			Expect(result["ROIC"]).To(BeNumerically("~", math.Round(60_000.0/282_500.0*1000)/1000, 1e-10))
 		})
 
 		It("averages only quarters that contain the field", func() {
@@ -861,8 +862,8 @@ var _ = Describe("Dimensions", func() {
 			Expect(fy2Fund).NotTo(BeNil())
 			Expect(fy2Fund.AverageAssets).To(Equal(int64(2200))) // (2000+2400)/2
 			Expect(fy2Fund.EquityAvg).To(Equal(int64(900)))      // (800+1000)/2
-			Expect(fy2Fund.ROA).To(BeNumerically("~", 250.0/2200.0, 1e-10))
-			Expect(fy2Fund.ROE).To(BeNumerically("~", 250.0/900.0, 1e-10))
+			Expect(fy2Fund.ROA).To(BeNumerically("~", math.Round(250.0/2200.0*1000)/1000, 1e-10))
+			Expect(fy2Fund.ROE).To(BeNumerically("~", math.Round(250.0/900.0*1000)/1000, 1e-10))
 		})
 	})
 

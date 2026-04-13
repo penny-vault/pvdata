@@ -95,13 +95,13 @@ var _ = Describe("EnrichMarketData", func() {
 			expectedEVtoEBIT := int64(math.Round(float64(expectedEV) / float64(f.EBIT)))
 			Expect(f.EVtoEBIT).To(Equal(expectedEVtoEBIT))
 
-			expectedEVtoEBITDA := float64(expectedEV) / float64(f.EBITDA)
+			expectedEVtoEBITDA := math.Round(float64(expectedEV)/float64(f.EBITDA)*1000) / 1000
 			Expect(f.EVtoEBITDA).To(BeNumerically("~", expectedEVtoEBITDA, 1e-9))
 
-			expectedDivYield := f.DividendsPerBasicCommonShare / price
+			expectedDivYield := math.Round(f.DividendsPerBasicCommonShare/price*1000) / 1000
 			Expect(f.DividendYield).To(BeNumerically("~", expectedDivYield, 1e-9))
 
-			expectedPayoutRatio := f.DividendsPerBasicCommonShare / f.EPSDiluted
+			expectedPayoutRatio := math.Round(f.DividendsPerBasicCommonShare/f.EPSDiluted*1000) / 1000
 			Expect(f.PayoutRatio).To(BeNumerically("~", expectedPayoutRatio, 1e-9))
 		})
 	})

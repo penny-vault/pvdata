@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,7 +70,30 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 		groups[f.DateKey] = append(groups[f.DateKey], f)
 	}
 
-	for _, group := range groups {
+	// Sort date keys chronologically so MR dimensions can reference the
+	// previous quarter's balance sheet for enterprise value.
+	dateKeys := make([]time.Time, 0, len(groups))
+	for dk := range groups {
+		dateKeys = append(dateKeys, dk)
+	}
+
+	slices.SortFunc(dateKeys, func(a, b time.Time) int { return a.Compare(b) })
+
+	// Track previous quarter's debt/cash for MR EV calculation.
+	var prevDebt, prevCash int64
+	var havePrev bool
+
+	// Track the previous MRQ's enterprise value for MRY. Sharadar's MRY
+	// is a copy of the fiscal year-end MRQ (same mktcap, same EV). Because
+	// MRY sits at a different date_key (calendar year-end vs fiscal year-end),
+	// its own prev-quarter debt/cash doesn't match the fiscal year-end MRQ's.
+	// Copying the EV directly avoids this mismatch.
+	var prevMRQEV int64
+	var havePrevMRQEV bool
+
+	for _, dk := range dateKeys {
+		group := groups[dk]
+
 		// Build an index by Dimension for quick lookup within the group.
 		byDim := make(map[string]*data.Fundamental, len(group))
 		for _, f := range group {
@@ -83,7 +108,25 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			}
 
 			mktCap := int64(price * float64(f.SharesBasic))
-			ev := mktCap + f.TotalDebt - f.CashAndEquivalents
+
+			// MR dimensions use the previous quarter's debt and cash for
+			// enterprise value. Sharadar's MR price/shares reflect the most
+			// recent filing, but the balance sheet data available at that
+			// point is from the prior quarter's filing.
+			debt := f.TotalDebt
+			cash := f.CashAndEquivalents
+
+			if havePrev && strings.HasPrefix(f.Dimension, "MR") {
+				debt = prevDebt
+				cash = prevCash
+			}
+
+			ev := mktCap + debt - cash
+
+			// MRY copies its EV from the fiscal year-end MRQ.
+			if f.Dimension == "MRY" && havePrevMRQEV {
+				ev = prevMRQEV
+			}
 
 			f.Price = price
 			f.ShareFactor = 1.0
@@ -93,6 +136,26 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 
 			if f.Equity != 0 {
 				f.PB = float64(mktCap) / float64(f.Equity)
+			}
+		}
+
+		// Save the MRQ EV for use by MRY at the next annual date key.
+		if mrq, ok := byDim["MRQ"]; ok && mrq.EnterpriseValue != 0 {
+			prevMRQEV = mrq.EnterpriseValue
+			havePrevMRQEV = true
+		}
+
+		// Update previous quarter's debt/cash for the next iteration.
+		// Use a quarterly dimension (ARQ preferred) because annual
+		// dimensions (ARY/MRY) carry the fiscal year-end balance sheet
+		// which may differ from the calendar quarter's balance sheet.
+		for _, dim := range []string{"ARQ", "MRQ", "ART", "MRT"} {
+			if f, ok := byDim[dim]; ok {
+				prevDebt = f.TotalDebt
+				prevCash = f.CashAndEquivalents
+				havePrev = true
+
+				break
 			}
 		}
 
@@ -128,11 +191,11 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			}
 
 			if f.EBITDA != 0 {
-				f.EVtoEBITDA = float64(ev) / float64(f.EBITDA)
+				f.EVtoEBITDA = math.Round(float64(ev)/float64(f.EBITDA)*1000) / 1000
 			}
 
 			if f.Price != 0 {
-				f.DividendYield = f.DividendsPerBasicCommonShare / f.Price
+				f.DividendYield = math.Round(f.DividendsPerBasicCommonShare/f.Price*1000) / 1000
 			}
 
 		}
@@ -141,7 +204,7 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 		// market-data, so compute it for every dimension independently.
 		for _, f := range group {
 			if f.EPSDiluted != 0 {
-				f.PayoutRatio = f.DividendsPerBasicCommonShare / f.EPSDiluted
+				f.PayoutRatio = math.Round(f.DividendsPerBasicCommonShare/f.EPSDiluted*1000) / 1000
 			}
 		}
 

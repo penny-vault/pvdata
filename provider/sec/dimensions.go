@@ -481,21 +481,24 @@ func ComputeMultiQAverages(current map[string]float64, quarterMaps []map[string]
 		return num / denom, true
 	}
 
+	round3 := func(v float64) float64 {
+		return math.Round(v*1000) / 1000
+	}
+
 	if v, ok := ratio("NetIncomeCommonStock", "AverageAssets"); ok {
-		result["ROA"] = v
+		result["ROA"] = round3(v)
 	}
 
 	if v, ok := ratio("NetIncomeCommonStock", "EquityAvg"); ok {
-		result["ROE"] = v
+		result["ROE"] = round3(v)
 	}
 
 	if v, ok := ratio("EBIT", "InvestedCapitalAverage"); ok {
-		result["ROIC"] = v
+		result["ROIC"] = round3(v)
 	}
 
 	if v, ok := ratio("Revenues", "AverageAssets"); ok {
-		pow := float64(10 * 10 * 10)
-		result["AssetTurnover"] = math.Round(v*pow) / pow
+		result["AssetTurnover"] = round3(v)
 	}
 
 	return result
