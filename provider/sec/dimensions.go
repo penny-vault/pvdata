@@ -443,7 +443,10 @@ func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
 
 		if val, ok := computeDerived(m, fields); ok {
 			fields[m.FieldName] = val
-		} else {
+		} else if stale[m.FieldName] {
+			// Only delete if the field itself was stale. Non-stale fields
+			// that were resolved via FallbackTags (not the formula) should
+			// be preserved when the formula fails due to absent operands.
 			delete(fields, m.FieldName)
 		}
 	}

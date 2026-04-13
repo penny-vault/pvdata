@@ -678,6 +678,8 @@ var _ = Describe("Dimensions", func() {
 				"_proceedsInvest":               true,
 				"_proceedsInvestMaturities":     true,
 				"_proceedsInvestSales":          true,
+				"_generalAndAdministrativeExpense": true,
+				"_sellingAndMarketingExpense":      true,
 			}
 
 			var missing []string

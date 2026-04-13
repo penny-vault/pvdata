@@ -95,9 +95,10 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"AssetsCurrent"},
 	},
 	{
-		FieldName: "AssetsNonCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"AssetsNoncurrent"},
-		// Fallback: Assets - AssetsCurrent (computed in derived pass if missing)
+		FieldName: "AssetsNonCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{"AssetsNoncurrent"},
+		Op:           OpSubtract,
+		Operands:     []string{"TotalAssets", "CurrentAssets"},
 	},
 	{
 		FieldName: "CashAndEquivalents", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -260,8 +261,10 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"LiabilitiesCurrent"},
 	},
 	{
-		FieldName: "LiabilitiesNonCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"LiabilitiesNoncurrent"},
+		FieldName: "LiabilitiesNonCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{"LiabilitiesNoncurrent"},
+		Op:           OpSubtract,
+		Operands:     []string{"TotalLiabilities", "CurrentLiabilities"},
 	},
 	{
 		FieldName: "Equity", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -322,12 +325,28 @@ var FieldMappings = []FieldMapping{
 			"CostsAndExpenses",
 		},
 	},
+	// --- Internal sub-fields for SG&A derivation ---
 	{
-		FieldName: "SellingGeneralAndAdministrativeExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_generalAndAdministrativeExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"GeneralAndAdministrativeExpense"},
+	},
+	{
+		FieldName: "_sellingAndMarketingExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
-			"SellingGeneralAndAdministrativeExpense",
-			"GeneralAndAdministrativeExpense",
+			"SellingAndMarketingExpense",
+			"SellingExpense",
 		},
+	},
+	// SGA = GeneralAndAdministrativeExpense + SellingAndMarketingExpense.
+	// Companies like Apple report a combined SellingGeneralAndAdministrativeExpense;
+	// companies like Microsoft report the two components separately. Sharadar
+	// always reports the combined total.
+	{
+		FieldName: "SellingGeneralAndAdministrativeExpense", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags:     []string{"SellingGeneralAndAdministrativeExpense"},
+		Op:               OpAdd,
+		Operands:         []string{"_generalAndAdministrativeExpense", "_sellingAndMarketingExpense"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "RandDExpenses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
