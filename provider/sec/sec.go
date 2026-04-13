@@ -530,6 +530,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 	var buffered []*data.Observation
 
+	// Identify fields whose underlying XBRL concepts the company has stopped
+	// reporting. A concept is stale if it appeared in older filings but not in
+	// the latest 10-K. Stale fields are stripped from MR field maps so the MR
+	// view reflects the company's current reporting practice.
+	staleMRFields := identifyStaleMRFields(cf)
+
 	for _, p := range periods {
 		// AR: resolve using only facts available at the earliest filing date
 		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
@@ -681,6 +687,13 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 	}
 
+	// Strip stale fields from MR quarterly emit maps and recompute derived
+	// fields. This must happen before TTM computation so that trailing sums
+	// use the corrected MR values.
+	for i := range quarters {
+		stripStaleAndRecompute(quarters[i].mrEmit, staleMRFields)
+	}
+
 	// Period-average fields (AverageAssets, EquityAvg, InvestedCapitalAverage)
 	// and derived ratios (ROA, ROE, ROIC) are intentionally NOT computed for
 	// quarterly dimensions (ARQ/MRQ). See #56 for rationale.
@@ -727,6 +740,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// iteration).
 		a.arEmit = copyFieldMap(a.arFields)
 		a.mrEmit = copyFieldMap(a.mrFields)
+
+		// Strip stale fields from MR annual and recompute derived fields.
+		// This matches Sharadar's MR semantics: if a company stops reporting
+		// a concept (e.g. InterestExpense), derived fields like EBIT should
+		// be recomputed without it.
+		stripStaleAndRecompute(a.mrEmit, staleMRFields)
 
 		// Find the 4 constituent quarters for this fiscal year to compute
 		// 4-quarter balance sheet averages (matching Sharadar methodology).
@@ -970,7 +989,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			arQSlice[j] = quarters[i-3+j].arEmit
 		}
 
-		if ttm := ComputeTTM(arQSlice); ttm != nil {
+		if ttm := ComputeTTM(arQSlice, false); ttm != nil {
 			overridePeriodAvg(ttm, matchingAR)
 
 			for k, v := range ComputeMultiQAverages(ttm, arQSlice) {
@@ -995,7 +1014,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			mrQSlice[j] = quarters[i-3+j].mrEmit
 		}
 
-		if ttm := ComputeTTM(mrQSlice); ttm != nil {
+		if ttm := ComputeTTM(mrQSlice, true); ttm != nil {
 			overridePeriodAvg(ttm, matchingMR)
 
 			for k, v := range ComputeMultiQAverages(ttm, mrQSlice) {

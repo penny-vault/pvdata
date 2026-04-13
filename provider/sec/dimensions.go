@@ -349,6 +349,106 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 	return result
 }
 
+
+// identifyStaleMRFields returns the set of Fundamental field names whose
+// underlying XBRL concepts are no longer reported by the company. A concept is
+// stale if it appeared in older filings but is absent from the company's latest
+// 10-K filing. The 10-K is used as the reference because it's the comprehensive
+// annual filing that includes all material concepts.
+func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
+	// Find the latest 10-K filing date.
+	var latest10KFiled time.Time
+
+	for _, facts := range cf.Facts {
+		for i := range facts {
+			if facts[i].Form == "10-K" && facts[i].Filed.After(latest10KFiled) {
+				latest10KFiled = facts[i].Filed
+			}
+		}
+	}
+
+	if latest10KFiled.IsZero() {
+		return nil
+	}
+
+	// Concepts present in the latest 10-K filing.
+	activeConcepts := make(map[string]bool)
+
+	for concept, facts := range cf.Facts {
+		for i := range facts {
+			if facts[i].Form == "10-K" && facts[i].Filed.Equal(latest10KFiled) {
+				activeConcepts[concept] = true
+
+				break
+			}
+		}
+	}
+
+	// Map stale concepts (existed before but not in latest 10-K) to field names.
+	staleFields := make(map[string]bool)
+
+	for _, m := range FieldMappings {
+		tags := m.XBRLTags
+		if m.Type == MappingDerived {
+			tags = m.FallbackTags
+		}
+
+		allTagsStale := true
+		anyTagExists := false
+
+		for _, tag := range tags {
+			if _, exists := cf.Facts[tag]; !exists {
+				continue
+			}
+
+			anyTagExists = true
+
+			if activeConcepts[tag] {
+				allTagsStale = false
+
+				break
+			}
+		}
+
+		if anyTagExists && allTagsStale {
+			staleFields[m.FieldName] = true
+		}
+	}
+
+	if len(staleFields) == 0 {
+		return nil
+	}
+
+	return staleFields
+}
+
+// stripStaleAndRecompute removes stale fields from a resolved field map and
+// recomputes all derived fields so that values like EBIT (which depends on
+// InterestExpense) are recalculated without the stale operand.
+func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
+	if len(stale) == 0 {
+		return
+	}
+
+	for field := range stale {
+		delete(fields, field)
+	}
+
+	// Recompute derived fields (both flow and metric types) since their
+	// operands may have changed.
+	for _, m := range FieldMappings {
+		if m.Type != MappingDerived {
+			continue
+		}
+
+		if val, ok := computeDerived(m, fields); ok {
+			fields[m.FieldName] = val
+		} else {
+			delete(fields, m.FieldName)
+		}
+	}
+}
+
 // DecumulateYTD converts YTD cumulative values in a 10-Q resolved field map to
 // single-quarter values by subtracting the prior quarter's (also YTD) values.
 //
@@ -421,7 +521,13 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEn
 
 // ComputeTTM computes trailing twelve month values from the 4 most recent quarterly
 // resolved field sets. Flow items are summed; point-in-time items use the latest value.
-func ComputeTTM(quarters []map[string]float64) map[string]float64 {
+//
+// When strictFlow is true, flow fields require all 4 quarters to be present;
+// this matches Sharadar's MR (most-recently-reported) behavior where concepts
+// the company has stopped reporting are dropped from trailing values. When
+// false, any quarter with the field contributes to the sum (missing quarters
+// treated as 0), which preserves the trailing value as the field rolls off.
+func ComputeTTM(quarters []map[string]float64, strictFlow bool) map[string]float64 {
 	if len(quarters) < 4 {
 		return nil
 	}
@@ -449,7 +555,12 @@ func ComputeTTM(quarters []map[string]float64) map[string]float64 {
 				}
 			}
 
-			if found > 0 {
+			minRequired := 1
+			if strictFlow {
+				minRequired = 4
+			}
+
+			if found >= minRequired {
 				result[m.FieldName] = sum
 			}
 
