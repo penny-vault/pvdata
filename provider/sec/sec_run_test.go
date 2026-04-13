@@ -129,6 +129,28 @@ type feedEntryFixture struct {
 	filed    time.Time
 }
 
+// makeCompanyFactsHandler returns an http.HandlerFunc that serves individual
+// companyfacts JSON from a CIK->JSON map. CIKs not in the map return 404.
+func makeCompanyFactsHandler(entries map[int][]byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		base := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/xbrl/companyfacts/"), ".json")
+		base = strings.TrimPrefix(base, "CIK")
+
+		var cik int
+
+		_, _ = fmt.Sscanf(base, "%d", &cik)
+
+		if data, ok := entries[cik]; ok {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(data)
+
+			return
+		}
+
+		http.NotFound(w, r)
+	}
+}
+
 // fakeSECServer is a small router that mimics the parts of SEC.gov used by
 // runBackfill and runIncremental. The handlers can be overridden per test.
 type fakeSECServer struct {
@@ -257,16 +279,12 @@ var _ = Describe("runBackfill", func() {
 		periodEnd := time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC)
 		filed := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 
-		zipBytes := makeCompanyFactsZip(map[int][]byte{
+		entries := map[int][]byte{
 			320193: makeCompanyFactsJSON(320193, "Apple Inc.", periodEnd, filed),
 			789019: makeCompanyFactsJSON(789019, "Microsoft Corp", periodEnd, filed),
-		})
-
-		fake.zipHandler = func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/zip")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(zipBytes)
 		}
+
+		fake.companyFactsFunc = makeCompanyFactsHandler(entries)
 
 		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())
@@ -288,25 +306,23 @@ var _ = Describe("runBackfill", func() {
 		Expect(tickers).To(HaveKey("MSFT"))
 	})
 
-	It("skips CIKs not in the cikMap without emitting", func() {
+	It("continues when one CIK returns 404 from individual fetch", func() {
 		periodEnd := time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC)
 		filed := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 
-		zipBytes := makeCompanyFactsZip(map[int][]byte{
-			999999: makeCompanyFactsJSON(999999, "Unknown Co", periodEnd, filed),
-		})
-
-		fake.zipHandler = func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/zip")
-			_, _ = w.Write(zipBytes)
+		// Only serve AAPL; MSFT returns 404.
+		entries := map[int][]byte{
+			320193: makeCompanyFactsJSON(320193, "Apple Inc.", periodEnd, filed),
 		}
+
+		fake.companyFactsFunc = makeCompanyFactsHandler(entries)
 
 		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(drainObservations(out)).To(BeEmpty())
-		Expect(numObs).To(Equal(0))
-		Expect(skipped).To(Equal(0))
+		obs := drainObservations(out)
+		// Only AAPL emits (ARY + MRY = 2).
+		Expect(obs).To(HaveLen(2))
 	})
 
 	It("skips CIKs that have no composite FIGI and increments skipped counter", func() {
@@ -316,54 +332,52 @@ var _ = Describe("runBackfill", func() {
 		periodEnd := time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC)
 		filed := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 
-		zipBytes := makeCompanyFactsZip(map[int][]byte{
+		entries := map[int][]byte{
+			320193: makeCompanyFactsJSON(320193, "Apple Inc.", periodEnd, filed),
+			789019: makeCompanyFactsJSON(789019, "Microsoft Corp", periodEnd, filed),
 			111111: makeCompanyFactsJSON(111111, "FigiX Corp", periodEnd, filed),
-		})
-
-		fake.zipHandler = func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write(zipBytes)
 		}
+
+		fake.companyFactsFunc = makeCompanyFactsHandler(entries)
 
 		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(drainObservations(out)).To(BeEmpty())
+		// AAPL and MSFT emit 2 observations each; FIGIX is skipped (no FIGI).
+		Expect(drainObservations(out)).To(HaveLen(4))
 		Expect(skipped).To(Equal(1))
 	})
 
-	It("returns an error when the zip body is invalid", func() {
-		fake.zipHandler = func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("this is not a zip file"))
+	It("counts fetch errors when individual API calls fail", func() {
+		// Return 500 for all companyfacts requests.
+		fake.companyFactsFunc = func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
 		}
 
 		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
-		Expect(err).To(HaveOccurred())
+		// Individual fetch errors are counted, not fatal.
+		Expect(err).NotTo(HaveOccurred())
+		Expect(drainObservations(out)).To(BeEmpty())
 	})
 
-	It("processes other files when one zip entry has malformed JSON", func() {
+	It("processes other companies when one returns malformed JSON", func() {
 		periodEnd := time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC)
 		filed := time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC)
 
-		// Three files: two valid, one malformed JSON.
-		// 320193 (AAPL) and 789019 (MSFT) are valid; 320193 will share its CIK
-		// with the broken entry but file names are unique so we use a different
-		// CIK for the broken file too.
 		validApple := makeCompanyFactsJSON(320193, "Apple Inc.", periodEnd, filed)
 		validMSFT := makeCompanyFactsJSON(789019, "Microsoft Corp", periodEnd, filed)
+		// CIK 222222 returns malformed JSON.
 		broken := []byte(`{"cik": 222222, "entityName": "Broken`)
 
-		// 222222 must be in cikMap so the parse error path is exercised.
 		cikMap[222222] = AssetInfo{Ticker: "BRKN", CompositeFigi: "BBG000BROKEN", CIK: 222222}
 
-		zipBytes := makeCompanyFactsZip(map[int][]byte{
+		entries := map[int][]byte{
 			320193: validApple,
 			789019: validMSFT,
 			222222: broken,
-		})
-
-		fake.zipHandler = func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write(zipBytes)
 		}
+
+		fake.companyFactsFunc = makeCompanyFactsHandler(entries)
 
 		err := runBackfill(context.Background(), client, cikMap, sub, time.Time{}, out, &numObs, &skipped)
 		Expect(err).NotTo(HaveOccurred())

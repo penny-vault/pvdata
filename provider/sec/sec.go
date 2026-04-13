@@ -251,6 +251,12 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	}
 }
 
+// individualFetchThreshold is the maximum number of CIKs for which we fetch
+// individual companyfacts JSON files instead of downloading the full ~2GB
+// companyfacts.zip. Individual fetches are much faster for small runs (e.g.
+// single-ticker development) but don't scale for full backfills.
+const individualFetchThreshold = 20
+
 func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
 	processed := 0
 	processErrors := 0
@@ -260,33 +266,15 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 	// Companies with no periods emitted are not included.
 	coverageSamples := make([]int, 0, len(cikMap))
 
-	localZip := provider.CompanyFactsZipFromContext(ctx)
-
-	err := DownloadCompanyFactsZip(ctx, client, localZip, func(cik int, jsonData []byte) error {
+	processCompany := func(cik int, cf *CompanyFacts) {
 		asset, ok := cikMap[cik]
 		if !ok {
-			return nil // Unknown company, skip
+			return
 		}
 
-		// Skip CIKs without a composite FIGI: SaveDB drops these records,
-		// so processing them would only waste work. Track the count so
-		// users see how big the coverage gap is.
 		if asset.CompositeFigi == "" {
 			*skippedMissingFIGI++
-
-			return nil
-		}
-
-		cf, err := ParseCompanyFacts(jsonData)
-		if err != nil {
-			// Count parse errors but return nil so the loop continues
-			// processing the rest of the archive. The framework's
-			// idempotent upserts mean partial success is acceptable.
-			processErrors++
-
-			log.Warn().Err(err).Int("cik", cik).Msg("error parsing companyfacts in backfill")
-
-			return nil
+			return
 		}
 
 		latestCoverage, periodsEmitted := emitFundamentals(cf, asset, sub, since, out, numObservations)
@@ -298,13 +286,50 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 		if processed%1000 == 0 {
 			log.Info().Int("processed", processed).Msg("backfill progress")
 		}
+	}
 
-		return nil
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("error during backfill")
+	localZip := provider.CompanyFactsZipFromContext(ctx)
 
-		return err
+	// When the CIK set is small and no local zip is specified, fetch
+	// individual companyfacts JSONs from the SEC API. This avoids
+	// downloading the full ~2GB companyfacts.zip for single-ticker or
+	// small-batch runs.
+	if localZip == "" && len(cikMap) <= individualFetchThreshold {
+		log.Info().Int("ciks", len(cikMap)).Msg("fetching individual companyfacts from SEC API")
+
+		for cik := range cikMap {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			cf, err := FetchCompanyFacts(ctx, client, cik)
+			if err != nil {
+				processErrors++
+				log.Warn().Err(err).Int("cik", cik).Msg("error fetching companyfacts")
+
+				continue
+			}
+
+			processCompany(cik, cf)
+		}
+	} else {
+		err := DownloadCompanyFactsZip(ctx, client, localZip, func(cik int, jsonData []byte) error {
+			cf, err := ParseCompanyFacts(jsonData)
+			if err != nil {
+				processErrors++
+				log.Warn().Err(err).Int("cik", cik).Msg("error parsing companyfacts in backfill")
+
+				return nil
+			}
+
+			processCompany(cik, cf)
+
+			return nil
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("error during backfill")
+			return err
+		}
 	}
 
 	if processErrors > 0 {
