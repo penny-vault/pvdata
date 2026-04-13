@@ -513,11 +513,13 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// de-cumulation chains remain complete; the since check is reapplied when
 	// emitting.
 	type quarterData struct {
-		period   Period
-		arFields map[string]float64 // original resolved values (may be YTD for cash flow)
-		mrFields map[string]float64 // original resolved values (may be YTD for cash flow)
-		arEmit   map[string]float64 // de-cumulated values for emission and TTM
-		mrEmit   map[string]float64 // de-cumulated values for emission and TTM
+		period        Period
+		arFields      map[string]float64 // original resolved values (may be YTD for cash flow)
+		mrFields      map[string]float64 // original resolved values (may be YTD for cash flow)
+		arEmit        map[string]float64 // de-cumulated values for emission and TTM
+		mrEmit        map[string]float64 // de-cumulated values for emission and TTM
+		arCumPerShare map[string]float64 // YTD cumulative per-share flow values (AR view)
+		mrCumPerShare map[string]float64 // YTD cumulative per-share flow values (MR view)
 	}
 
 	var quarters []quarterData
@@ -544,7 +546,19 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		// Track all quarters regardless of since so TTM windows are complete.
 		if p.FormType == "10-Q" {
-			quarters = append(quarters, quarterData{period: p, arFields: arFields, mrFields: mrFields})
+			arCumPS := ResolveCumulativePerShareForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
+
+			var mrCumPS map[string]float64
+			if p.ARFiledDate.Equal(p.MRFiledDate) {
+				mrCumPS = arCumPS
+			} else {
+				mrCumPS = ResolveCumulativePerShareForFiling(cf, p.PeriodEnd, p.FormType, p.MRFiledDate)
+			}
+
+			quarters = append(quarters, quarterData{
+				period: p, arFields: arFields, mrFields: mrFields,
+				arCumPerShare: arCumPS, mrCumPerShare: mrCumPS,
+			})
 		}
 
 		// Track the chronologically latest period's coverage. Done before the
@@ -602,9 +616,11 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		inputs := make([]synthesizeInput, len(quarters))
 		for i, q := range quarters {
 			inputs[i] = synthesizeInput{
-				periodEnd: q.period.PeriodEnd,
-				arEmit:    q.arEmit,
-				mrEmit:    q.mrEmit,
+				periodEnd:     q.period.PeriodEnd,
+				arEmit:        q.arEmit,
+				mrEmit:        q.mrEmit,
+				arCumPerShare: q.arCumPerShare,
+				mrCumPerShare: q.mrCumPerShare,
 			}
 		}
 
@@ -915,7 +931,15 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 
 			for _, m := range FieldMappings {
-				if m.StatementType != StmtPeriodAverage {
+				switch {
+				case m.StatementType == StmtPeriodAverage:
+					// Use the annual filing's true full-year weighted average.
+				case m.StatementType == StmtFlow && m.ValueType == "float64":
+					// Per-share flow fields (EPS, EPSDiluted, DividendsPerBasicCommonShare):
+					// use the annual filing's value directly. Summing 4 individually
+					// rounded quarterly per-share values may differ from the company-
+					// reported annual value by up to $0.01.
+				default:
 					continue
 				}
 

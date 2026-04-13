@@ -54,7 +54,7 @@ func SetPriceLookupFn(fn PriceLookupFn) {
 //  2. Phase 2 (trailing/annual: ART, MRT, ARY, MRY): compute ratio fields
 //     PE, PS, PE1, PS1, EVtoEBIT, EVtoEBITDA, DividendYield.
 //
-//  2b. PayoutRatio (all dimensions): DPS / EPSDiluted is computed
+//     2b. PayoutRatio (all dimensions): DPS / EPS (basic) is computed
 //     independently for every dimension (quarterly values differ from
 //     trailing values).
 //
@@ -80,16 +80,20 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 	slices.SortFunc(dateKeys, func(a, b time.Time) int { return a.Compare(b) })
 
 	// Track previous quarter's debt/cash for MR EV calculation.
-	var prevDebt, prevCash int64
-	var havePrev bool
+	var (
+		prevDebt, prevCash int64
+		havePrev           bool
+	)
 
 	// Track the previous MRQ's enterprise value for MRY. Sharadar's MRY
 	// is a copy of the fiscal year-end MRQ (same mktcap, same EV). Because
 	// MRY sits at a different date_key (calendar year-end vs fiscal year-end),
 	// its own prev-quarter debt/cash doesn't match the fiscal year-end MRQ's.
 	// Copying the EV directly avoids this mismatch.
-	var prevMRQEV int64
-	var havePrevMRQEV bool
+	var (
+		prevMRQEV     int64
+		havePrevMRQEV bool
+	)
 
 	for _, dk := range dateKeys {
 		group := groups[dk]
@@ -197,14 +201,13 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			if f.Price != 0 {
 				f.DividendYield = math.Round(f.DividendsPerBasicCommonShare/f.Price*1000) / 1000
 			}
-
 		}
 
-		// PayoutRatio = DPS / EPSDiluted -- does not depend on price or
+		// PayoutRatio = DPS / EPS (basic) -- does not depend on price or
 		// market-data, so compute it for every dimension independently.
 		for _, f := range group {
-			if f.EPSDiluted != 0 {
-				f.PayoutRatio = math.Round(f.DividendsPerBasicCommonShare/f.EPSDiluted*1000) / 1000
+			if f.EPS != 0 {
+				f.PayoutRatio = math.Round(f.DividendsPerBasicCommonShare/f.EPS*1000) / 1000
 			}
 		}
 

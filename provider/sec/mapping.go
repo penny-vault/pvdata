@@ -114,6 +114,69 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 	return 0, false
 }
 
+// ResolveLongestDuration is like ResolveDirect but prefers the longest-duration
+// matching fact instead of the shortest. This resolves YTD cumulative values
+// from 10-Q filings for per-share fields where the company-reported cumulative
+// value avoids rounding error from summing individually rounded quarterly values.
+func ResolveLongestDuration(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) (float64, bool) {
+	tags := m.XBRLTags
+	if m.Type == MappingDerived {
+		tags = m.FallbackTags
+	}
+
+	normalPeriodEnd := NormalizeEventDate(periodEnd, formType)
+
+	for _, tag := range tags {
+		facts, ok := cf.Facts[tag]
+		if !ok {
+			continue
+		}
+
+		var best *Fact
+
+		for i := range facts {
+			f := &facts[i]
+
+			if !NormalizeEventDate(f.End, formType).Equal(normalPeriodEnd) {
+				continue
+			}
+
+			if f.Form != formType {
+				continue
+			}
+
+			// Only duration concepts have cumulative variants.
+			if f.Start.IsZero() {
+				continue
+			}
+
+			if formType == "10-K" {
+				days := f.End.Sub(f.Start).Hours() / 24
+				if days < 300 {
+					continue
+				}
+			}
+
+			if best == nil || f.Filed.After(best.Filed) {
+				best = f
+			} else if f.Filed.Equal(best.Filed) && !best.Start.IsZero() {
+				fDays := f.End.Sub(f.Start).Hours() / 24
+				bestDays := best.End.Sub(best.Start).Hours() / 24
+
+				if fDays > bestDays {
+					best = f
+				}
+			}
+		}
+
+		if best != nil {
+			return best.Val, true
+		}
+	}
+
+	return 0, false
+}
+
 // ytdThresholdDays is the maximum duration (in days) of a single-quarter fact.
 // Facts longer than this in a 10-Q filing are treated as YTD cumulative values
 // that need de-cumulation. A standard quarter is ~90 days; 120 provides margin

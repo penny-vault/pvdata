@@ -101,7 +101,7 @@ var _ = Describe("EnrichMarketData", func() {
 			expectedDivYield := math.Round(f.DividendsPerBasicCommonShare/price*1000) / 1000
 			Expect(f.DividendYield).To(BeNumerically("~", expectedDivYield, 1e-9))
 
-			expectedPayoutRatio := math.Round(f.DividendsPerBasicCommonShare/f.EPSDiluted*1000) / 1000
+			expectedPayoutRatio := math.Round(f.DividendsPerBasicCommonShare/f.EPS*1000) / 1000
 			Expect(f.PayoutRatio).To(BeNumerically("~", expectedPayoutRatio, 1e-9))
 		})
 	})
@@ -136,6 +136,7 @@ var _ = Describe("EnrichMarketData", func() {
 				TotalDebt:                    int64(500_000_000),
 				CashAndEquivalents:           int64(200_000_000),
 				Equity:                       int64(1_800_000_000), // different equity for own PB
+				EPS:                          0.85,
 				EPSDiluted:                   0.80,
 				DividendsPerBasicCommonShare: 0.30,
 			}
@@ -163,7 +164,7 @@ var _ = Describe("EnrichMarketData", func() {
 			Expect(arq.DividendYield).To(BeNumerically("~", art.DividendYield, 1e-9))
 
 			// PayoutRatio is computed independently per dimension
-			expectedARQPayout := arq.DividendsPerBasicCommonShare / arq.EPSDiluted
+			expectedARQPayout := math.Round(arq.DividendsPerBasicCommonShare/arq.EPS*1000) / 1000
 			Expect(arq.PayoutRatio).To(BeNumerically("~", expectedARQPayout, 1e-9))
 			Expect(arq.PayoutRatio).NotTo(BeNumerically("~", art.PayoutRatio, 1e-9))
 		})
@@ -199,6 +200,7 @@ var _ = Describe("EnrichMarketData", func() {
 				TotalDebt:                    int64(300_000_000),
 				CashAndEquivalents:           int64(100_000_000),
 				Equity:                       int64(1_200_000_000),
+				EPS:                          0.55,
 				EPSDiluted:                   0.50,
 				DividendsPerBasicCommonShare: 0.20,
 			}
@@ -224,7 +226,7 @@ var _ = Describe("EnrichMarketData", func() {
 			Expect(mrq.DividendYield).To(BeNumerically("~", mrt.DividendYield, 1e-9))
 
 			// PayoutRatio is computed independently per dimension
-			expectedMRQPayout := mrq.DividendsPerBasicCommonShare / mrq.EPSDiluted
+			expectedMRQPayout := math.Round(mrq.DividendsPerBasicCommonShare/mrq.EPS*1000) / 1000
 			Expect(mrq.PayoutRatio).To(BeNumerically("~", expectedMRQPayout, 1e-9))
 			Expect(mrq.PayoutRatio).NotTo(BeNumerically("~", mrt.PayoutRatio, 1e-9))
 		})

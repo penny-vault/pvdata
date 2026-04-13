@@ -301,6 +301,54 @@ func ResolveFieldsForFiling(cf *CompanyFacts, periodEnd time.Time, formType stri
 	return ResolveAllFields(filtered, periodEnd, formType)
 }
 
+// ResolveCumulativePerShareForFiling resolves YTD cumulative values for per-share
+// flow fields (EPS, EPSDiluted, DividendsPerBasicCommonShare) using only facts
+// filed on or before filedDate. Unlike ResolveFieldsForFiling which prefers
+// shorter-duration (single-quarter) facts, this prefers the longest-duration fact
+// to capture the company-reported YTD cumulative. This is needed for accurate Q4
+// synthesis: subtracting the Q3 YTD cumulative from the annual avoids rounding
+// error that occurs when summing three individually rounded quarterly per-share
+// values.
+func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, formType string, filedDate time.Time) map[string]float64 {
+	if formType != "10-Q" {
+		return nil
+	}
+
+	filtered := &CompanyFacts{
+		CIK:        cf.CIK,
+		EntityName: cf.EntityName,
+		Facts:      make(map[string][]Fact, len(cf.Facts)),
+	}
+
+	for concept, facts := range cf.Facts {
+		idx := sort.Search(len(facts), func(i int) bool {
+			return facts[i].Filed.After(filedDate)
+		})
+
+		if idx > 0 {
+			filtered.Facts[concept] = facts[:idx]
+		}
+	}
+
+	result := make(map[string]float64)
+
+	for _, m := range FieldMappings {
+		if m.StatementType != StmtFlow || m.ValueType != "float64" {
+			continue
+		}
+
+		if val, ok := ResolveLongestDuration(filtered, m, periodEnd, formType); ok {
+			if m.Negate {
+				val = -val
+			}
+
+			result[m.FieldName] = val
+		}
+	}
+
+	return result
+}
+
 // DecumulateYTD converts YTD cumulative values in a 10-Q resolved field map to
 // single-quarter values by subtracting the prior quarter's (also YTD) values.
 //

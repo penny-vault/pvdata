@@ -20,10 +20,18 @@ import "time"
 // synthesizeInput holds the resolved field maps for a single de-cumulated quarter,
 // along with its period end date. arEmit is the as-reported view and mrEmit is the
 // most-recently-reported view.
+//
+// arCumPerShare / mrCumPerShare hold YTD cumulative values for per-share flow
+// fields (EPS, EPSDiluted, DividendsPerBasicCommonShare). These may be nil for
+// Q1 quarters where the cumulative equals the single-quarter value. SynthesizeQ4
+// uses the last preceding quarter's cumulative to avoid rounding error when
+// subtracting per-share values.
 type synthesizeInput struct {
-	periodEnd time.Time
-	arEmit    map[string]float64
-	mrEmit    map[string]float64
+	periodEnd     time.Time
+	arEmit        map[string]float64
+	mrEmit        map[string]float64
+	arCumPerShare map[string]float64
+	mrCumPerShare map[string]float64
 }
 
 // maxQ4QuarterSpanDays is the maximum number of days before the 10-K period end
@@ -73,21 +81,24 @@ func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, qu
 		return nil, nil
 	}
 
-	arResult := synthesizeFromPreceding(annualAR, preceding, func(q synthesizeInput) map[string]float64 {
-		return q.arEmit
-	})
+	arResult := synthesizeFromPreceding(annualAR, preceding,
+		func(q synthesizeInput) map[string]float64 { return q.arEmit },
+		func(q synthesizeInput) map[string]float64 { return q.arCumPerShare },
+	)
 
-	mrResult := synthesizeFromPreceding(annualMR, preceding, func(q synthesizeInput) map[string]float64 {
-		return q.mrEmit
-	})
+	mrResult := synthesizeFromPreceding(annualMR, preceding,
+		func(q synthesizeInput) map[string]float64 { return q.mrEmit },
+		func(q synthesizeInput) map[string]float64 { return q.mrCumPerShare },
+	)
 
 	return arResult, mrResult
 }
 
 // synthesizeFromPreceding builds a Q4 field map from an annual field map and
 // the 3 preceding de-cumulated quarters. emitFn selects either the AR or MR
-// emit map from each quarter.
-func synthesizeFromPreceding(annual map[string]float64, preceding []synthesizeInput, emitFn func(synthesizeInput) map[string]float64) map[string]float64 {
+// emit map from each quarter. cumPSFn selects the YTD cumulative per-share map
+// for per-share flow fields.
+func synthesizeFromPreceding(annual map[string]float64, preceding []synthesizeInput, emitFn func(synthesizeInput) map[string]float64, cumPSFn func(synthesizeInput) map[string]float64) map[string]float64 {
 	result := make(map[string]float64, len(annual))
 
 	for _, m := range FieldMappings {
@@ -96,6 +107,21 @@ func synthesizeFromPreceding(annual map[string]float64, preceding []synthesizeIn
 			annualVal, hasAnnual := annual[m.FieldName]
 			if !hasAnnual {
 				continue
+			}
+
+			// Per-share flow fields: use the last preceding quarter's YTD
+			// cumulative value for the subtraction. The company-reported
+			// cumulative avoids rounding error from summing individually
+			// rounded quarterly per-share values.
+			if m.ValueType == "float64" {
+				lastQ := preceding[0] // most recent quarter before the 10-K
+				if cumPS := cumPSFn(lastQ); cumPS != nil {
+					if cumVal, ok := cumPS[m.FieldName]; ok {
+						result[m.FieldName] = annualVal - cumVal
+
+						continue
+					}
+				}
 			}
 
 			sum := 0.0

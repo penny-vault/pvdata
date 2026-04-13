@@ -1098,6 +1098,85 @@ func buildSyntheticQuarterlyFacts(periodEnds []time.Time) *CompanyFacts {
 	return cf
 }
 
+var _ = Describe("ResolveCumulativePerShareForFiling", func() {
+	It("resolves YTD cumulative per-share values from 10-Q facts", func() {
+		// Apple Q3 FY2024 10-Q: filed 2024-08-02, period ending 2024-06-29.
+		// EarningsPerShareBasic has both single-quarter (90d) and YTD (273d) facts.
+		q3End := time.Date(2024, 6, 29, 0, 0, 0, 0, time.UTC)
+		fyStart := time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC)
+		q3Start := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+		filed := time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC)
+
+		cf := &CompanyFacts{
+			CIK:        320193,
+			EntityName: "Apple Inc",
+			Facts: map[string][]Fact{
+				"EarningsPerShareBasic": {
+					// YTD 9-month cumulative
+					{Start: fyStart, End: q3End, Val: 5.13, Form: "10-Q", Filed: filed},
+					// Single quarter (Q3 only)
+					{Start: q3Start, End: q3End, Val: 1.40, Form: "10-Q", Filed: filed},
+				},
+				"EarningsPerShareDiluted": {
+					{Start: fyStart, End: q3End, Val: 5.11, Form: "10-Q", Filed: filed},
+					{Start: q3Start, End: q3End, Val: 1.40, Form: "10-Q", Filed: filed},
+				},
+				"CommonStockDividendsPerShareDeclared": {
+					{Start: fyStart, End: q3End, Val: 0.73, Form: "10-Q", Filed: filed},
+					{Start: q3Start, End: q3End, Val: 0.25, Form: "10-Q", Filed: filed},
+				},
+			},
+		}
+
+		result := ResolveCumulativePerShareForFiling(cf, q3End, "10-Q", filed)
+
+		Expect(result).NotTo(BeNil())
+		Expect(result["EPS"]).To(Equal(5.13),
+			"should resolve YTD cumulative EPS (longest duration), not single-quarter (1.40)")
+		Expect(result["EPSDiluted"]).To(Equal(5.11))
+		Expect(result["DividendsPerBasicCommonShare"]).To(Equal(0.73))
+	})
+
+	It("returns nil for 10-K form type", func() {
+		cf := &CompanyFacts{CIK: 1, EntityName: "Test"}
+		result := ResolveCumulativePerShareForFiling(cf, time.Now(), "10-K", time.Now())
+		Expect(result).To(BeNil())
+	})
+
+	It("respects filing date filter", func() {
+		q3End := time.Date(2024, 6, 29, 0, 0, 0, 0, time.UTC)
+		fyStart := time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC)
+		q3Start := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+		earlyFiled := time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC)
+		lateFiled := time.Date(2025, 8, 1, 0, 0, 0, 0, time.UTC)
+
+		cf := &CompanyFacts{
+			CIK:        320193,
+			EntityName: "Apple Inc",
+			Facts: map[string][]Fact{
+				"EarningsPerShareBasic": {
+					// Original filing: YTD = 5.13
+					{Start: fyStart, End: q3End, Val: 5.13, Form: "10-Q", Filed: earlyFiled},
+					{Start: q3Start, End: q3End, Val: 1.40, Form: "10-Q", Filed: earlyFiled},
+					// Later restatement: YTD = 5.15
+					{Start: fyStart, End: q3End, Val: 5.15, Form: "10-Q", Filed: lateFiled},
+					{Start: q3Start, End: q3End, Val: 1.42, Form: "10-Q", Filed: lateFiled},
+				},
+			},
+		}
+
+		// AR view: only facts filed on or before earlyFiled.
+		arResult := ResolveCumulativePerShareForFiling(cf, q3End, "10-Q", earlyFiled)
+		Expect(arResult["EPS"]).To(Equal(5.13),
+			"AR view should use original filing (5.13)")
+
+		// MR view: include all facts (up to lateFiled).
+		mrResult := ResolveCumulativePerShareForFiling(cf, q3End, "10-Q", lateFiled)
+		Expect(mrResult["EPS"]).To(Equal(5.15),
+			"MR view should use latest restatement (5.15)")
+	})
+})
+
 // collectObservations runs emitFundamentals and returns a count per dimension.
 func collectObservations(cf *CompanyFacts, asset AssetInfo) map[string]int {
 	return collectObservationsSince(cf, asset, time.Time{})

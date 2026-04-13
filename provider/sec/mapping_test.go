@@ -246,6 +246,85 @@ var _ = Describe("Mapping Engine", func() {
 		})
 	})
 
+	Describe("ResolveLongestDuration", func() {
+		It("prefers YTD cumulative over single-quarter facts in 10-Q", func() {
+			// Simulate Apple's Q3 10-Q: both a 90-day single-quarter fact
+			// and a 273-day YTD cumulative fact exist for EarningsPerShareBasic.
+			q3End := time.Date(2024, 6, 29, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 8, 2, 0, 0, 0, 0, time.UTC)
+
+			ytdCF := &CompanyFacts{
+				CIK:        320193,
+				EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"EarningsPerShareBasic": {
+						// YTD 9-month cumulative (Q1+Q2+Q3)
+						{
+							Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+							End:   q3End,
+							Filed: filed,
+							Val:   5.13,
+							Form:  "10-Q",
+						},
+						// Single quarter (Q3 only)
+						{
+							Start: time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
+							End:   q3End,
+							Filed: filed,
+							Val:   1.40,
+							Form:  "10-Q",
+						},
+					},
+				},
+			}
+
+			val, ok := ResolveLongestDuration(ytdCF, FieldMapping{
+				FieldName:     "EPS",
+				Type:          MappingDirect,
+				StatementType: StmtFlow,
+				ValueType:     "float64",
+				XBRLTags:      []string{"EarningsPerShareBasic"},
+			}, q3End, "10-Q")
+
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(5.13),
+				"should pick YTD cumulative EPS (5.13), not single-quarter (1.40)")
+		})
+
+		It("returns false for 10-K form type", func() {
+			annualEnd := time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC)
+			filed := time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)
+
+			annualCF := &CompanyFacts{
+				CIK:        320193,
+				EntityName: "Apple Inc",
+				Facts: map[string][]Fact{
+					"EarningsPerShareBasic": {
+						{
+							Start: time.Date(2023, 10, 1, 0, 0, 0, 0, time.UTC),
+							End:   annualEnd,
+							Filed: filed,
+							Val:   6.11,
+							Form:  "10-K",
+						},
+					},
+				},
+			}
+
+			// 10-K should work -- it has a valid annual-duration fact.
+			val, ok := ResolveLongestDuration(annualCF, FieldMapping{
+				FieldName:     "EPS",
+				Type:          MappingDirect,
+				StatementType: StmtFlow,
+				ValueType:     "float64",
+				XBRLTags:      []string{"EarningsPerShareBasic"},
+			}, annualEnd, "10-K")
+
+			Expect(ok).To(BeTrue())
+			Expect(val).To(Equal(6.11))
+		})
+	})
+
 	Describe("computeDerived with OptionalOperands", func() {
 		It("sums present operands and ignores missing ones", func() {
 			resolved := map[string]float64{
