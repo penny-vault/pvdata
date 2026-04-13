@@ -617,11 +617,15 @@ func diffRowSet(secRows, sharadarRows []*fundamentalRow, fields []fundamentalFie
 			return out[i].compositeFigi < out[j].compositeFigi
 		}
 
-		if out[i].dimension != out[j].dimension {
-			return out[i].dimension < out[j].dimension
+		if !out[i].dateKey.Equal(out[j].dateKey) {
+			return out[i].dateKey.Before(out[j].dateKey)
 		}
 
-		return out[i].field < out[j].field
+		if out[i].field != out[j].field {
+			return out[i].field < out[j].field
+		}
+
+		return out[i].dimension < out[j].dimension
 	})
 
 	return out
@@ -671,24 +675,55 @@ func (m *mdDiffWriter) Close() error {
 		}
 
 		fmt.Fprintf(m.w, "## %s (%s)\n\n", k.ticker, k.figi)
-		fmt.Fprintln(m.w, "| Dimension | Date Key | Field | SEC | Sharadar | Diff % |")
-		fmt.Fprintln(m.w, "|-----------|----------|-------|----:|--------:|-------:|")
+		fmt.Fprintln(m.w, "| Date Key | Field | Dimension | SEC | Sharadar | Diff % |")
+		fmt.Fprintln(m.w, "|----------|-------|-----------|----:|--------:|-------:|")
 
-		for _, r := range groups[k] {
+		recs := groups[k]
+		prevDate := ""
+		prevField := ""
+
+		for j, r := range recs {
+			curDate := r.dateKey.Format("2006-01-02")
+
+			// Insert a separator row between date groups.
+			if j > 0 && curDate != prevDate {
+				fmt.Fprintln(m.w, "| | | | | | |")
+			}
+
+			// Suppress repeated date and field values.
+			displayDate := curDate
+			if curDate == prevDate {
+				displayDate = ""
+			}
+
 			switch r.kind {
 			case diffField:
+				displayField := r.field
+				if curDate == prevDate && r.field == prevField {
+					displayField = ""
+				}
+
 				_, relDiff := diffStats(r.secValue, r.sharadarValue)
-				fmt.Fprintf(m.w, "| %s | %s | %s | %s | %s | %.2f%% |\n",
-					r.dimension, r.dateKey.Format("2006-01-02"), r.field,
+				diffPct := formatDiffPercent(relDiff)
+				fmt.Fprintf(m.w, "| %s | %s | %s | %s | %s | %s |\n",
+					displayDate, displayField, r.dimension,
 					formatValueCompact(r.secValue), formatValueCompact(r.sharadarValue),
-					relDiff*100)
+					diffPct)
+
+				prevField = r.field
 			case diffMissingSec:
-				fmt.Fprintf(m.w, "| %s | %s | *(missing in sec)* | | | |\n",
-					r.dimension, r.dateKey.Format("2006-01-02"))
+				fmt.Fprintf(m.w, "| %s | *(missing in sec)* | %s | | | |\n",
+					displayDate, r.dimension)
+
+				prevField = ""
 			case diffMissingShar:
-				fmt.Fprintf(m.w, "| %s | %s | *(missing in sharadar)* | | | |\n",
-					r.dimension, r.dateKey.Format("2006-01-02"))
+				fmt.Fprintf(m.w, "| %s | *(missing in sharadar)* | %s | | | |\n",
+					displayDate, r.dimension)
+
+				prevField = ""
 			}
+
+			prevDate = curDate
 		}
 	}
 
@@ -814,6 +849,24 @@ func formatIntWithCommas(n int64) string {
 	}
 
 	return b.String()
+}
+
+// formatDiffPercent renders a relative diff as a percentage string with
+// markdown emphasis for larger values: plain below 0.5%, **bold** from 0.5-1%,
+// and ***bold italic*** above 1%.
+func formatDiffPercent(relDiff float64) string {
+	pct := relDiff * 100
+
+	s := fmt.Sprintf("%.2f%%", pct)
+
+	switch {
+	case pct >= 1.0:
+		return "***" + s + "***"
+	case pct >= 0.5:
+		return "**" + s + "**"
+	default:
+		return s
+	}
 }
 
 // diffStats returns (|a-b|, |a-b|/max(|a|,|b|)). Caller must ensure a and b

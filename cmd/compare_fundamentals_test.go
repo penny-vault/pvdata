@@ -389,6 +389,25 @@ var _ = Describe("diffRowSet", func() {
 		recs := diffRowSet(sec, sh, fields, 0.0001, 0)
 		Expect(recs).To(HaveLen(2))
 	})
+
+	It("sorts results by field then dimension", func() {
+		v1, v2, v3, v4 := 100.0, 200.0, 300.0, 400.0
+
+		oneField := []fundamentalField{{"revenues", kindInt}}
+		sec := []*fundamentalRow{
+			{ticker: "AAPL", compositeFigi: "BBG1", dimension: "MRT", values: []*float64{&v1}},
+			{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&v3}},
+		}
+		sh := []*fundamentalRow{
+			{ticker: "AAPL", compositeFigi: "BBG1", dimension: "MRT", values: []*float64{&v2}},
+			{ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ", values: []*float64{&v4}},
+		}
+
+		recs := diffRowSet(sec, sh, oneField, 0.0001, 0)
+		Expect(recs).To(HaveLen(2))
+		Expect(recs[0].dimension).To(Equal("ARQ"))
+		Expect(recs[1].dimension).To(Equal("MRT"))
+	})
 })
 
 var _ = Describe("mdDiffWriter", func() {
@@ -460,6 +479,82 @@ var _ = Describe("mdDiffWriter", func() {
 		Expect(strings.Count(out, "## AAPL")).To(Equal(1))
 		Expect(out).To(ContainSubstring("pe"))
 		Expect(out).To(ContainSubstring("ps"))
+	})
+
+	It("suppresses repeated date and field values in consecutive rows", func() {
+		dk, err := time.Parse("2006-01-02", "2023-03-31")
+		Expect(err).NotTo(HaveOccurred())
+
+		recs := []diffRecord{
+			{kind: diffField, ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ",
+				dateKey: dk, field: "pe", secValue: mustPtr(10), sharadarValue: mustPtr(11)},
+			{kind: diffField, ticker: "AAPL", compositeFigi: "BBG1", dimension: "ART",
+				dateKey: dk, field: "pe", secValue: mustPtr(12), sharadarValue: mustPtr(13)},
+		}
+
+		var buf bytes.Buffer
+		w := newMDDiffWriter(&buf)
+		for _, r := range recs {
+			Expect(w.Write(r)).To(Succeed())
+		}
+		Expect(w.Close()).To(Succeed())
+
+		lines := strings.Split(buf.String(), "\n")
+		// Find data rows (skip heading, header, separator).
+		var dataRows []string
+		for _, l := range lines {
+			if strings.HasPrefix(l, "|") && !strings.Contains(l, "Date Key") && !strings.Contains(l, "---") {
+				dataRows = append(dataRows, l)
+			}
+		}
+
+		Expect(dataRows).To(HaveLen(2))
+		// First row has the date and field.
+		Expect(dataRows[0]).To(ContainSubstring("2023-03-31"))
+		Expect(dataRows[0]).To(ContainSubstring("pe"))
+		// Second row should suppress both date and field.
+		Expect(dataRows[1]).NotTo(ContainSubstring("2023-03-31"))
+		cols := strings.Split(dataRows[1], "|")
+		// cols[1] is Date Key, cols[2] is Field -- both should be blank.
+		Expect(strings.TrimSpace(cols[1])).To(BeEmpty())
+		Expect(strings.TrimSpace(cols[2])).To(BeEmpty())
+	})
+
+	It("inserts a separator row between date groups", func() {
+		dk1, _ := time.Parse("2006-01-02", "2023-03-31")
+		dk2, _ := time.Parse("2006-01-02", "2023-06-30")
+
+		recs := []diffRecord{
+			{kind: diffField, ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ",
+				dateKey: dk1, field: "pe", secValue: mustPtr(10), sharadarValue: mustPtr(11)},
+			{kind: diffField, ticker: "AAPL", compositeFigi: "BBG1", dimension: "ARQ",
+				dateKey: dk2, field: "pe", secValue: mustPtr(12), sharadarValue: mustPtr(13)},
+		}
+
+		var buf bytes.Buffer
+		w := newMDDiffWriter(&buf)
+		for _, r := range recs {
+			Expect(w.Write(r)).To(Succeed())
+		}
+		Expect(w.Close()).To(Succeed())
+
+		out := buf.String()
+		// The separator is a row of empty cells.
+		Expect(out).To(ContainSubstring("| | | | | | |"))
+	})
+})
+
+var _ = Describe("formatDiffPercent", func() {
+	It("returns plain text for small diffs", func() {
+		Expect(formatDiffPercent(0.001)).To(Equal("0.10%"))
+	})
+
+	It("returns bold for medium diffs (0.5-1%)", func() {
+		Expect(formatDiffPercent(0.007)).To(Equal("**0.70%**"))
+	})
+
+	It("returns bold italic for large diffs (>=1%)", func() {
+		Expect(formatDiffPercent(0.015)).To(Equal("***1.50%***"))
 	})
 })
 
