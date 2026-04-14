@@ -559,6 +559,13 @@ var FieldMappings = []FieldMapping{
 		// net value would incorrectly subtract from EBIT.
 		// InterestExpenseNonoperating is used by MSFT on 10-Q filings where
 		// the generic InterestExpense tag is only filed on 10-K.
+		//
+		// RequireIfQuarterly on AssetsCurrent: banks (JPM) file the generic
+		// InterestExpense tag for some quarters but not others, and for banks
+		// this is operational interest (cost of deposits) — NOT financing
+		// expense. Including it in EBIT breaks Q4 synthesis (annual has 0
+		// but one quarter has 24B). Banks without AssetsCurrent skip this.
+		RequireIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags: []string{
 			"InterestExpense",
 			"InterestExpenseDebt",
@@ -742,8 +749,13 @@ var FieldMappings = []FieldMapping{
 			"CapitalExpendituresIncurredButNotYetPaid",
 		},
 	},
+	// Sharadar reports 0 for share-based compensation for banks. Banks
+	// include SBC in their compensation expense (LaborAndRelatedExpense)
+	// and Sharadar does not separate it. Gate on AssetsCurrent to exclude
+	// banks (which don't classify assets as current/non-current).
 	{
 		FieldName: "ShareBasedCompensation", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags: []string{
 			"ShareBasedCompensation",
 			"AllocatedShareBasedCompensationExpense",
@@ -961,11 +973,14 @@ var FieldMappings = []FieldMapping{
 		Operands: []string{"NetIncome", "IncomeTaxExpense"},
 	},
 	// FreeCashFlow = NetCashFlowFromOperations + CapitalExpenditure
-	// (CapitalExpenditure is already negative after Negate, so addition is correct)
+	// (CapitalExpenditure is already negative after Negate, so addition is correct).
+	// OptionalOperands: banks (JPM) do not report PaymentsToAcquirePropertyPlantAndEquipment
+	// so CapitalExpenditure is absent; FCF = NCFOps when capex is missing.
 	{
 		FieldName: "FreeCashFlow", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:       OpAdd,
-		Operands: []string{"NetCashFlowFromOperations", "CapitalExpenditure"},
+		Op:               OpAdd,
+		Operands:         []string{"NetCashFlowFromOperations", "CapitalExpenditure"},
+		OptionalOperands: true,
 	},
 	// WorkingCapital = CurrentAssets - CurrentLiabilities
 	{
