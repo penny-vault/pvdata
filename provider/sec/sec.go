@@ -112,8 +112,10 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	limiter := rate.NewLimiter(rate.Limit(reqPerSec), 1)
 	client := NewSECClient(userAgent, limiter)
 
-	// Load CIK -> asset map from database (primary lookup path)
-	dbCIKMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
+	// Load CIK -> asset map from database (primary lookup path).
+	// dbTickerMap indexes every asset by ticker so we can resolve tickers
+	// that share a CIK (e.g. JPM, AMJ, AMJB, VYLD all map to CIK 19617).
+	dbCIKMap, dbTickerMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading CIK map from database")
 
@@ -166,7 +168,11 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		Int("from_sec", fromSEC).
 		Msg("built combined CIK map")
 
-	// Apply ticker/FIGI filter if set
+	// Apply ticker/FIGI filter if set. Multiple tickers can share a single
+	// CIK, so the CIK map may store a different ticker than the one
+	// requested. We fall back to dbTickerMap which indexes every DB asset
+	// by ticker, ensuring e.g. --ticker JPM resolves even when the CIK map
+	// entry for CIK 19617 holds VYLD.
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
 	if tickerFilter != "" || figiFilter != "" {
 		filtered := make(map[int]AssetInfo)
@@ -179,6 +185,14 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 			}
 		}
 
+		// Ticker not found via CIK map scan — try the ticker index which
+		// covers all DB assets regardless of CIK collisions.
+		if len(filtered) == 0 && tickerFilter != "" {
+			if asset, ok := dbTickerMap[strings.ToUpper(tickerFilter)]; ok {
+				filtered[asset.CIK] = asset
+			}
+		}
+
 		if len(filtered) == 0 {
 			candidates := make([]string, 0, len(cikMap))
 			for _, info := range cikMap {
@@ -186,6 +200,15 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 					candidates = append(candidates, info.Ticker)
 				} else {
 					candidates = append(candidates, info.CompositeFigi)
+				}
+			}
+
+			// Also include tickers from the full DB index so the fuzzy
+			// suggestions cover all known tickers, not just CIK-map
+			// survivors.
+			if tickerFilter != "" {
+				for t := range dbTickerMap {
+					candidates = append(candidates, t)
 				}
 			}
 

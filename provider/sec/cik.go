@@ -92,26 +92,28 @@ func FetchCompanyTickers(ctx context.Context, client *resty.Client) (map[int]CIK
 	return entries, nil
 }
 
-// LoadCIKMapFromDB loads a CIK -> AssetInfo map from the assets in the database.
-// This provides the primary lookup path for resolving CIKs to tickers and FIGIs.
-// The pool parameter is *pgxpool.Pool (Library.Pool is a public field, not a method).
-func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInfo, error) {
+// LoadCIKMapFromDB loads asset information from the database, returning two
+// maps: a CIK-keyed map (one representative entry per CIK) and a ticker-keyed
+// map (every asset with a CIK). Multiple tickers can share a single CIK (e.g.
+// JPM, AMJ, AMJB, VYLD all belong to CIK 19617). The CIK map picks one entry
+// arbitrarily; callers that need to look up a specific ticker should consult
+// the ticker map.
+func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInfo, map[string]AssetInfo, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("acquiring connection: %w", err)
+		return nil, nil, fmt.Errorf("acquiring connection: %w", err)
 	}
 	defer conn.Release()
 
-	// Note: The actual table and column names must match your schema.
-	// Check the assets table DDL in data/datatype.go for exact column names.
 	rows, err := conn.Query(ctx,
 		`SELECT ticker, composite_figi, cik FROM assets WHERE cik IS NOT NULL AND cik != ''`)
 	if err != nil {
-		return nil, fmt.Errorf("querying assets: %w", err)
+		return nil, nil, fmt.Errorf("querying assets: %w", err)
 	}
 	defer rows.Close()
 
-	result := make(map[int]AssetInfo)
+	byCIK := make(map[int]AssetInfo)
+	byTicker := make(map[string]AssetInfo)
 
 	for rows.Next() {
 		var ticker, figi, cikStr string
@@ -125,12 +127,15 @@ func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInf
 			continue
 		}
 
-		result[cik] = AssetInfo{
+		info := AssetInfo{
 			Ticker:        ticker,
 			CompositeFigi: figi,
 			CIK:           cik,
 		}
+
+		byCIK[cik] = info
+		byTicker[ticker] = info
 	}
 
-	return result, rows.Err()
+	return byCIK, byTicker, rows.Err()
 }
