@@ -186,9 +186,13 @@ var FieldMappings = []FieldMapping{
 	// Receivables = TradeReceivables + NonTradeReceivables. Sharadar
 	// defines this as "trade and non-trade receivables." Apple tags these
 	// separately (AccountsReceivableNetCurrent + NontradeReceivablesCurrent).
+	// Banks (JPM) use a combined extension tag for accrued interest + A/R.
 	{
 		FieldName: "Receivables", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"ReceivablesNetCurrent"},
+		FallbackTags: []string{
+			"ReceivablesNetCurrent",
+			"AccruedInterestAndAccountsReceivable", // JPM extension tag
+		},
 		Op:               OpAdd,
 		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
 		OptionalOperands: true,
@@ -216,8 +220,14 @@ var FieldMappings = []FieldMapping{
 		RequireQuarterly: true,
 		XBRLTags:         []string{"OperatingLeaseRightOfUseAsset"},
 	},
+	// PropertyPlantAndEquipmentNet: use the combined extension tag if
+	// available (JPM files a combined premises+equipment+ROU tag); otherwise
+	// sum the sub-components.
 	{
 		FieldName: "PropertyPlantAndEquipmentNet", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{
+			"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization", // JPM extension
+		},
 		Op:               OpAdd,
 		Operands:         []string{"_ppneRaw", "_operatingLeaseROU"},
 		OptionalOperands: true,
@@ -237,10 +247,14 @@ var FieldMappings = []FieldMapping{
 	// Intangibles: Sharadar defines this as "all intangible assets and
 	// goodwill." Use the combined tag if available; otherwise sum Goodwill +
 	// other intangibles. MSFT reports Goodwill and FiniteLivedIntangibleAssetsNet
-	// separately; the sum captures both.
+	// separately; the sum captures both. Banks (JPM) file a combined extension
+	// tag that includes goodwill, MSR, and other intangibles.
 	{
 		FieldName: "Intangibles", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"IntangibleAssetsNetIncludingGoodwill"},
+		FallbackTags: []string{
+			"IntangibleAssetsNetIncludingGoodwill",
+			"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets", // JPM extension
+		},
 		Op:               OpAdd,
 		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},
 		OptionalOperands: true,
