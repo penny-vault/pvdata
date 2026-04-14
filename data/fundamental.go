@@ -763,6 +763,7 @@ func (fundamental *Fundamental) SaveDB(ctx context.Context, tbl string, dbConn *
 	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		ticker = EXCLUDED.ticker,
 		event_date = EXCLUDED.event_date,
+		date_key = EXCLUDED.date_key,
 		report_period = EXCLUDED.report_period,
 		last_updated = EXCLUDED.last_updated,
 		accumulated_other_comprehensive_income = EXCLUDED.accumulated_other_comprehensive_income,

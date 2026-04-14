@@ -233,6 +233,15 @@ var FieldMappings = []FieldMapping{
 			"PrepaidTaxes",
 		},
 	},
+	// Some companies (NVDA) present deferred tax assets as a separate
+	// balance sheet line item on 10-Q; Sharadar picks this up as TaxAssets.
+	// Companies that only disclose it in 10-K notes (AAPL) have TaxAssets=0.
+	// RequireQuarterly ensures we only add it for companies that file on 10-Q.
+	{
+		FieldName: "TaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"DeferredIncomeTaxAssetsNet"},
+	},
 	// --- Internal sub-fields for TaxLiabilities derivation ---
 	{
 		FieldName: "_deferredTaxLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -310,8 +319,9 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "TotalDebt", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:       OpAdd,
-		Operands: []string{"DebtCurrent", "DebtNonCurrent"},
+		Op:               OpAdd,
+		Operands:         []string{"DebtCurrent", "DebtNonCurrent"},
+		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for DeferredRevenue derivation ---
 	{

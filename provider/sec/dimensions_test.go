@@ -312,6 +312,12 @@ var _ = Describe("Dimensions", func() {
 			Expect(d).To(Equal(time.Date(2018, 12, 31, 0, 0, 0, 0, time.UTC)))
 		})
 
+		It("normalizes January fiscal year end to prior calendar year", func() {
+			// NVDA's FY2025 ends Jan 26, 2025 — nearest quarter end is Dec 31, 2024
+			d := NormalizeEventDate(time.Date(2025, 1, 26, 0, 0, 0, 0, time.UTC), "10-K")
+			Expect(d).To(Equal(time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC)))
+		})
+
 		// Sharadar comparability examples: a quarter ending mid-period should
 		// snap to whichever calendar quarter end is closest, not just the next
 		// one forward.
