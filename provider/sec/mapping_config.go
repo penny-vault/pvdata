@@ -711,11 +711,10 @@ var FieldMappings = []FieldMapping{
 	// Tax withholding for share-based compensation: some companies (NVDA)
 	// bundle this into the stock repurchase section of the cash flow
 	// statement when they start filing it on 10-Q. RequireQuarterly gates
-	// this to only resolve when the tag appears on 10-Q, which naturally
-	// handles the temporal transition (NVDA FY2025 had it only on 10-K).
-	// For companies that always file it on 10-Q (AAPL, MSFT), the tag IS
-	// already embedded in PaymentsForRepurchaseOfCommonStock, so adding it
-	// would double-count. RequireIfQuarterly on AccruedLiabilitiesCurrent
+	// this to only resolve when the tag appears on 10-Q. For companies
+	// that always file it on 10-Q (AAPL, MSFT), the tag IS already
+	// embedded in PaymentsForRepurchaseOfCommonStock, so adding it would
+	// double-count. RequireIfQuarterly on AccruedLiabilitiesCurrent
 	// excludes those companies.
 	{
 		FieldName: "_taxWithholdingShareComp", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -754,6 +753,15 @@ var FieldMappings = []FieldMapping{
 			"RepaymentsOfDebtMaturingInMoreThanThreeMonths",
 		},
 	},
+	// Some companies (NVDA) report payments on financed PP&E as a separate
+	// financing line item using an extension tag. This is a debt-like
+	// payment that Sharadar includes in NCFDEBT.
+	{
+		FieldName: "_repaymentsFinancedAssets", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"PaymentsForFinancedPropertyPlantAndEquipmentAndIntangibleAssetsFinancingActivities",
+		},
+	},
 	{
 		FieldName: "_netShortTermDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
@@ -762,13 +770,15 @@ var FieldMappings = []FieldMapping{
 			"ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess",
 		},
 	},
-	// NetCashFlowDebt = proceeds - repayments + netShortTermDebt (Sharadar NCFDEBT:
-	// "net cash inflow (outflow) from issuance (repayment) of debt securities")
+	// NetCashFlowDebt = proceeds - repayments - financedAssets + netShortTermDebt
+	// (Sharadar NCFDEBT: "net cash inflow (outflow) from issuance (repayment) of
+	// debt securities"). The financedAssets component captures extension-tag
+	// payments on financed PP&E (e.g. NVDA).
 	{
 		FieldName: "NetCashFlowDebt", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,
-		Operands:         []string{"_proceedsDebt", "_repaymentsDebt", "_netShortTermDebt"},
-		Coefficients:     []float64{1, -1, 1},
+		Operands:         []string{"_proceedsDebt", "_repaymentsDebt", "_repaymentsFinancedAssets", "_netShortTermDebt"},
+		Coefficients:     []float64{1, -1, -1, 1},
 		OptionalOperands: true,
 	},
 	{
