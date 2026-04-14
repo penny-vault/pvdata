@@ -66,6 +66,16 @@ provided then each subscription will execute sequentially.`,
 			log.Info().Str("path", zipPath).Msg("using local companyfacts.zip")
 		}
 
+		if cutoffStr := viper.GetString("filing-cutoff"); cutoffStr != "" {
+			cutoff, err := time.Parse("2006-01-02", cutoffStr)
+			if err != nil {
+				log.Fatal().Err(err).Str("filing-cutoff", cutoffStr).Msg("invalid filing-cutoff date; use YYYY-MM-DD format")
+			}
+
+			ctx = context.WithValue(ctx, provider.FilingCutoffKey, cutoff)
+			log.Info().Time("cutoff", cutoff).Msg("filtering filings to those filed on or before cutoff date")
+		}
+
 		// load the library
 		myLibrary, err := library.NewFromDB(ctx, viper.GetString("db.url"))
 		if err != nil {
@@ -115,6 +125,7 @@ func init() {
 	runCmd.Flags().String("ticker", "", "Filter run to a single security by ticker (e.g. AAPL)")
 	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
 	runCmd.Flags().String("companyfacts-zip", "", "Use a local companyfacts.zip instead of downloading from SEC")
+	runCmd.Flags().String("filing-cutoff", "", "Exclude SEC filings filed after this date (YYYY-MM-DD format)")
 
 	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind lookback flag")
@@ -130,6 +141,10 @@ func init() {
 
 	if err := viper.BindPFlag("companyfacts-zip", runCmd.Flags().Lookup("companyfacts-zip")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind companyfacts-zip flag")
+	}
+
+	if err := viper.BindPFlag("filing-cutoff", runCmd.Flags().Lookup("filing-cutoff")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind filing-cutoff flag")
 	}
 
 	rootCmd.AddCommand(runCmd)

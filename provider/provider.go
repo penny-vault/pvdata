@@ -29,6 +29,7 @@ type contextKey string
 
 const LookbackKey contextKey = "lookback"
 const CompanyFactsZipKey contextKey = "companyfacts_zip"
+const FilingCutoffKey contextKey = "filing_cutoff"
 
 // CompanyFactsZipFromContext returns the local companyfacts.zip path from the
 // context, or empty string if not set.
@@ -40,6 +41,18 @@ func CompanyFactsZipFromContext(ctx context.Context) string {
 	}
 
 	return ""
+}
+
+// FilingCutoffFromContext returns the filing cutoff date from the context.
+// When set, providers should exclude filings filed after this date.
+func FilingCutoffFromContext(ctx context.Context) (time.Time, bool) {
+	if v := ctx.Value(FilingCutoffKey); v != nil {
+		if t, ok := v.(time.Time); ok {
+			return t, true
+		}
+	}
+
+	return time.Time{}, false
 }
 
 // LookbackFromContext returns the lookback duration from the context,

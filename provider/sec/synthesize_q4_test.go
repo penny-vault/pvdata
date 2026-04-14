@@ -177,13 +177,67 @@ var _ = Describe("SynthesizeQ4", func() {
 	})
 
 	Describe("StmtPeriodAverage field computation (AAPL FY2025)", func() {
-		It("computes Q4 = annual*4 - sum(Q1+Q2+Q3) for period-average fields", func() {
+		It("uses YTD cumulative for day-weighted Q4 period-average (MSFT FY2025)", func() {
+			// MSFT FY2025 WeightedAverageNumberOfDilutedSharesOutstanding:
+			//   Q1 (91d, ending 2024-09-30): 7,470,000,000
+			//   Q2 (92d, ending 2024-12-31): 7,468,000,000
+			//   Q3 (90d, ending 2025-03-31): 7,461,000,000
+			//   Q3 YTD (273d): 7,466,000,000
+			//   Annual (364d): 7,465,000,000
+			// Simple formula: Q4 = 7465*4 - (7470+7468+7461) = 7,461,000,000
+			// Day-weighted:   Q4 = (7465*365 - 7466*(365-91)) / 91 = 7,462,000,000
+			// Sharadar/Yahoo: 7,462,000,000 (day-weighted matches)
+			msftAnnualPeriod := Period{
+				PeriodEnd:   time.Date(2025, 6, 30, 0, 0, 0, 0, time.UTC),
+				FormType:    "10-K",
+				ARFiledDate: time.Date(2025, 7, 30, 0, 0, 0, 0, time.UTC),
+				MRFiledDate: time.Date(2025, 7, 30, 0, 0, 0, 0, time.UTC),
+			}
+
+			q1 := synthesizeInput{
+				periodEnd:     time.Date(2024, 9, 30, 0, 0, 0, 0, time.UTC),
+				arEmit:        map[string]float64{"WeightedAverageSharesDiluted": 7_470_000_000},
+				mrEmit:        map[string]float64{"WeightedAverageSharesDiluted": 7_470_000_000},
+				arCumPerShare: nil, // Q1: no prior YTD
+				mrCumPerShare: nil,
+			}
+			q2 := synthesizeInput{
+				periodEnd:     time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
+				arEmit:        map[string]float64{"WeightedAverageSharesDiluted": 7_468_000_000},
+				mrEmit:        map[string]float64{"WeightedAverageSharesDiluted": 7_468_000_000},
+				arCumPerShare: nil,
+				mrCumPerShare: nil,
+			}
+			q3 := synthesizeInput{
+				periodEnd: time.Date(2025, 3, 31, 0, 0, 0, 0, time.UTC),
+				arEmit:    map[string]float64{"WeightedAverageSharesDiluted": 7_461_000_000},
+				mrEmit:    map[string]float64{"WeightedAverageSharesDiluted": 7_461_000_000},
+				// Q3 YTD cumulative: 7,466,000,000 (273-day weighted average)
+				arCumPerShare: map[string]float64{"WeightedAverageSharesDiluted": 7_466_000_000},
+				mrCumPerShare: map[string]float64{"WeightedAverageSharesDiluted": 7_466_000_000},
+			}
+
+			annualAR := map[string]float64{"WeightedAverageSharesDiluted": 7_465_000_000}
+			annualMR := map[string]float64{"WeightedAverageSharesDiluted": 7_465_000_000}
+
+			quarters := []synthesizeInput{q1, q2, q3}
+			arResult, mrResult := SynthesizeQ4(annualAR, annualMR, msftAnnualPeriod, quarters)
+
+			Expect(arResult).NotTo(BeNil())
+			Expect(mrResult).NotTo(BeNil())
+
+			// Day-weighted: (7465*365 - 7466*(365-91)) / 91 = 7,462,000,000
+			Expect(arResult["WeightedAverageSharesDiluted"]).To(BeNumerically("~", 7_462_000_000.0, 1))
+			Expect(mrResult["WeightedAverageSharesDiluted"]).To(BeNumerically("~", 7_462_000_000.0, 1))
+		})
+
+		It("falls back to annual*4 - sum when no YTD cumulative (AAPL FY2025)", func() {
 			// AAPL FY2025 WeightedAverageSharesBasic from SEC XBRL:
 			//   Q1 (90d): 15,081,724,000
 			//   Q2 (90d): 14,994,082,000
 			//   Q3 (90d): 14,902,886,000
 			//   Annual (363d): 14,948,500,000
-			// Sharadar Q4: 14,815,308,000 = 14,948,500,000*4 - sum(Q1..Q3)
+			// Without YTD cumulative, falls back: Q4 = annual*4 - sum(Q1..Q3) = 14,815,308,000
 			aaplAnnualPeriod := Period{
 				PeriodEnd:   time.Date(2025, 9, 27, 0, 0, 0, 0, time.UTC),
 				FormType:    "10-K",
@@ -220,8 +274,6 @@ var _ = Describe("SynthesizeQ4", func() {
 			expectedQ4 := 14_948_500_000.0*4 - 15_081_724_000.0 - 14_994_082_000.0 - 14_902_886_000.0
 			Expect(arResult["WeightedAverageShares"]).To(BeNumerically("~", expectedQ4, 1))
 			Expect(mrResult["WeightedAverageShares"]).To(BeNumerically("~", expectedQ4, 1))
-			Expect(expectedQ4).To(BeNumerically("~", 14_815_308_000.0, 1),
-				"Q4 WeightedAverageShares should match Sharadar's methodology")
 		})
 	})
 

@@ -17,7 +17,9 @@ package sec
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,6 +31,7 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/gjson"
 	"golang.org/x/time/rate"
@@ -71,22 +74,44 @@ type CompanyFacts struct {
 	Facts      map[string][]Fact // Map of concept name to facts (e.g. "Assets" -> []Fact)
 }
 
+// FilterByFilingDate removes all facts that were filed after the given cutoff
+// date. This is used to reproduce the data view at a historical point in time,
+// e.g. to compare SEC-derived fundamentals against a Sharadar snapshot taken
+// on a specific date.
+func (cf *CompanyFacts) FilterByFilingDate(cutoff time.Time) {
+	for concept, facts := range cf.Facts {
+		kept := facts[:0]
+
+		for i := range facts {
+			if !facts[i].Filed.After(cutoff) {
+				kept = append(kept, facts[i])
+			}
+		}
+
+		if len(kept) == 0 {
+			delete(cf.Facts, concept)
+		} else {
+			cf.Facts[concept] = kept
+		}
+	}
+}
+
 // unitPreference defines the priority order for selecting unit types.
 // Lower index = higher preference.
 var unitPreference = []string{"USD", "USD/shares", "shares", "pure"}
 
 const dateFormat = "2006-01-02"
 
-// xbrlNamespaces lists the XBRL taxonomy namespaces parsed from SEC EDGAR
-// companyfacts JSON. "us-gaap" contains financial statement data (balance
-// sheet, income statement, cash flow); "dei" (Document and Entity Information)
-// contains filing metadata including EntityCommonStockSharesOutstanding -- the
-// cover-page share count that Sharadar uses for sharesbas.
-var xbrlNamespaces = []string{"us-gaap", "dei"}
-
 // ParseCompanyFacts parses SEC EDGAR companyfacts JSON into a CompanyFacts struct.
 // It only includes facts from 10-K and 10-Q filings and selects the preferred
 // unit type when multiple are available for a concept.
+//
+// All XBRL namespaces present in the JSON are parsed, including:
+//   - "us-gaap": financial statement data (balance sheet, income, cash flow)
+//   - "dei": filing metadata (EntityCommonStockSharesOutstanding, etc.)
+//   - Company extensions (e.g. "msft", "aapl"): custom concepts that companies
+//     define for line items not covered by us-gaap, such as MSFT's
+//     DepreciationAmortizationAndOther cash flow line.
 func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 	if !gjson.ValidBytes(jsonData) {
 		return nil, fmt.Errorf("invalid JSON data")
@@ -100,14 +125,13 @@ func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 		Facts:      make(map[string][]Fact),
 	}
 
-	for _, ns := range xbrlNamespaces {
-		nsData := root.Get("facts." + ns)
-		if !nsData.Exists() {
-			continue
-		}
-
+	// Parse ALL namespaces present in the facts object, not just us-gaap
+	// and dei. Company extension namespaces contain custom concepts for
+	// line items that aren't covered by standard taxonomies.
+	root.Get("facts").ForEach(func(nsName, nsData gjson.Result) bool {
 		parseNamespaceFacts(nsData, cf)
-	}
+		return true
+	})
 
 	return cf, nil
 }
@@ -227,6 +251,362 @@ func FetchCompanyFacts(ctx context.Context, client *resty.Client, cik int) (*Com
 	}
 
 	return ParseCompanyFacts(resp.Body())
+}
+
+// submissionsURL is the SEC EDGAR endpoint for company submission metadata.
+const submissionsURL = "https://data.sec.gov/submissions/"
+
+// EnrichWithExtensionFacts fetches the company's recent 10-K/10-Q inline XBRL
+// filings from SEC EDGAR and parses extension facts (company-specific XBRL
+// concepts not in us-gaap or dei). These are added to cf.Facts alongside the
+// standard facts already parsed from companyfacts JSON.
+//
+// Extension concepts are used by companies for cash flow line items like
+// "Depreciation, amortization, and other" (msft:DepreciationAmortizationAndOther)
+// that aren't covered by us-gaap taxonomy concepts.
+func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int, cf *CompanyFacts) {
+	// Fetch the submissions metadata to find recent filings.
+	subURL := submissionsURL + FormatCIK(cik) + ".json"
+
+	resp, err := client.R().
+		SetContext(ctx).
+		Get(subURL)
+	if err != nil || resp.StatusCode() != http.StatusOK {
+		log.Debug().Err(err).Int("cik", cik).Msg("failed to fetch submissions for extension enrichment")
+		return
+	}
+
+	root := gjson.ParseBytes(resp.Body())
+	recent := root.Get("filings.recent")
+
+	forms := recent.Get("form").Array()
+	accessions := recent.Get("accessionNumber").Array()
+	docs := recent.Get("primaryDocument").Array()
+	filingDates := recent.Get("filingDate").Array()
+	reportDates := recent.Get("reportDate").Array()
+
+	// Collect recent 10-K and 10-Q filings for extension enrichment. We need
+	// enough history so that Q4 synthesis for the prior fiscal year uses
+	// consistent extension facts. The submissions list is reverse-chronological,
+	// so we collect filings until we see the THIRD 10-K (giving us two full
+	// fiscal years of quarterly filings plus their annual summaries).
+	type filingInfo struct {
+		accession  string
+		doc        string
+		filedDate  string
+		reportDate string
+		form       string
+	}
+
+	var filings []filingInfo
+
+	kCount := 0
+
+	// If a filing cutoff is set, skip filings filed after it.
+	cutoff, hasCutoff := provider.FilingCutoffFromContext(ctx)
+
+	for i := range forms {
+		form := forms[i].String()
+		if form != "10-K" && form != "10-Q" {
+			continue
+		}
+
+		fi := filingInfo{
+			accession: accessions[i].String(),
+			doc:       docs[i].String(),
+			filedDate: filingDates[i].String(),
+			form:      form,
+		}
+
+		if i < len(reportDates) {
+			fi.reportDate = reportDates[i].String()
+		}
+
+		// Skip filings filed after the cutoff date.
+		if hasCutoff {
+			if filedTime, err := time.Parse(dateFormat, fi.filedDate); err == nil && filedTime.After(cutoff) {
+				continue
+			}
+		}
+
+		filings = append(filings, fi)
+
+		if form == "10-K" {
+			kCount++
+			if kCount >= 3 {
+				break // stop after the third 10-K
+			}
+		}
+	}
+
+	log.Debug().Int("cik", cik).Int("filings", len(filings)).Msg("enriching with extension facts from XBRL instance documents")
+
+	for _, fi := range filings {
+		if ctx.Err() != nil {
+			return
+		}
+
+		parseExtensionFactsFromFiling(ctx, client, cik, cf, fi.accession, fi.doc, fi.filedDate, fi.reportDate, fi.form)
+	}
+
+	// Log extension facts found for key concepts.
+	for _, key := range []string{"DepreciationAmortizationAndOther"} {
+		if facts, ok := cf.Facts[key]; ok {
+			for _, f := range facts {
+				log.Debug().Str("concept", key).Time("end", f.End).Time("start", f.Start).Time("filed", f.Filed).Str("form", f.Form).Float64("val", f.Val).Msg("extension fact")
+			}
+		}
+	}
+
+	log.Debug().Int("cik", cik).Int("total_concepts", len(cf.Facts)).Msg("extension enrichment complete")
+}
+
+// parseExtensionFactsFromFiling downloads the extracted XBRL instance XML
+// for a filing and parses extension facts using encoding/xml.
+func parseExtensionFactsFromFiling(ctx context.Context, client *resty.Client, cik int, cf *CompanyFacts,
+	accession, primaryDoc, filedDate, reportDate, formType string) {
+	accessionPath := strings.ReplaceAll(accession, "-", "")
+
+	// The extracted XBRL instance XML file uses the _htm.xml suffix.
+	xmlDoc := strings.TrimSuffix(primaryDoc, ".htm") + "_htm.xml"
+	docURL := fmt.Sprintf("https://www.sec.gov/Archives/edgar/data/%d/%s/%s",
+		cik, accessionPath, xmlDoc)
+
+	resp, err := client.R().
+		SetContext(ctx).
+		Get(docURL)
+	if err != nil || resp.StatusCode() != http.StatusOK {
+		return
+	}
+
+	filed, _ := time.Parse("2006-01-02", filedDate)
+
+	parseXBRLInstanceExtensions(resp.Body(), cf, filed, formType)
+}
+
+// parseXBRLInstanceExtensions parses an XBRL instance XML document and
+// extracts extension facts (concepts not in us-gaap or dei namespaces).
+// It uses encoding/xml for proper XML parsing.
+func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Time, formType string) {
+	decoder := xml.NewDecoder(bytes.NewReader(xmlData))
+	// Inline XBRL instance XML may contain HTML entities; be lenient.
+	decoder.Strict = false
+	decoder.AutoClose = xml.HTMLAutoClose
+	decoder.Entity = xml.HTMLEntity
+
+	contexts := make(map[string]contextPeriod)
+
+	// We need to scan the entire document to build contexts, then re-scan
+	// for facts. To avoid two passes over the byte stream, collect raw
+	// fact data during the first pass.
+	type rawFact struct {
+		conceptName string
+		contextRef  string
+		unitRef     string
+		value       float64
+	}
+
+	var rawFacts []rawFact
+
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			break
+		}
+
+		se, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+
+		switch se.Name.Local {
+		case "context":
+			parseXBRLContext(decoder, &se, contexts)
+
+		default:
+			// Check if this element is a fact from a non-standard namespace.
+			ns := se.Name.Space
+			if ns == "" || ns == "http://fasb.org/us-gaap/2024" ||
+				ns == "http://xbrl.sec.gov/dei/2024" ||
+				strings.Contains(ns, "us-gaap") ||
+				strings.Contains(ns, "/dei/") ||
+				strings.Contains(ns, "xbrl.org") ||
+				strings.Contains(ns, "w3.org") ||
+				strings.Contains(ns, "xbrl.sec.gov/ecd") {
+				continue
+			}
+
+			conceptName := se.Name.Local
+
+			var contextRef, unitRef string
+
+			for _, attr := range se.Attr {
+				switch attr.Name.Local {
+				case "contextRef":
+					contextRef = attr.Value
+				case "unitRef":
+					unitRef = attr.Value
+				}
+			}
+
+			if contextRef == "" || unitRef == "" {
+				continue
+			}
+
+			// Read the element text content.
+			var content string
+
+			for {
+				innerTok, err := decoder.Token()
+				if err != nil {
+					break
+				}
+
+				if cd, ok := innerTok.(xml.CharData); ok {
+					content += string(cd)
+				}
+
+				if end, ok := innerTok.(xml.EndElement); ok {
+					if end.Name.Local == se.Name.Local {
+						break
+					}
+				}
+			}
+
+			content = strings.TrimSpace(content)
+			if content == "" {
+				continue
+			}
+
+			val, err := strconv.ParseFloat(content, 64)
+			if err != nil {
+				continue
+			}
+
+			rawFacts = append(rawFacts, rawFact{
+				conceptName: conceptName,
+				contextRef:  contextRef,
+				unitRef:     unitRef,
+				value:       val,
+			})
+		}
+	}
+
+	// Second step: match facts to contexts and build Fact objects.
+	for _, rf := range rawFacts {
+		ctx, ok := contexts[rf.contextRef]
+		if !ok || ctx.hasDim {
+			continue
+		}
+
+		// Only include USD-denominated facts (skip unit validation since
+		// the XBRL instance uses unit references, not unit types directly).
+		fact := Fact{
+			End:   ctx.end,
+			Start: ctx.start,
+			Val:   rf.value,
+			Filed: filed,
+			Form:  formType,
+		}
+
+		cf.Facts[rf.conceptName] = append(cf.Facts[rf.conceptName], fact)
+	}
+
+	// Sort facts by filing date.
+	for _, facts := range cf.Facts {
+		sort.SliceStable(facts, func(i, j int) bool {
+			return facts[i].Filed.Before(facts[j].Filed)
+		})
+	}
+}
+
+// contextPeriod holds period and dimension info for an XBRL context.
+type contextPeriod struct {
+	start  time.Time
+	end    time.Time
+	hasDim bool
+}
+
+// parseXBRLContext parses a single <xbrli:context> element from the XML stream.
+func parseXBRLContext(decoder *xml.Decoder, se *xml.StartElement, contexts map[string]contextPeriod) {
+	var ctxID string
+
+	for _, attr := range se.Attr {
+		if attr.Name.Local == "id" {
+			ctxID = attr.Value
+		}
+	}
+
+	if ctxID == "" {
+		return
+	}
+
+	var cp contextPeriod
+
+	depth := 1
+
+	for depth > 0 {
+		tok, err := decoder.Token()
+		if err != nil {
+			return
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+
+			switch t.Name.Local {
+			case "instant":
+				if text, err := readElementText(decoder); err == nil {
+					cp.end, _ = time.Parse("2006-01-02", text)
+				}
+
+				depth-- // readElementText consumed the end element
+			case "startDate":
+				if text, err := readElementText(decoder); err == nil {
+					cp.start, _ = time.Parse("2006-01-02", text)
+				}
+
+				depth--
+			case "endDate":
+				if text, err := readElementText(decoder); err == nil {
+					cp.end, _ = time.Parse("2006-01-02", text)
+				}
+
+				depth--
+			case "explicitMember":
+				cp.hasDim = true
+			}
+
+		case xml.EndElement:
+			depth--
+		}
+	}
+
+	if !cp.end.IsZero() {
+		contexts[ctxID] = cp
+	}
+}
+
+// readElementText reads the text content of the current element and consumes
+// its end tag.
+func readElementText(decoder *xml.Decoder) (string, error) {
+	var text string
+
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			return "", err
+		}
+
+		if cd, ok := tok.(xml.CharData); ok {
+			text += string(cd)
+		}
+
+		if _, ok := tok.(xml.EndElement); ok {
+			return strings.TrimSpace(text), nil
+		}
+	}
 }
 
 // DownloadCompanyFactsZip downloads and extracts the bulk companyfacts.zip file,

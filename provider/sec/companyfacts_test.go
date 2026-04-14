@@ -177,4 +177,35 @@ var _ = Describe("CompanyFacts Parser", func() {
 		_, err := ParseCompanyFacts([]byte("not json"))
 		Expect(err).To(HaveOccurred())
 	})
+
+	Describe("FilterByFilingDate", func() {
+		It("removes facts filed after the cutoff date", func() {
+			testCF := &CompanyFacts{
+				CIK:        789019,
+				EntityName: "MICROSOFT CORPORATION",
+				Facts: map[string][]Fact{
+					"Revenue": {
+						{End: time.Date(2024, 9, 30, 0, 0, 0, 0, time.UTC), Filed: time.Date(2024, 10, 30, 0, 0, 0, 0, time.UTC), Val: 65_585_000_000, Form: "10-Q"},
+						{End: time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC), Filed: time.Date(2025, 1, 29, 0, 0, 0, 0, time.UTC), Val: 69_632_000_000, Form: "10-Q"},
+						{End: time.Date(2025, 3, 31, 0, 0, 0, 0, time.UTC), Filed: time.Date(2025, 4, 30, 0, 0, 0, 0, time.UTC), Val: 70_066_000_000, Form: "10-Q"},
+					},
+					"OnlyAfterCutoff": {
+						{End: time.Date(2025, 3, 31, 0, 0, 0, 0, time.UTC), Filed: time.Date(2025, 4, 30, 0, 0, 0, 0, time.UTC), Val: 100, Form: "10-Q"},
+					},
+				},
+			}
+
+			cutoff := time.Date(2025, 1, 29, 0, 0, 0, 0, time.UTC)
+			testCF.FilterByFilingDate(cutoff)
+
+			// Revenue: only 2 facts should remain (filed <= 2025-01-29)
+			Expect(testCF.Facts["Revenue"]).To(HaveLen(2))
+			Expect(testCF.Facts["Revenue"][0].Val).To(Equal(65_585_000_000.0))
+			Expect(testCF.Facts["Revenue"][1].Val).To(Equal(69_632_000_000.0))
+
+			// OnlyAfterCutoff: all facts filed after cutoff, concept removed entirely
+			_, exists := testCF.Facts["OnlyAfterCutoff"]
+			Expect(exists).To(BeFalse())
+		})
+	})
 })

@@ -85,15 +85,11 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 		havePrev           bool
 	)
 
-	// Track the previous MRQ's enterprise value for MRY. Sharadar's MRY
-	// is a copy of the fiscal year-end MRQ (same mktcap, same EV). Because
-	// MRY sits at a different date_key (calendar year-end vs fiscal year-end),
-	// its own prev-quarter debt/cash doesn't match the fiscal year-end MRQ's.
-	// Copying the EV directly avoids this mismatch.
-	var (
-		prevMRQEV     int64
-		havePrevMRQEV bool
-	)
+	// Map of calendar-quarter date key → MRQ enterprise value. MRY copies
+	// its EV from the MRQ at the fiscal year-end, not the latest MRQ before
+	// the MRY date key. The fiscal year-end's calendar-quarter date is
+	// NormalizeEventDate(ReportPeriod, "10-Q").
+	mrqEVByDateKey := make(map[time.Time]int64)
 
 	for _, dk := range dateKeys {
 		group := groups[dk]
@@ -127,9 +123,13 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 
 			ev := mktCap + debt - cash
 
-			// MRY copies its EV from the fiscal year-end MRQ.
-			if f.Dimension == "MRY" && havePrevMRQEV {
-				ev = prevMRQEV
+			// MRY copies its EV from the fiscal year-end MRQ. The fiscal
+			// year-end's calendar-quarter key is the normalized report period.
+			if f.Dimension == "MRY" && !f.ReportPeriod.IsZero() {
+				fyEndQKey := NormalizeEventDate(f.ReportPeriod, "10-Q")
+				if fyEV, ok := mrqEVByDateKey[fyEndQKey]; ok {
+					ev = fyEV
+				}
 			}
 
 			f.Price = price
@@ -143,10 +143,10 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			}
 		}
 
-		// Save the MRQ EV for use by MRY at the next annual date key.
+		// Save the MRQ EV keyed by its date key so MRY can look up the
+		// fiscal year-end MRQ regardless of intervening quarters.
 		if mrq, ok := byDim["MRQ"]; ok && mrq.EnterpriseValue != 0 {
-			prevMRQEV = mrq.EnterpriseValue
-			havePrevMRQEV = true
+			mrqEVByDateKey[dk] = mrq.EnterpriseValue
 		}
 
 		// Update previous quarter's debt/cash for the next iteration.
