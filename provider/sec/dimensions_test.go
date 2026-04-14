@@ -708,6 +708,7 @@ var _ = Describe("Dimensions", func() {
 				"_proceedsInvestEquity":              true,
 				"_deferredTaxAssets":                 true,
 				"_taxWithholdingShareComp":           true,
+				"_repaymentsFinancedAssets":          true,
 			}
 
 			var missing []string
