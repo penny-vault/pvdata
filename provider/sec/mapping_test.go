@@ -961,6 +961,41 @@ var _ = Describe("Mapping Engine", func() {
 		})
 	})
 
+	Describe("OverrideDPSFromCash", func() {
+		It("computes DPS from cash-paid dividends / shares (MSFT Q1 FY2025)", func() {
+			// MSFT Q1 FY2025: PaymentsOfDividendsCommonStock=5,574M, WA shares=7,433M
+			// Cash-paid DPS = 5574/7433 = 0.7497... → rounds to 0.75
+			fields := map[string]float64{
+				"_absDividendsPaid":            5_574_000_000,
+				"WeightedAverageShares":        7_433_000_000,
+				"DividendsPerBasicCommonShare": 0.83, // declared tag (wrong for cash-paid)
+			}
+			OverrideDPSFromCash(fields)
+			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.75))
+		})
+
+		It("preserves declared DPS when _absDividendsPaid is absent (AAPL)", func() {
+			// AAPL uses PaymentsOfDividends (not PaymentsOfDividendsCommonStock),
+			// so _absDividendsPaid is absent and the declared per-share tag stands.
+			fields := map[string]float64{
+				"WeightedAverageShares":        15_081_724_000,
+				"DividendsPerBasicCommonShare": 0.25,
+			}
+			OverrideDPSFromCash(fields)
+			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.25))
+		})
+
+		It("handles zero shares gracefully", func() {
+			fields := map[string]float64{
+				"_absDividendsPaid":            5_574_000_000,
+				"WeightedAverageShares":        0,
+				"DividendsPerBasicCommonShare": 0.83,
+			}
+			OverrideDPSFromCash(fields)
+			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.83))
+		})
+	})
+
 	Describe("resolveSharesBasicAsOf", func() {
 		It("returns the EntityCommonStockSharesOutstanding from the most recently filed report as of the given date", func() {
 			synthCF := &CompanyFacts{
@@ -999,6 +1034,19 @@ var _ = Describe("Mapping Engine", func() {
 				Facts: map[string][]Fact{},
 			}
 			_, ok := resolveSharesBasicAsOf(synthCF, time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC))
+			Expect(ok).To(BeFalse())
+		})
+
+		It("excludes 8-K filings", func() {
+			synthCF := &CompanyFacts{
+				CIK: 1, EntityName: "Test Co",
+				Facts: map[string][]Fact{
+					"EntityCommonStockSharesOutstanding": {
+						{End: time.Date(2025, 1, 17, 0, 0, 0, 0, time.UTC), Filed: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC), Val: 15_000_000_000, Form: "8-K"},
+					},
+				},
+			}
+			_, ok := resolveSharesBasicAsOf(synthCF, time.Date(2025, 6, 28, 0, 0, 0, 0, time.UTC))
 			Expect(ok).To(BeFalse())
 		})
 

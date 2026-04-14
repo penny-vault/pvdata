@@ -77,6 +77,16 @@ type FieldMapping struct {
 	// RoundDigits rounds OpDivide results to this many decimal places.
 	// Zero (the default) means no rounding.
 	RoundDigits int
+
+	// RequireQuarterly restricts resolution to companies that file the
+	// underlying XBRL concept(s) on 10-Q filings -- not just on 10-K annual
+	// disclosures. This distinguishes balance sheet line items (filed
+	// quarterly and annually) from supplemental note disclosures (annual
+	// only). For example, MSFT files OperatingLeaseLiabilityNoncurrent on
+	// 10-Q (it's a balance sheet line) while AAPL only files it on 10-K
+	// (supplemental note). Sharadar includes lease liabilities in debt for
+	// MSFT but not AAPL, matching this quarterly-availability signal.
+	RequireQuarterly bool
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -176,16 +186,44 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
 	},
 	{
-		FieldName: "PropertyPlantAndEquipmentNet", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "_ppneRaw", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{"PropertyPlantAndEquipmentNet"},
 	},
+	// Operating lease ROU assets are included in PP&E when the company
+	// reports them as a separate balance sheet line (filed on 10-Q).
 	{
-		FieldName: "Intangibles", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "_operatingLeaseROU", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"OperatingLeaseRightOfUseAsset"},
+	},
+	{
+		FieldName: "PropertyPlantAndEquipmentNet", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		Op:               OpAdd,
+		Operands:         []string{"_ppneRaw", "_operatingLeaseROU"},
+		OptionalOperands: true,
+	},
+	// --- Internal sub-fields for Intangibles derivation ---
+	{
+		FieldName: "_goodwill", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"Goodwill"},
+	},
+	{
+		FieldName: "_intangiblesExGoodwill", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
-			"IntangibleAssetsNetIncludingGoodwill",
 			"IntangibleAssetsNetExcludingGoodwill",
-			"Goodwill",
+			"FiniteLivedIntangibleAssetsNet",
 		},
+	},
+	// Intangibles: Sharadar defines this as "all intangible assets and
+	// goodwill." Use the combined tag if available; otherwise sum Goodwill +
+	// other intangibles. MSFT reports Goodwill and FiniteLivedIntangibleAssetsNet
+	// separately; the sum captures both.
+	{
+		FieldName: "Intangibles", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:     []string{"IntangibleAssetsNetIncludingGoodwill"},
+		Op:               OpAdd,
+		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "TaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -195,13 +233,33 @@ var FieldMappings = []FieldMapping{
 			"PrepaidTaxes",
 		},
 	},
+	// --- Internal sub-fields for TaxLiabilities derivation ---
 	{
-		FieldName: "TaxLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "_deferredTaxLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"DeferredTaxLiabilities",
 			"DeferredIncomeTaxLiabilitiesNet",
 			"DeferredTaxLiabilitiesNoncurrent",
 		},
+	},
+	// Accrued income taxes are included when filed as separate quarterly
+	// balance sheet line items (RequireQuarterly). MSFT breaks these out;
+	// AAPL only reports them in 10-K notes.
+	{
+		FieldName: "_accruedIncomeTaxesCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"AccruedIncomeTaxesCurrent"},
+	},
+	{
+		FieldName: "_accruedIncomeTaxesNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"AccruedIncomeTaxesNoncurrent"},
+	},
+	{
+		FieldName: "TaxLiabilities", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		Op:               OpAdd,
+		Operands:         []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "ShortTermDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -228,29 +286,58 @@ var FieldMappings = []FieldMapping{
 		OptionalOperands: true,
 	},
 	{
-		FieldName: "DebtNonCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "_longTermDebtNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"LongTermDebtNoncurrent",
 			"LongTermDebt",
 			"LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities",
 		},
 	},
+	// Operating lease liabilities are included in debt when the company
+	// reports them as a separate balance sheet line item (filed on 10-Q).
+	// RequireQuarterly ensures we only add them for companies like MSFT
+	// (separate line) and not AAPL (10-K note disclosure only).
+	{
+		FieldName: "_operatingLeaseLiabilityNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"OperatingLeaseLiabilityNoncurrent"},
+	},
+	{
+		FieldName: "DebtNonCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		Op:               OpAdd,
+		Operands:         []string{"_longTermDebtNoncurrent", "_operatingLeaseLiabilityNoncurrent"},
+		OptionalOperands: true,
+	},
 	{
 		FieldName: "TotalDebt", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		Op:       OpAdd,
 		Operands: []string{"DebtCurrent", "DebtNonCurrent"},
 	},
+	// --- Internal sub-fields for DeferredRevenue derivation ---
 	{
-		FieldName: "DeferredRevenue", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		// Current-specific tags first to match Sharadar, which reports
-		// the current portion. Apple tags ContractWithCustomerLiabilityCurrent
-		// (8.0B) vs the total ContractWithCustomerLiability (12.6B).
+		FieldName: "_deferredRevenueCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"DeferredRevenueCurrent",
 			"ContractWithCustomerLiabilityCurrent",
-			"DeferredRevenue",
-			"ContractWithCustomerLiability",
 		},
+	},
+	{
+		FieldName: "_deferredRevenueNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{
+			"DeferredRevenueNoncurrent",
+			"ContractWithCustomerLiabilityNoncurrent",
+		},
+	},
+	// DeferredRevenue = current + noncurrent. Sharadar includes the noncurrent
+	// portion when the company reports it separately (MSFT: Short-term + Long-term
+	// unearned revenue). When only the current tag exists (AAPL: no noncurrent
+	// tag), OptionalOperands yields just the current value.
+	{
+		FieldName: "DeferredRevenue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:     []string{"DeferredRevenue"},
+		Op:               OpAdd,
+		Operands:         []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "TotalLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -318,13 +405,6 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"GrossProfit"},
 		// Fallback: Revenues - CostOfRevenue
 	},
-	{
-		FieldName: "OperatingExpenses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{
-			"OperatingExpenses",
-			"CostsAndExpenses",
-		},
-	},
 	// --- Internal sub-fields for SG&A derivation ---
 	{
 		FieldName: "_generalAndAdministrativeExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -358,6 +438,17 @@ var FieldMappings = []FieldMapping{
 			"OperatingIncomeLoss",
 		},
 	},
+	// OperatingExpenses: use the direct tag if available; otherwise derive
+	// from GrossProfit − OperatingIncome. Sharadar defines OpEx as SGA +
+	// R&D (excluding CoR). MSFT omits the OperatingExpenses XBRL tag in
+	// older filings, but GrossProfit and OperatingIncome are always present.
+	// Must come AFTER OperatingIncome so the dependency is resolved first.
+	{
+		FieldName: "OperatingExpenses", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{"OperatingExpenses", "CostsAndExpenses"},
+		Op:           OpSubtract,
+		Operands:     []string{"GrossProfit", "OperatingIncome"},
+	},
 	{
 		FieldName: "InterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		// Do NOT add InterestIncomeExpenseNet here: it is a signed net value
@@ -365,9 +456,12 @@ var FieldMappings = []FieldMapping{
 		// directly into EBIT = NetIncome + IncomeTaxExpense + InterestExpense.
 		// For cash-rich companies with interest income > expense, using the
 		// net value would incorrectly subtract from EBIT.
+		// InterestExpenseNonoperating is used by MSFT on 10-Q filings where
+		// the generic InterestExpense tag is only filed on 10-K.
 		XBRLTags: []string{
 			"InterestExpense",
 			"InterestExpenseDebt",
+			"InterestExpenseNonoperating",
 		},
 	},
 	{
@@ -437,6 +531,15 @@ var FieldMappings = []FieldMapping{
 			"CommonStockDividendsPerShareCashPaid",
 		},
 	},
+	// Internal: absolute cash dividends paid to common stockholders. Used to
+	// compute cash-paid DPS (= _absDividendsPaid / WeightedAverageShares) post
+	// de-cumulation, overriding the declared per-share tag. Only the specific
+	// common-stock tag is used; AAPL uses the broader PaymentsOfDividends which
+	// gives a different per-share figure, so it falls back to the declared tag.
+	{
+		FieldName: "_absDividendsPaid", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsOfDividendsCommonStock"},
+	},
 
 	// ==================== SHARE COUNTS ====================
 
@@ -494,14 +597,34 @@ var FieldMappings = []FieldMapping{
 			"NetCashProvidedByUsedInFinancingActivitiesContinuingOperations",
 		},
 	},
+	// --- Internal sub-fields for D&A derivation ---
 	{
-		FieldName: "DepreciationAmortizationAndAccretion", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{
+		FieldName: "_depreciation", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"Depreciation"},
+	},
+	{
+		FieldName: "_amortizationOfIntangibles", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"AmortizationOfIntangibleAssets"},
+	},
+	{
+		FieldName: "_financeLeaseAmortization", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"FinanceLeaseRightOfUseAssetAmortization"},
+	},
+	// D&A: use the combined tag if available (AAPL files
+	// DepreciationDepletionAndAmortization); otherwise sum components.
+	// MSFT reports Depreciation, AmortizationOfIntangibleAssets, and
+	// FinanceLeaseRightOfUseAssetAmortization separately.
+	{
+		FieldName: "DepreciationAmortizationAndAccretion", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{
 			"DepreciationDepletionAndAmortization",
 			"DepreciationAmortizationAndAccretionNet",
 			"DepreciationAndAmortization",
-			"Depreciation",
+			"DepreciationAmortizationAndOther", // MSFT extension tag for cash flow D&A line
 		},
+		Op:               OpAdd,
+		Operands:         []string{"_depreciation", "_amortizationOfIntangibles", "_financeLeaseAmortization"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "CapitalExpenditure", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -525,14 +648,31 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"PaymentsToAcquireBusinessesNetOfCashAcquired",
 			"PaymentsToAcquireBusinessesGross",
+			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets", // MSFT extension
 		},
 	},
+	// --- Internal sub-fields for NetCashFlowCommon derivation ---
 	{
-		FieldName: "NetCashFlowCommon", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		Negate: true,
+		FieldName: "_paymentsRepurchaseCommon", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsForRepurchaseOfCommonStock"},
+	},
+	{
+		FieldName: "_proceedsIssuanceCommon", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
-			"PaymentsForRepurchaseOfCommonStock",
+			"ProceedsFromIssuanceOfCommonStock",
+			"ProceedsFromStockOptionsExercised",
 		},
+	},
+	// NetCashFlowCommon = −repurchases + proceeds. Sharadar NCFCOMMON:
+	// "net cash inflow (outflow) from common equity changes." MSFT reports
+	// both repurchases and proceeds from employee stock plans; the net
+	// captures both sides.
+	{
+		FieldName: "NetCashFlowCommon", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		Op:               OpLinearCombination,
+		Operands:         []string{"_paymentsRepurchaseCommon", "_proceedsIssuanceCommon"},
+		Coefficients:     []float64{-1, 1},
+		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowDebt derivation ---
 	{
@@ -541,6 +681,7 @@ var FieldMappings = []FieldMapping{
 			"ProceedsFromIssuanceOfLongTermDebt",
 			"ProceedsFromIssuanceOfDebt",
 			"ProceedsFromDebtNetOfIssuanceCosts",
+			"ProceedsFromDebtMaturingInMoreThanThreeMonths",
 		},
 	},
 	{
@@ -549,6 +690,7 @@ var FieldMappings = []FieldMapping{
 			"RepaymentsOfLongTermDebt",
 			"RepaymentsOfDebt",
 			"RepaymentsOfLongTermDebtAndCapitalSecurities",
+			"RepaymentsOfDebtMaturingInMoreThanThreeMonths",
 		},
 	},
 	{
@@ -556,6 +698,7 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"ProceedsFromRepaymentsOfCommercialPaper",
 			"ProceedsFromRepaymentsOfShortTermDebt",
+			"ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess",
 		},
 	},
 	// NetCashFlowDebt = proceeds - repayments + netShortTermDebt (Sharadar NCFDEBT:
@@ -598,13 +741,21 @@ var FieldMappings = []FieldMapping{
 			"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
 		},
 	},
+	// MSFT extension: additional investment proceeds not captured by
+	// standard maturities/sales tags (e.g. other investment dispositions).
+	{
+		FieldName: "_proceedsInvestOther", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"ProceedsFromInvestments",
+		},
+	},
 	{
 		FieldName: "_proceedsInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
 			"ProceedsFromSaleAndMaturityOfMarketableSecurities",
 		},
 		Op:               OpAdd,
-		Operands:         []string{"_proceedsInvestMaturities", "_proceedsInvestSales"},
+		Operands:         []string{"_proceedsInvestMaturities", "_proceedsInvestSales", "_proceedsInvestOther"},
 		OptionalOperands: true,
 	},
 	// NetCashFlowInvest = -payments + proceeds (Sharadar NCFINV:
@@ -618,8 +769,10 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetCashFlowFx", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		// MSFT uses the longer IncludingDisposalGroupAndDiscontinuedOperations variant.
 		XBRLTags: []string{
 			"EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+			"EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsIncludingDisposalGroupAndDiscontinuedOperations",
 			"EffectOfExchangeRateOnCashAndCashEquivalents",
 		},
 	},

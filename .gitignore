@@ -65,3 +65,4 @@ yarn-error.log*
 
 # Worktrees
 .worktrees/
+go1.24.2.linux-arm64.tar.gz

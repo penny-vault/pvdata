@@ -15,7 +15,10 @@
 
 package sec
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // synthesizeInput holds the resolved field maps for a single de-cumulated quarter,
 // along with its period end date. arEmit is the as-reported view and mrEmit is the
@@ -81,12 +84,12 @@ func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, qu
 		return nil, nil
 	}
 
-	arResult := synthesizeFromPreceding(annualAR, preceding,
+	arResult := synthesizeFromPreceding(annualAR, annualPeriod.PeriodEnd, preceding,
 		func(q synthesizeInput) map[string]float64 { return q.arEmit },
 		func(q synthesizeInput) map[string]float64 { return q.arCumPerShare },
 	)
 
-	mrResult := synthesizeFromPreceding(annualMR, preceding,
+	mrResult := synthesizeFromPreceding(annualMR, annualPeriod.PeriodEnd, preceding,
 		func(q synthesizeInput) map[string]float64 { return q.mrEmit },
 		func(q synthesizeInput) map[string]float64 { return q.mrCumPerShare },
 	)
@@ -98,7 +101,7 @@ func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, qu
 // the 3 preceding de-cumulated quarters. emitFn selects either the AR or MR
 // emit map from each quarter. cumPSFn selects the YTD cumulative per-share map
 // for per-share flow fields.
-func synthesizeFromPreceding(annual map[string]float64, preceding []synthesizeInput, emitFn func(synthesizeInput) map[string]float64, cumPSFn func(synthesizeInput) map[string]float64) map[string]float64 {
+func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Time, preceding []synthesizeInput, emitFn func(synthesizeInput) map[string]float64, cumPSFn func(synthesizeInput) map[string]float64) map[string]float64 {
 	result := make(map[string]float64, len(annual))
 
 	for _, m := range FieldMappings {
@@ -147,14 +150,41 @@ func synthesizeFromPreceding(annual map[string]float64, preceding []synthesizeIn
 			}
 
 		case m.StatementType == StmtPeriodAverage:
-			// Period-average fields (e.g. weighted average shares): the annual
-			// value is the average of 4 quarterly values, so
-			// Q4 = annual*4 - sum(Q1..Q3).
+			// Period-average fields (e.g. weighted average shares) are time-
+			// weighted averages. When the Q3 YTD cumulative average is
+			// available, use it with day-weighted math to avoid rounding
+			// error from summing individually rounded quarterly integers:
+			//   Q4 = (annual * annualDays - ytdAvg * ytdDays) / q4Days
 			annualVal, hasAnnual := annual[m.FieldName]
 			if !hasAnnual {
 				continue
 			}
 
+			// preceding[0] = Q3 (most recent before annual)
+			lastQ := preceding[0]
+			if cumPS := cumPSFn(lastQ); cumPS != nil {
+				if cumVal, ok := cumPS[m.FieldName]; ok {
+					q4Days := annualPeriodEnd.Sub(lastQ.periodEnd).Hours() / 24
+					d3 := preceding[0].periodEnd.Sub(preceding[1].periodEnd).Hours() / 24
+					d2 := preceding[1].periodEnd.Sub(preceding[2].periodEnd).Hours() / 24
+					// Estimate total fiscal year days from the known quarter gaps.
+					// Q1 length isn't directly available, so approximate it as the
+					// average of Q2, Q3, Q4.
+					annualDays := math.Round(4.0 * (d2 + d3 + q4Days) / 3.0)
+					ytdDays := annualDays - q4Days
+
+					q4 := (annualVal*annualDays - cumVal*ytdDays) / q4Days
+					if m.ValueType == "int64" {
+						q4 = math.Round(q4)
+					}
+
+					result[m.FieldName] = q4
+
+					continue
+				}
+			}
+
+			// Fallback: simple equal-weight formula.
 			sum := 0.0
 			allFound := true
 

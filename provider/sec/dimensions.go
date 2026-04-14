@@ -333,7 +333,15 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 	result := make(map[string]float64)
 
 	for _, m := range FieldMappings {
-		if m.StatementType != StmtFlow || m.ValueType != "float64" {
+		// Per-share flow fields: YTD cumulative avoids rounding error when
+		// summing individually rounded quarterly per-share values.
+		// Period-average fields (e.g. WeightedAverageShares): the company-
+		// reported YTD average captures day-weighted precision that is lost
+		// when summing individually rounded quarterly averages.
+		switch {
+		case m.StatementType == StmtFlow && m.ValueType == "float64":
+		case m.StatementType == StmtPeriodAverage:
+		default:
 			continue
 		}
 
@@ -348,7 +356,6 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 
 	return result
 }
-
 
 // identifyStaleMRFields returns the set of Fundamental field names whose
 // underlying XBRL concepts are no longer reported by the company. A concept is
@@ -423,8 +430,11 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 }
 
 // stripStaleAndRecompute removes stale fields from a resolved field map and
-// recomputes all derived fields so that values like EBIT (which depends on
-// InterestExpense) are recalculated without the stale operand.
+// recomputes derived fields whose operands were affected by staleness. This
+// ensures that values like EBIT (which depends on InterestExpense) are
+// recalculated without the stale operand, while derived fields resolved via
+// FallbackTags (e.g. DepreciationDepletionAndAmortization) are preserved when
+// none of their operands changed.
 func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
 	if len(stale) == 0 {
 		return
@@ -434,15 +444,50 @@ func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
 		delete(fields, field)
 	}
 
-	// Recompute derived fields (both flow and metric types) since their
-	// operands may have changed.
+	// Track which fields have been affected (stale or recomputed) so that
+	// downstream derived fields are also recomputed when needed.
+	affected := make(map[string]bool, len(stale))
+	for k := range stale {
+		affected[k] = true
+	}
+
+	// Recompute derived fields only when at least one operand was affected
+	// by staleness (directly or transitively).
 	for _, m := range FieldMappings {
 		if m.Type != MappingDerived {
 			continue
 		}
 
+		// Check if this derived field needs recomputation.
+		needsRecompute := affected[m.FieldName]
+		if !needsRecompute {
+			// For fields with FallbackTags that resolved successfully,
+			// only recompute when the field itself is stale. The
+			// FallbackTag value is authoritative and should not be
+			// overridden just because a formula operand changed.
+			hasFallback := len(m.FallbackTags) > 0
+
+			_, wasResolved := fields[m.FieldName]
+			if hasFallback && wasResolved && !stale[m.FieldName] {
+				// FallbackTag resolved and the field is not stale -- keep it.
+				continue
+			}
+
+			for _, op := range m.Operands {
+				if affected[op] {
+					needsRecompute = true
+					break
+				}
+			}
+		}
+
+		if !needsRecompute {
+			continue
+		}
+
 		if val, ok := computeDerived(m, fields); ok {
 			fields[m.FieldName] = val
+			affected[m.FieldName] = true
 		} else if stale[m.FieldName] {
 			// Only delete if the field itself was stale. Non-stale fields
 			// that were resolved via FallbackTags (not the formula) should
@@ -496,10 +541,39 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEn
 	// Pass 2: recompute derived flow fields from (now de-cumulated) components.
 	// This handles cases like FreeCashFlow = NetCashFlowFromOperations +
 	// CapitalExpenditure (CapEx is negative) where both operands are cash
-	// flow YTD values.
+	// flow YTD values. Derived fields resolved via FallbackTags (e.g. D&A
+	// from extension tags) are preserved unless their operands were
+	// de-cumulated in pass 1.
 	for _, m := range FieldMappings {
 		if m.Type != MappingDerived || m.StatementType != StmtFlow {
 			continue
+		}
+
+		// Preserve FallbackTag-resolved values: if the field has FallbackTags,
+		// was already resolved, and none of its operands were de-cumulated,
+		// keep the existing value.
+		if len(m.FallbackTags) > 0 {
+			if _, exists := result[m.FieldName]; exists {
+				operandChanged := false
+
+				for _, op := range m.Operands {
+					if _, changed := result[op]; changed {
+						// Check if this operand was actually de-cumulated
+						// (its value in result differs from current).
+						if origVal, hasCurr := current[op]; hasCurr {
+							if resultVal, hasResult := result[op]; hasResult && resultVal != origVal {
+								operandChanged = true
+
+								break
+							}
+						}
+					}
+				}
+
+				if !operandChanged {
+					continue
+				}
+			}
 		}
 
 		if val, ok := computeDerived(m, result); ok {

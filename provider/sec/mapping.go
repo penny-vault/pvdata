@@ -246,6 +246,33 @@ func needsDecumulation(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 	return false
 }
 
+// conceptFiledQuarterly returns true if any of the given XBRL concept names
+// has at least one fact filed on a 10-Q form in cf within the last 3 years.
+// This distinguishes balance sheet line items (filed quarterly) from
+// supplemental disclosures (10-K only). The recency check avoids false
+// positives from tags that were filed on 10-Q years ago but have since been
+// discontinued (e.g. AAPL's AccruedIncomeTaxesCurrent, last on 10-Q in 2010).
+func conceptFiledQuarterly(cf *CompanyFacts, tags []string) bool {
+	for _, tag := range tags {
+		facts, ok := cf.Facts[tag]
+		if !ok {
+			continue
+		}
+
+		for i := range facts {
+			if facts[i].Form == "10-Q" && !facts[i].End.IsZero() {
+				// Consider only facts from the last ~3 years
+				age := time.Since(facts[i].End)
+				if age < 3*365*24*time.Hour {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 // ResolveAllFields resolves all configured field mappings for a given period.
 // Direct fields are resolved first, then derived fields are computed from the
 // resolved values.
@@ -253,6 +280,14 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	resolved := make(map[string]float64)
 
 	for _, m := range FieldMappings {
+		// RequireQuarterly: skip this field entirely if none of its XBRL
+		// tags are filed on 10-Q by this company. This ensures we only
+		// include balance sheet line items that the company breaks out as
+		// separate lines, not items buried in annual note disclosures.
+		if m.RequireQuarterly && !conceptFiledQuarterly(cf, m.XBRLTags) {
+			continue
+		}
+
 		switch m.Type {
 		case MappingDirect:
 			if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {
@@ -372,6 +407,24 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 	}
 
 	return 0, false
+}
+
+// OverrideDPSFromCash computes DividendsPerBasicCommonShare from the cash-paid
+// methodology when _absDividendsPaid is present. This matches Sharadar's DPS
+// computation: total cash dividends paid / weighted-average shares, rounded to
+// 2 decimal places. When _absDividendsPaid is absent (e.g. AAPL which uses the
+// broader PaymentsOfDividends tag), the existing declared per-share value is
+// preserved.
+func OverrideDPSFromCash(fields map[string]float64) {
+	cashPaid, hasCash := fields["_absDividendsPaid"]
+	shares, hasShares := fields["WeightedAverageShares"]
+
+	if hasCash && hasShares && shares > 0 {
+		dps := cashPaid / shares
+		// Round to 2 decimal places.
+		dps = math.Round(dps*100) / 100
+		fields["DividendsPerBasicCommonShare"] = dps
+	}
 }
 
 // resolveSharesBasicAsOf returns the EntityCommonStockSharesOutstanding

@@ -305,9 +305,22 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			cf, err := FetchCompanyFacts(ctx, client, cik)
 			if err != nil {
 				processErrors++
+
 				log.Warn().Err(err).Int("cik", cik).Msg("error fetching companyfacts")
 
 				continue
+			}
+
+			// Enrich with extension facts from the actual filing documents.
+			// The companyfacts API only includes us-gaap and dei namespaces;
+			// company extension tags (e.g. msft:DepreciationAmortizationAndOther)
+			// are only available in the inline XBRL filings.
+			EnrichWithExtensionFacts(ctx, client, cik, cf)
+
+			// Apply filing cutoff if set — remove facts filed after the cutoff date.
+			// This must happen after enrichment so extension facts are also filtered.
+			if cutoff, ok := provider.FilingCutoffFromContext(ctx); ok {
+				cf.FilterByFilingDate(cutoff)
 			}
 
 			processCompany(cik, cf)
@@ -317,9 +330,15 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 			cf, err := ParseCompanyFacts(jsonData)
 			if err != nil {
 				processErrors++
+
 				log.Warn().Err(err).Int("cik", cik).Msg("error parsing companyfacts in backfill")
 
 				return nil
+			}
+
+			// Apply filing cutoff if set.
+			if cutoff, ok := provider.FilingCutoffFromContext(ctx); ok {
+				cf.FilterByFilingDate(cutoff)
 			}
 
 			processCompany(cik, cf)
@@ -575,6 +594,38 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			mrFields = arFields
 		} else {
 			mrFields = ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.MRFiledDate)
+
+			// Fill gaps in AR data from MR. Later filings sometimes add
+			// comparative values for XBRL concepts that were not present in
+			// the original filing (e.g. MSFT started reporting short-term
+			// debt proceeds separately in FY2025 and included FY2024
+			// comparatives). Sharadar's AR dimension includes such
+			// back-filled values, so we merge them to match.
+			filled := false
+
+			for k, v := range mrFields {
+				if _, ok := arFields[k]; !ok {
+					arFields[k] = v
+					filled = true
+				}
+			}
+
+			// Recompute derived fields if any gaps were filled. Only
+			// recompute fields that don't have FallbackTags, since those
+			// with FallbackTags may have been resolved from a tag that is
+			// more accurate than the formula (e.g. D&A resolved from a
+			// combined tag rather than individual components).
+			if filled {
+				for _, m := range FieldMappings {
+					if m.Type != MappingDerived || len(m.FallbackTags) > 0 {
+						continue
+					}
+
+					if val, ok := computeDerived(m, arFields); ok {
+						arFields[m.FieldName] = val
+					}
+				}
+			}
 		}
 
 		// Track all quarters regardless of since so TTM windows are complete.
@@ -635,9 +686,11 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		// Q1 or no prior quarter: no de-cumulation needed.
-		q.arEmit = q.arFields
-		q.mrEmit = q.mrFields
+		// Q1 or no prior quarter: no de-cumulation needed. Copy the maps
+		// so that later MR-only overrides (e.g. SharesBasic) don't leak
+		// into the AR emit maps when AR and MR share the same reference.
+		q.arEmit = copyFieldMap(q.arFields)
+		q.mrEmit = copyFieldMap(q.mrFields)
 	}
 
 	// Synthesize Q4 entries from 10-K annual data and preceding quarters.
@@ -698,6 +751,14 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		quarters = append(quarters, quarterData{})
 		copy(quarters[idx+1:], quarters[idx:])
 		quarters[idx] = q4
+	}
+
+	// Override DPS with cash-paid methodology for all quarters (including
+	// synthesized Q4). This must happen after de-cumulation and Q4 synthesis
+	// so _absDividendsPaid is the correct single-quarter cash amount.
+	for i := range quarters {
+		OverrideDPSFromCash(quarters[i].arEmit)
+		OverrideDPSFromCash(quarters[i].mrEmit)
 	}
 
 	// Override SharesBasic in mrEmit for MR dimensions. Sharadar's MR
@@ -765,6 +826,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// iteration).
 		a.arEmit = copyFieldMap(a.arFields)
 		a.mrEmit = copyFieldMap(a.mrFields)
+
+		// Override DPS with cash-paid methodology for annual data.
+		OverrideDPSFromCash(a.arEmit)
+		OverrideDPSFromCash(a.mrEmit)
 
 		// Strip stale fields from MR annual and recompute derived fields.
 		// This matches Sharadar's MR semantics: if a company stops reporting
@@ -964,8 +1029,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		for idx := range annuals {
 			if annuals[idx].period.PeriodEnd.Equal(q.period.PeriodEnd) {
-				matchingAR = annuals[idx].arFields
-				matchingMR = annuals[idx].mrFields
+				matchingAR = annuals[idx].arEmit
+				matchingMR = annuals[idx].mrEmit
 
 				break
 			}
