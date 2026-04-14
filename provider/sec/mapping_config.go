@@ -708,17 +708,31 @@ var FieldMappings = []FieldMapping{
 			"ProceedsFromStockPlans", // NVDA uses this instead of the above
 		},
 	},
-	// NetCashFlowCommon = −repurchases + proceeds. Sharadar NCFCOMMON:
-	// "net cash inflow (outflow) from common equity changes."
-	// NOTE: Some companies (NVDA FY2026+) started bundling tax withholding
-	// for share-based compensation into the stock repurchase section. This
-	// creates quarterly diffs where Sharadar includes it but we don't.
-	// Adding it globally breaks AAPL/MSFT where it's a standalone line.
+	// Tax withholding for share-based compensation: some companies (NVDA)
+	// bundle this into the stock repurchase section of the cash flow
+	// statement when they start filing it on 10-Q. RequireQuarterly gates
+	// this to only resolve when the tag appears on 10-Q, which naturally
+	// handles the temporal transition (NVDA FY2025 had it only on 10-K).
+	// For companies that always file it on 10-Q (AAPL, MSFT), the tag IS
+	// already embedded in PaymentsForRepurchaseOfCommonStock, so adding it
+	// would double-count. RequireIfQuarterly on AccruedLiabilitiesCurrent
+	// excludes those companies.
+	{
+		FieldName: "_taxWithholdingShareComp", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		XBRLTags:           []string{"PaymentsRelatedToTaxWithholdingForShareBasedCompensation"},
+	},
+	// NetCashFlowCommon = −repurchases − taxWithholding + proceeds.
+	// The _taxWithholdingShareComp operand only resolves for companies that
+	// bundle it (RequireQuarterly + RequireIfQuarterly gate). For annual
+	// dimensions (ARY/MRY), the sub-field is stripped before emission to
+	// prevent the 10-K value from being included (see emitFundamentals).
 	{
 		FieldName: "NetCashFlowCommon", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,
-		Operands:         []string{"_paymentsRepurchaseCommon", "_proceedsIssuanceCommon"},
-		Coefficients:     []float64{-1, 1},
+		Operands:         []string{"_paymentsRepurchaseCommon", "_proceedsIssuanceCommon", "_taxWithholdingShareComp"},
+		Coefficients:     []float64{-1, 1, -1},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowDebt derivation ---

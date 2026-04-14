@@ -899,6 +899,13 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			a.arEmit["SharesBasic"] = val
 		}
 
+		// Strip tax withholding from annual emit maps: Sharadar only
+		// includes it in quarterly NCFCOMMON when the company files it on
+		// 10-Q, not in the annual aggregation.
+		annualTWHStale := map[string]bool{"_taxWithholdingShareComp": true}
+		stripStaleAndRecompute(a.arEmit, annualTWHStale)
+		stripStaleAndRecompute(a.mrEmit, annualTWHStale)
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
