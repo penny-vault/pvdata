@@ -488,15 +488,23 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 
 // overrideNCFDebtResidual recomputes NetCashFlowDebt as the residual of
 // the financing section: debt = financing - common - dividend. This captures
-// small items (finance lease payments, debt issuance costs) that are not
-// separately tagged in XBRL but are included in the financing total.
+// items that are not separately tagged in XBRL but are included in the
+// financing total.
 //
-// Only applied when AccruedLiabilitiesCurrent is filed on 10-Q (NVDA),
-// indicating the company bundles financing items into broader categories.
-// For companies like AAPL that present debt cash flows as separate lines,
-// the direct XBRL-based computation is correct.
+// Applied in two cases:
+//  1. AccruedLiabilitiesCurrent is filed on 10-Q (NVDA) — the company bundles
+//     financing items into broader categories.
+//  2. AssetsCurrent is NOT filed on 10-Q (banks like JPM) — bank financing
+//     activities include deposits, fed funds, and repo agreements that aren't
+//     captured by the standard debt-proceeds/repayments tags.
+//
+// For companies like AAPL that present debt cash flows as separate lines
+// and DO file AssetsCurrent, the direct XBRL-based computation is correct.
 func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64) {
-	if !conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"}) {
+	isBank := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"})
+	bundlesFinancing := conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"})
+
+	if !isBank && !bundlesFinancing {
 		return
 	}
 
