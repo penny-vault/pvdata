@@ -466,7 +466,6 @@ var FieldMappings = []FieldMapping{
 		FieldName: "AccumulatedRetainedEarningsDeficit", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{"RetainedEarningsAccumulatedDeficit"},
 	},
-
 	// ==================== INCOME STATEMENT (flow) ====================
 
 	{
@@ -628,11 +627,19 @@ var FieldMappings = []FieldMapping{
 			"DiscontinuedOperationIncomeLossFromDiscontinuedOperationDuringPhaseOutPeriodNetOfTax",
 		},
 	},
+	// NetIncomeToNonControllingInterests: use the direct tag if available.
+	// Banks (JPM) don't report this tag; derive as ConsolidatedIncome -
+	// NetIncome - PreferredDividends. ConsolidatedIncome uses NetIncomeLoss
+	// (consolidated), while NetIncome uses the common-stockholder variant.
 	{
-		FieldName: "NetIncomeToNonControllingInterests", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{
+		FieldName: "NetIncomeToNonControllingInterests", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{
 			"NetIncomeLossAttributableToNoncontrollingInterest",
 		},
+		Op:               OpLinearCombination,
+		Operands:         []string{"ConsolidatedIncome", "NetIncome", "PreferredDividendsIncomeStatementImpact"},
+		Coefficients:     []float64{1, -1, -1},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "PreferredDividendsIncomeStatementImpact", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",

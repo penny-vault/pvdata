@@ -985,8 +985,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// Sharadar's quarterly NCFDEBT captures small items (e.g. finance
 		// lease payments) that aren't separately tagged in XBRL. The
 		// residual naturally picks them up when the other components match.
-		overrideNCFDebtResidual(cf, q.arEmit)
-		overrideNCFDebtResidual(cf, q.mrEmit)
+		overrideNCFDebtResidual(cf, q.arEmit, q.period.PeriodEnd, q.period.FormType)
+		overrideNCFDebtResidual(cf, q.mrEmit, q.period.PeriodEnd, q.period.FormType)
 
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",

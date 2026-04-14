@@ -500,7 +500,7 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 //
 // For companies like AAPL that present debt cash flows as separate lines
 // and DO file AssetsCurrent, the direct XBRL-based computation is correct.
-func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64) {
+func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time, formType string) {
 	isBank := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"})
 	bundlesFinancing := conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"})
 
@@ -527,6 +527,27 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64) {
 		if hasI {
 			capex, _ := fields["CapitalExpenditure"] // 0 when absent (banks)
 			fields["NetCashFlowInvest"] = investing - capex
+		}
+	}
+
+	// For banks, compute Investments as the balance sheet residual:
+	// TotalAssets - CashAndEquivalents - Receivables - PP&E - Intangibles - OtherAssets.
+	// This captures loans, securities, fed funds, and other invested assets.
+	if isBank {
+		totalAssets, hasTA := fields["TotalAssets"]
+
+		if hasTA {
+			cash, _ := fields["CashAndEquivalents"]
+			recv, _ := fields["Receivables"]
+			ppe, _ := fields["PropertyPlantAndEquipmentNet"]
+			intang, _ := fields["Intangibles"]
+			oa := 0.0
+
+			if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{"OtherAssets"}}, periodEnd, formType); ok {
+				oa = v
+			}
+
+			fields["Investments"] = totalAssets - cash - recv - ppe - intang - oa
 		}
 	}
 }
