@@ -86,21 +86,31 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 				}
 			}
 
-			// Prefer the fact with the latest filing date (most recent data).
-			// When filing dates are equal, prefer the shorter duration. SEC
-			// 10-Q filings report both single-quarter (~90 days) and YTD
-			// cumulative (Q2: ~180, Q3: ~270 days) facts for income statement
-			// items. Cash flow items only have YTD facts. By preferring the
-			// shortest duration among same-filing-date facts, we pick the
-			// single-quarter value when available and fall through to the
-			// YTD value when it's the only option.
-			if best == nil || f.Filed.After(best.Filed) {
+			// Prefer single-quarter facts over YTD cumulative regardless of
+			// filing date. Comparative filings from later periods often
+			// include only the cumulative value (not single-quarter), so
+			// preferring the latest filing date would lose the original
+			// single-quarter fact. Within the same duration category,
+			// prefer the latest filing date (most recent data).
+			if best == nil {
 				best = f
-			} else if f.Filed.Equal(best.Filed) && !f.Start.IsZero() && !best.Start.IsZero() {
+			} else {
 				fDays := f.End.Sub(f.Start).Hours() / 24
 				bestDays := best.End.Sub(best.Start).Hours() / 24
+				fIsQuarterly := !f.Start.IsZero() && fDays <= ytdThresholdDays
+				bestIsQuarterly := !best.Start.IsZero() && bestDays <= ytdThresholdDays
 
-				if fDays < bestDays {
+				switch {
+				case fIsQuarterly && !bestIsQuarterly:
+					// Single-quarter always wins over cumulative.
+					best = f
+				case !fIsQuarterly && bestIsQuarterly:
+					// Keep the single-quarter fact.
+				case f.Filed.After(best.Filed):
+					// Same duration category: prefer latest filing.
+					best = f
+				case f.Filed.Equal(best.Filed) && !f.Start.IsZero() && !best.Start.IsZero() && fDays < bestDays:
+					// Same filing date: prefer shorter duration.
 					best = f
 				}
 			}
