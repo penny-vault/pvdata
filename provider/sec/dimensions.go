@@ -521,7 +521,7 @@ func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
 // After de-cumulating direct fields, derived flow fields are recomputed from the
 // de-cumulated components. Metric-type derived fields (ratios) are then
 // recomputed from the updated flow/point-in-time values.
-func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEnd time.Time, formType string) map[string]float64 {
+func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPeriodEnd, periodEnd time.Time, formType string) map[string]float64 {
 	result := make(map[string]float64, len(current))
 	for k, v := range current {
 		result[k] = v
@@ -538,9 +538,27 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEn
 		}
 
 		currVal, hasCurr := current[m.FieldName]
+		if !hasCurr {
+			continue
+		}
+
+		// The prior map may hold a single-quarter value when
+		// ResolveDirect picked the shortest-duration fact. We need the
+		// prior's YTD cumulative for correct subtraction. Try
+		// ResolveLongestDuration first; fall back to the prior map.
 		priorVal, hasPrior := prior[m.FieldName]
 
-		if hasCurr && hasPrior {
+		if hasPrior && m.Type == MappingDirect {
+			if cumVal, ok := ResolveLongestDuration(cf, m, priorPeriodEnd, formType); ok {
+				if m.Negate {
+					cumVal = -cumVal
+				}
+
+				priorVal = cumVal
+			}
+		}
+
+		if hasPrior {
 			result[m.FieldName] = currVal - priorVal
 		}
 	}

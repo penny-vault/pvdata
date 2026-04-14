@@ -97,6 +97,14 @@ type FieldMapping struct {
 	// MSFT present contract liabilities as a separate line and do not
 	// file AccruedLiabilitiesCurrent.
 	ExcludeIfQuarterly []string
+
+	// RequireIfQuarterly gates resolution on a sentinel concept: the
+	// field is only resolved when ANY of the listed concepts appear on
+	// a recent 10-Q filing. This is used for cash flow items that some
+	// companies bundle into a parent line (and thus should be added to
+	// a derived formula) while others present as a standalone line (and
+	// should not be added to avoid double-counting).
+	RequireIfQuarterly []string
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -701,9 +709,11 @@ var FieldMappings = []FieldMapping{
 		},
 	},
 	// NetCashFlowCommon = −repurchases + proceeds. Sharadar NCFCOMMON:
-	// "net cash inflow (outflow) from common equity changes." MSFT reports
-	// both repurchases and proceeds from employee stock plans; the net
-	// captures both sides.
+	// "net cash inflow (outflow) from common equity changes."
+	// NOTE: Some companies (NVDA FY2026+) started bundling tax withholding
+	// for share-based compensation into the stock repurchase section. This
+	// creates quarterly diffs where Sharadar includes it but we don't.
+	// Adding it globally breaks AAPL/MSFT where it's a standalone line.
 	{
 		FieldName: "NetCashFlowCommon", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,

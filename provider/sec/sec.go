@@ -679,8 +679,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			if gapDays <= maxQuarterGapDays {
 				// Consecutive quarter in same fiscal year: de-cumulate using
 				// the prior quarter's ORIGINAL (pre-de-cumulation) YTD values.
-				q.arEmit = DecumulateYTD(cf, q.arFields, prev.arFields, q.period.PeriodEnd, q.period.FormType)
-				q.mrEmit = DecumulateYTD(cf, q.mrFields, prev.mrFields, q.period.PeriodEnd, q.period.FormType)
+				q.arEmit = DecumulateYTD(cf, q.arFields, prev.arFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType)
+				q.mrEmit = DecumulateYTD(cf, q.mrFields, prev.mrFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType)
 
 				continue
 			}

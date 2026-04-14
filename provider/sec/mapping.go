@@ -295,6 +295,12 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 			continue
 		}
 
+		// RequireIfQuarterly: only resolve when a sentinel concept is
+		// filed on 10-Q. The inverse of ExcludeIfQuarterly.
+		if len(m.RequireIfQuarterly) > 0 && !conceptFiledQuarterly(cf, m.RequireIfQuarterly) {
+			continue
+		}
+
 		switch m.Type {
 		case MappingDirect:
 			if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {
