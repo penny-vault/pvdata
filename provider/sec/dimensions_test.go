@@ -704,6 +704,9 @@ var _ = Describe("Dimensions", func() {
 				"_accruedIncomeTaxesNoncurrent":      true,
 				"_longTermDebtNoncurrent":            true,
 				"_operatingLeaseLiabilityNoncurrent": true,
+				"_paymentsInvestEquity":              true,
+				"_proceedsInvestEquity":              true,
+				"_deferredTaxAssets":                 true,
 			}
 
 			var missing []string

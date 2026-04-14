@@ -225,22 +225,26 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},
 		OptionalOperands: true,
 	},
+	// TaxAssets: try prepaid/receivable taxes first (FallbackTags on the
+	// derived wrapper). If none resolve, fall through to _deferredTaxAssets
+	// which is gated by RequireQuarterly — only companies that present
+	// deferred tax assets on 10-Q (NVDA) get the value; companies that
+	// only disclose in 10-K notes (AAPL) keep TaxAssets=0.
 	{
-		FieldName: "TaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{
+		FieldName: "_deferredTaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"DeferredIncomeTaxAssetsNet"},
+	},
+	{
+		FieldName: "TaxAssets", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{
 			"IncomeTaxesReceivable",
 			"IncomeTaxReceivable",
 			"PrepaidTaxes",
 		},
-	},
-	// Some companies (NVDA) present deferred tax assets as a separate
-	// balance sheet line item on 10-Q; Sharadar picks this up as TaxAssets.
-	// Companies that only disclose it in 10-K notes (AAPL) have TaxAssets=0.
-	// RequireQuarterly ensures we only add it for companies that file on 10-Q.
-	{
-		FieldName: "TaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		RequireQuarterly: true,
-		XBRLTags:         []string{"DeferredIncomeTaxAssetsNet"},
+		Op:               OpAdd,
+		Operands:         []string{"_deferredTaxAssets"},
+		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for TaxLiabilities derivation ---
 	{
