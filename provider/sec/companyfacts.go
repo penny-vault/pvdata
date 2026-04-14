@@ -389,7 +389,12 @@ done:
 	}
 
 	// Log extension facts found for key concepts.
-	for _, key := range []string{"DepreciationAmortizationAndOther"} {
+	for _, key := range []string{
+		"DepreciationAmortizationAndOther",
+		"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets",
+		"AccruedInterestAndAccountsReceivable",
+		"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+	} {
 		if facts, ok := cf.Facts[key]; ok {
 			for _, f := range facts {
 				log.Debug().Str("concept", key).Time("end", f.End).Time("start", f.Start).Time("filed", f.Filed).Str("form", f.Form).Float64("val", f.Val).Msg("extension fact")
