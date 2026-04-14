@@ -87,6 +87,24 @@ type FieldMapping struct {
 	// (supplemental note). Sharadar includes lease liabilities in debt for
 	// MSFT but not AAPL, matching this quarterly-availability signal.
 	RequireQuarterly bool
+
+	// ExcludeIfQuarterly is the inverse of RequireQuarterly: skip this
+	// field entirely if ANY of the listed sentinel concepts appear on a
+	// recent 10-Q filing. This detects when a concept is a sub-component
+	// of a broader balance sheet line item rather than a separate line.
+	// For example, NVDA files AccruedLiabilitiesCurrent (which bundles
+	// contract liabilities) so deferred_revenue should be 0; AAPL and
+	// MSFT present contract liabilities as a separate line and do not
+	// file AccruedLiabilitiesCurrent.
+	ExcludeIfQuarterly []string
+
+	// RequireIfQuarterly gates resolution on a sentinel concept: the
+	// field is only resolved when ANY of the listed concepts appear on
+	// a recent 10-Q filing. This is used for cash flow items that some
+	// companies bundle into a parent line (and thus should be added to
+	// a derived formula) while others present as a standalone line (and
+	// should not be added to avoid double-counting).
+	RequireIfQuarterly []string
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -225,13 +243,26 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},
 		OptionalOperands: true,
 	},
+	// TaxAssets: try prepaid/receivable taxes first (FallbackTags on the
+	// derived wrapper). If none resolve, fall through to _deferredTaxAssets
+	// which is gated by RequireQuarterly — only companies that present
+	// deferred tax assets on 10-Q (NVDA) get the value; companies that
+	// only disclose in 10-K notes (AAPL) keep TaxAssets=0.
 	{
-		FieldName: "TaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{
+		FieldName: "_deferredTaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"DeferredIncomeTaxAssetsNet"},
+	},
+	{
+		FieldName: "TaxAssets", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{
 			"IncomeTaxesReceivable",
 			"IncomeTaxReceivable",
 			"PrepaidTaxes",
 		},
+		Op:               OpAdd,
+		Operands:         []string{"_deferredTaxAssets"},
+		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for TaxLiabilities derivation ---
 	{
@@ -257,9 +288,13 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "TaxLiabilities", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:               OpAdd,
-		Operands:         []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
-		OptionalOperands: true,
+		// When AccruedLiabilitiesCurrent is filed on 10-Q, the company bundles
+		// tax liabilities into broader accrued/other line items (NVDA). Only
+		// resolve when tax items are separate balance sheet lines (MSFT).
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		Op:                 OpAdd,
+		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
+		OptionalOperands:   true,
 	},
 	{
 		FieldName: "ShortTermDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -310,12 +345,19 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "TotalDebt", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:       OpAdd,
-		Operands: []string{"DebtCurrent", "DebtNonCurrent"},
+		Op:               OpAdd,
+		Operands:         []string{"DebtCurrent", "DebtNonCurrent"},
+		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for DeferredRevenue derivation ---
+	// ExcludeIfQuarterly: when AccruedLiabilitiesCurrent is filed on 10-Q,
+	// contract liabilities are a sub-component of that broader line item
+	// (NVDA), not a separate balance sheet line. Sharadar reports 0 in
+	// that case. AAPL and MSFT present contract liabilities as their own
+	// line and do not file AccruedLiabilitiesCurrent.
 	{
 		FieldName: "_deferredRevenueCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
 		XBRLTags: []string{
 			"DeferredRevenueCurrent",
 			"ContractWithCustomerLiabilityCurrent",
@@ -323,6 +365,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_deferredRevenueNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
 		XBRLTags: []string{
 			"DeferredRevenueNoncurrent",
 			"ContractWithCustomerLiabilityNoncurrent",
@@ -334,10 +377,11 @@ var FieldMappings = []FieldMapping{
 	// tag), OptionalOperands yields just the current value.
 	{
 		FieldName: "DeferredRevenue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"DeferredRevenue"},
-		Op:               OpAdd,
-		Operands:         []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
-		OptionalOperands: true,
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		FallbackTags:       []string{"DeferredRevenue"},
+		Op:                 OpAdd,
+		Operands:           []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
+		OptionalOperands:   true,
 	},
 	{
 		FieldName: "TotalLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -661,17 +705,34 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"ProceedsFromIssuanceOfCommonStock",
 			"ProceedsFromStockOptionsExercised",
+			"ProceedsFromStockPlans", // NVDA uses this instead of the above
 		},
 	},
-	// NetCashFlowCommon = −repurchases + proceeds. Sharadar NCFCOMMON:
-	// "net cash inflow (outflow) from common equity changes." MSFT reports
-	// both repurchases and proceeds from employee stock plans; the net
-	// captures both sides.
+	// Tax withholding for share-based compensation: some companies (NVDA)
+	// bundle this into the stock repurchase section of the cash flow
+	// statement when they start filing it on 10-Q. RequireQuarterly gates
+	// this to only resolve when the tag appears on 10-Q, which naturally
+	// handles the temporal transition (NVDA FY2025 had it only on 10-K).
+	// For companies that always file it on 10-Q (AAPL, MSFT), the tag IS
+	// already embedded in PaymentsForRepurchaseOfCommonStock, so adding it
+	// would double-count. RequireIfQuarterly on AccruedLiabilitiesCurrent
+	// excludes those companies.
+	{
+		FieldName: "_taxWithholdingShareComp", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		XBRLTags:           []string{"PaymentsRelatedToTaxWithholdingForShareBasedCompensation"},
+	},
+	// NetCashFlowCommon = −repurchases − taxWithholding + proceeds.
+	// The _taxWithholdingShareComp operand only resolves for companies that
+	// bundle it (RequireQuarterly + RequireIfQuarterly gate). For annual
+	// dimensions (ARY/MRY), the sub-field is stripped before emission to
+	// prevent the 10-K value from being included (see emitFundamentals).
 	{
 		FieldName: "NetCashFlowCommon", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,
-		Operands:         []string{"_paymentsRepurchaseCommon", "_proceedsIssuanceCommon"},
-		Coefficients:     []float64{-1, 1},
+		Operands:         []string{"_paymentsRepurchaseCommon", "_proceedsIssuanceCommon", "_taxWithholdingShareComp"},
+		Coefficients:     []float64{-1, 1, -1},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowDebt derivation ---
@@ -726,6 +787,16 @@ var FieldMappings = []FieldMapping{
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
 		},
 	},
+	// NVDA reports equity security purchases/sales separately from debt
+	// securities. Sharadar includes both in NetCashFlowInvest.
+	{
+		FieldName: "_paymentsInvestEquity", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsToAcquireEquitySecuritiesFvNi"},
+	},
+	{
+		FieldName: "_proceedsInvestEquity", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromSaleOfEquitySecuritiesFvNi"},
+	},
 	// Some companies report a combined maturities+sales tag; others report them
 	// separately. Split into two sub-fields and sum, with the combined tag as a
 	// fallback on _proceedsInvest so both cases are handled.
@@ -763,8 +834,8 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "NetCashFlowInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,
-		Operands:         []string{"_paymentsInvest", "_proceedsInvest"},
-		Coefficients:     []float64{-1, 1},
+		Operands:         []string{"_paymentsInvest", "_proceedsInvest", "_paymentsInvestEquity", "_proceedsInvestEquity"},
+		Coefficients:     []float64{-1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	{

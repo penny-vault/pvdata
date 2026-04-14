@@ -196,15 +196,22 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 //     (3/31, 6/30, 9/30, 12/31). For example, 2018-07-24 maps to 2018-06-30 (closer
 //     to the previous quarter end than the next), and 2018-09-29 maps to 2018-09-30
 //     (Apple's fiscal Q-end). Ties are broken by snapping forward.
-//   - Annual (10-K, ARY/MRY): always snaps to the calendar year end (12/31), so a
-//     fiscal year ending 2015-09-26 (Apple's FY2015) is reported as 2015-12-31.
+//   - Annual (10-K, ARY/MRY): snaps to 12/31 of the year determined by the nearest
+//     calendar quarter end. This handles companies whose fiscal year ends in January
+//     (e.g., NVDA FY2025 ending 2025-01-26 snaps to 2024-12-31 because Jan 26 is
+//     nearest to Q4 of the prior year).
 func NormalizeEventDate(periodEnd time.Time, formType string) time.Time {
 	if formType == "10-K" {
-		return time.Date(periodEnd.Year(), 12, 31, 0, 0, 0, 0, time.UTC)
+		qe := nearestQuarterEnd(periodEnd)
+		return time.Date(qe.Year(), 12, 31, 0, 0, 0, 0, time.UTC)
 	}
 
-	// Quarterly: snap to the nearest calendar quarter end. Build the candidate
-	// quarter ends bracketing the period end and pick whichever is closer.
+	return nearestQuarterEnd(periodEnd)
+}
+
+// nearestQuarterEnd snaps a date to the nearest calendar quarter end
+// (3/31, 6/30, 9/30, 12/31). Ties are broken by snapping forward.
+func nearestQuarterEnd(periodEnd time.Time) time.Time {
 	candidates := quarterEndCandidates(periodEnd)
 
 	// Truncate the period end to a date so the comparison is purely calendar-based.
@@ -514,7 +521,7 @@ func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
 // After de-cumulating direct fields, derived flow fields are recomputed from the
 // de-cumulated components. Metric-type derived fields (ratios) are then
 // recomputed from the updated flow/point-in-time values.
-func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEnd time.Time, formType string) map[string]float64 {
+func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPeriodEnd, periodEnd time.Time, formType string) map[string]float64 {
 	result := make(map[string]float64, len(current))
 	for k, v := range current {
 		result[k] = v
@@ -531,9 +538,27 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, periodEn
 		}
 
 		currVal, hasCurr := current[m.FieldName]
+		if !hasCurr {
+			continue
+		}
+
+		// The prior map may hold a single-quarter value when
+		// ResolveDirect picked the shortest-duration fact. We need the
+		// prior's YTD cumulative for correct subtraction. Try
+		// ResolveLongestDuration first; fall back to the prior map.
 		priorVal, hasPrior := prior[m.FieldName]
 
-		if hasCurr && hasPrior {
+		if hasPrior && m.Type == MappingDirect {
+			if cumVal, ok := ResolveLongestDuration(cf, m, priorPeriodEnd, formType); ok {
+				if m.Negate {
+					cumVal = -cumVal
+				}
+
+				priorVal = cumVal
+			}
+		}
+
+		if hasPrior {
 			result[m.FieldName] = currVal - priorVal
 		}
 	}

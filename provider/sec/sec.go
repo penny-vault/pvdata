@@ -679,8 +679,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			if gapDays <= maxQuarterGapDays {
 				// Consecutive quarter in same fiscal year: de-cumulate using
 				// the prior quarter's ORIGINAL (pre-de-cumulation) YTD values.
-				q.arEmit = DecumulateYTD(cf, q.arFields, prev.arFields, q.period.PeriodEnd, q.period.FormType)
-				q.mrEmit = DecumulateYTD(cf, q.mrFields, prev.mrFields, q.period.PeriodEnd, q.period.FormType)
+				q.arEmit = DecumulateYTD(cf, q.arFields, prev.arFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType)
+				q.mrEmit = DecumulateYTD(cf, q.mrFields, prev.mrFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType)
 
 				continue
 			}
@@ -770,6 +770,19 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	for i := range quarters {
 		if val, ok := resolveSharesBasicAsOf(cf, quarters[i].period.PeriodEnd); ok {
 			quarters[i].mrEmit["SharesBasic"] = val
+		}
+	}
+
+	// Override SharesBasic in arEmit for AR dimensions. The standard
+	// ResolveDirect matches EntityCommonStockSharesOutstanding by normalized
+	// date, which fails for companies whose DEI end dates are in a different
+	// quarter than the fiscal period end (e.g., NVDA's January FY has DEI
+	// dates in February that normalize to the next quarter). Use the same
+	// filing-date resolution with the AR filing date to pick the DEI fact
+	// from the actual filing.
+	for i := range quarters {
+		if val, ok := resolveSharesBasicAsOf(cf, quarters[i].period.ARFiledDate); ok {
+			quarters[i].arEmit["SharesBasic"] = val
 		}
 	}
 
@@ -881,7 +894,18 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			continue
 		}
 
-		// ARY
+		// ARY — override SharesBasic for AR semantics (see quarterly override above).
+		if val, ok := resolveSharesBasicAsOf(cf, a.period.ARFiledDate); ok {
+			a.arEmit["SharesBasic"] = val
+		}
+
+		// Strip tax withholding from annual emit maps: Sharadar only
+		// includes it in quarterly NCFCOMMON when the company files it on
+		// 10-Q, not in the annual aggregation.
+		annualTWHStale := map[string]bool{"_taxWithholdingShareComp": true}
+		stripStaleAndRecompute(a.arEmit, annualTWHStale)
+		stripStaleAndRecompute(a.mrEmit, annualTWHStale)
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
@@ -932,6 +956,14 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if !since.IsZero() && q.period.MRFiledDate.Before(since) {
 			continue
 		}
+
+		// Override NetCashFlowDebt for quarterly dimensions as the residual
+		// of financing cash flow: debt = financing - common - dividend.
+		// Sharadar's quarterly NCFDEBT captures small items (e.g. finance
+		// lease payments) that aren't separately tagged in XBRL. The
+		// residual naturally picks them up when the other components match.
+		overrideNCFDebtResidual(cf, q.arEmit)
+		overrideNCFDebtResidual(cf, q.mrEmit)
 
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",

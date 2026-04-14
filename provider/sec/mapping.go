@@ -86,21 +86,31 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 				}
 			}
 
-			// Prefer the fact with the latest filing date (most recent data).
-			// When filing dates are equal, prefer the shorter duration. SEC
-			// 10-Q filings report both single-quarter (~90 days) and YTD
-			// cumulative (Q2: ~180, Q3: ~270 days) facts for income statement
-			// items. Cash flow items only have YTD facts. By preferring the
-			// shortest duration among same-filing-date facts, we pick the
-			// single-quarter value when available and fall through to the
-			// YTD value when it's the only option.
-			if best == nil || f.Filed.After(best.Filed) {
+			// Prefer single-quarter facts over YTD cumulative regardless of
+			// filing date. Comparative filings from later periods often
+			// include only the cumulative value (not single-quarter), so
+			// preferring the latest filing date would lose the original
+			// single-quarter fact. Within the same duration category,
+			// prefer the latest filing date (most recent data).
+			if best == nil {
 				best = f
-			} else if f.Filed.Equal(best.Filed) && !f.Start.IsZero() && !best.Start.IsZero() {
+			} else {
 				fDays := f.End.Sub(f.Start).Hours() / 24
 				bestDays := best.End.Sub(best.Start).Hours() / 24
+				fIsQuarterly := !f.Start.IsZero() && fDays <= ytdThresholdDays
+				bestIsQuarterly := !best.Start.IsZero() && bestDays <= ytdThresholdDays
 
-				if fDays < bestDays {
+				switch {
+				case fIsQuarterly && !bestIsQuarterly:
+					// Single-quarter always wins over cumulative.
+					best = f
+				case !fIsQuarterly && bestIsQuarterly:
+					// Keep the single-quarter fact.
+				case f.Filed.After(best.Filed):
+					// Same duration category: prefer latest filing.
+					best = f
+				case f.Filed.Equal(best.Filed) && !f.Start.IsZero() && !best.Start.IsZero() && fDays < bestDays:
+					// Same filing date: prefer shorter duration.
 					best = f
 				}
 			}
@@ -288,6 +298,19 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 			continue
 		}
 
+		// ExcludeIfQuarterly: skip this field if a sentinel concept is
+		// filed on 10-Q, indicating the field's tags are sub-components
+		// of a broader line item rather than separate balance sheet lines.
+		if len(m.ExcludeIfQuarterly) > 0 && conceptFiledQuarterly(cf, m.ExcludeIfQuarterly) {
+			continue
+		}
+
+		// RequireIfQuarterly: only resolve when a sentinel concept is
+		// filed on 10-Q. The inverse of ExcludeIfQuarterly.
+		if len(m.RequireIfQuarterly) > 0 && !conceptFiledQuarterly(cf, m.RequireIfQuarterly) {
+			continue
+		}
+
 		switch m.Type {
 		case MappingDirect:
 			if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {
@@ -461,4 +484,27 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 	}
 
 	return best.Val, true
+}
+
+// overrideNCFDebtResidual recomputes NetCashFlowDebt as the residual of
+// the financing section: debt = financing - common - dividend. This captures
+// small items (finance lease payments, debt issuance costs) that are not
+// separately tagged in XBRL but are included in the financing total.
+//
+// Only applied when AccruedLiabilitiesCurrent is filed on 10-Q (NVDA),
+// indicating the company bundles financing items into broader categories.
+// For companies like AAPL that present debt cash flows as separate lines,
+// the direct XBRL-based computation is correct.
+func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"}) {
+		return
+	}
+
+	financing, hasF := fields["NetCashFlowFromFinancing"]
+	common, hasC := fields["NetCashFlowCommon"]
+	dividend, hasD := fields["NetCashFlowDividend"]
+
+	if hasF && hasC && hasD {
+		fields["NetCashFlowDebt"] = financing - common - dividend
+	}
 }

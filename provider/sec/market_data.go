@@ -186,7 +186,9 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 				f.PE1 = f.Price / f.EPS
 			}
 
-			if f.SalesPerShare != 0 {
+			if f.Revenues != 0 && f.WeightedAverageShares != 0 {
+				f.PS1 = f.Price / (float64(f.Revenues) / float64(f.WeightedAverageShares))
+			} else if f.SalesPerShare != 0 {
 				f.PS1 = f.Price / f.SalesPerShare
 			}
 
