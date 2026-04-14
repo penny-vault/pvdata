@@ -288,6 +288,13 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 			continue
 		}
 
+		// ExcludeIfQuarterly: skip this field if a sentinel concept is
+		// filed on 10-Q, indicating the field's tags are sub-components
+		// of a broader line item rather than separate balance sheet lines.
+		if len(m.ExcludeIfQuarterly) > 0 && conceptFiledQuarterly(cf, m.ExcludeIfQuarterly) {
+			continue
+		}
+
 		switch m.Type {
 		case MappingDirect:
 			if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {

@@ -87,6 +87,16 @@ type FieldMapping struct {
 	// (supplemental note). Sharadar includes lease liabilities in debt for
 	// MSFT but not AAPL, matching this quarterly-availability signal.
 	RequireQuarterly bool
+
+	// ExcludeIfQuarterly is the inverse of RequireQuarterly: skip this
+	// field entirely if ANY of the listed sentinel concepts appear on a
+	// recent 10-Q filing. This detects when a concept is a sub-component
+	// of a broader balance sheet line item rather than a separate line.
+	// For example, NVDA files AccruedLiabilitiesCurrent (which bundles
+	// contract liabilities) so deferred_revenue should be 0; AAPL and
+	// MSFT present contract liabilities as a separate line and do not
+	// file AccruedLiabilitiesCurrent.
+	ExcludeIfQuarterly []string
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -270,9 +280,13 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "TaxLiabilities", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:               OpAdd,
-		Operands:         []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
-		OptionalOperands: true,
+		// When AccruedLiabilitiesCurrent is filed on 10-Q, the company bundles
+		// tax liabilities into broader accrued/other line items (NVDA). Only
+		// resolve when tax items are separate balance sheet lines (MSFT).
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		Op:                 OpAdd,
+		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
+		OptionalOperands:   true,
 	},
 	{
 		FieldName: "ShortTermDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -328,8 +342,14 @@ var FieldMappings = []FieldMapping{
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for DeferredRevenue derivation ---
+	// ExcludeIfQuarterly: when AccruedLiabilitiesCurrent is filed on 10-Q,
+	// contract liabilities are a sub-component of that broader line item
+	// (NVDA), not a separate balance sheet line. Sharadar reports 0 in
+	// that case. AAPL and MSFT present contract liabilities as their own
+	// line and do not file AccruedLiabilitiesCurrent.
 	{
 		FieldName: "_deferredRevenueCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
 		XBRLTags: []string{
 			"DeferredRevenueCurrent",
 			"ContractWithCustomerLiabilityCurrent",
@@ -337,6 +357,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_deferredRevenueNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
 		XBRLTags: []string{
 			"DeferredRevenueNoncurrent",
 			"ContractWithCustomerLiabilityNoncurrent",
@@ -348,10 +369,11 @@ var FieldMappings = []FieldMapping{
 	// tag), OptionalOperands yields just the current value.
 	{
 		FieldName: "DeferredRevenue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"DeferredRevenue"},
-		Op:               OpAdd,
-		Operands:         []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
-		OptionalOperands: true,
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		FallbackTags:       []string{"DeferredRevenue"},
+		Op:                 OpAdd,
+		Operands:           []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
+		OptionalOperands:   true,
 	},
 	{
 		FieldName: "TotalLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
