@@ -671,6 +671,7 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"ProceedsFromIssuanceOfCommonStock",
 			"ProceedsFromStockOptionsExercised",
+			"ProceedsFromStockPlans", // NVDA uses this instead of the above
 		},
 	},
 	// NetCashFlowCommon = −repurchases + proceeds. Sharadar NCFCOMMON:
@@ -736,6 +737,16 @@ var FieldMappings = []FieldMapping{
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
 		},
 	},
+	// NVDA reports equity security purchases/sales separately from debt
+	// securities. Sharadar includes both in NetCashFlowInvest.
+	{
+		FieldName: "_paymentsInvestEquity", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsToAcquireEquitySecuritiesFvNi"},
+	},
+	{
+		FieldName: "_proceedsInvestEquity", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromSaleOfEquitySecuritiesFvNi"},
+	},
 	// Some companies report a combined maturities+sales tag; others report them
 	// separately. Split into two sub-fields and sum, with the combined tag as a
 	// fallback on _proceedsInvest so both cases are handled.
@@ -773,8 +784,8 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "NetCashFlowInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,
-		Operands:         []string{"_paymentsInvest", "_proceedsInvest"},
-		Coefficients:     []float64{-1, 1},
+		Operands:         []string{"_paymentsInvest", "_proceedsInvest", "_paymentsInvestEquity", "_proceedsInvestEquity"},
+		Coefficients:     []float64{-1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	{
