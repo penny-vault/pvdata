@@ -515,4 +515,18 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64) {
 	if hasF && hasC && hasD {
 		fields["NetCashFlowDebt"] = financing - common - dividend
 	}
+
+	// For banks, also recompute NetCashFlowInvest as the residual of the
+	// investing section: invest = total_investing - capex. Bank investing
+	// activities include loan originations, fed funds, and repo transactions
+	// that standard investment-security tags don't capture. Business
+	// acquisitions are already part of the investing total and are tracked
+	// separately as NetCashFlowBusiness.
+	if isBank {
+		investing, hasI := fields["NetCashFlowFromInvesting"]
+		if hasI {
+			capex, _ := fields["CapitalExpenditure"] // 0 when absent (banks)
+			fields["NetCashFlowInvest"] = investing - capex
+		}
+	}
 }
