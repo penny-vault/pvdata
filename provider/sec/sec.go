@@ -773,6 +773,19 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 	}
 
+	// Override SharesBasic in arEmit for AR dimensions. The standard
+	// ResolveDirect matches EntityCommonStockSharesOutstanding by normalized
+	// date, which fails for companies whose DEI end dates are in a different
+	// quarter than the fiscal period end (e.g., NVDA's January FY has DEI
+	// dates in February that normalize to the next quarter). Use the same
+	// filing-date resolution with the AR filing date to pick the DEI fact
+	// from the actual filing.
+	for i := range quarters {
+		if val, ok := resolveSharesBasicAsOf(cf, quarters[i].period.ARFiledDate); ok {
+			quarters[i].arEmit["SharesBasic"] = val
+		}
+	}
+
 	// Strip stale fields from MR quarterly emit maps and recompute derived
 	// fields. This must happen before TTM computation so that trailing sums
 	// use the corrected MR values.
@@ -881,7 +894,11 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			continue
 		}
 
-		// ARY
+		// ARY — override SharesBasic for AR semantics (see quarterly override above).
+		if val, ok := resolveSharesBasicAsOf(cf, a.period.ARFiledDate); ok {
+			a.arEmit["SharesBasic"] = val
+		}
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
