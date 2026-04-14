@@ -548,20 +548,13 @@ var FieldMappings = []FieldMapping{
 	// older filings, but GrossProfit and OperatingIncome are always present.
 	// Banks (JPM) report NoninterestExpense which maps to Sharadar OpEx.
 	// Must come AFTER OperatingIncome so the dependency is resolved first.
+	// For banks that don't report OperatingIncomeLoss, OperatingIncome is
+	// recomputed as GrossProfit - OperatingExpenses in overrideNCFDebtResidual.
 	{
 		FieldName: "OperatingExpenses", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{"OperatingExpenses", "CostsAndExpenses", "NoninterestExpense"},
 		Op:           OpSubtract,
 		Operands:     []string{"GrossProfit", "OperatingIncome"},
-	},
-	// For companies that don't report OperatingIncomeLoss (e.g. banks),
-	// recompute OperatingIncome as GrossProfit − OperatingExpenses. For
-	// non-banks this is mathematically equivalent to the direct-tag value
-	// since OperatingExpenses = GrossProfit − OperatingIncome above.
-	{
-		FieldName: "OperatingIncome", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:       OpSubtract,
-		Operands: []string{"GrossProfit", "OperatingExpenses"},
 	},
 	{
 		FieldName: "InterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",

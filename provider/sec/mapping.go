@@ -516,6 +516,20 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		fields["NetCashFlowDebt"] = financing - common - dividend
 	}
 
+	// For banks, derive OperatingIncome = GrossProfit - OperatingExpenses
+	// when OperatingIncomeLoss isn't available. OperatingExpenses resolves
+	// from NoninterestExpense FallbackTag, and GrossProfit = Revenues.
+	if isBank {
+		if _, hasOI := fields["OperatingIncome"]; !hasOI {
+			gp, hasGP := fields["GrossProfit"]
+			opex, hasOE := fields["OperatingExpenses"]
+
+			if hasGP && hasOE {
+				fields["OperatingIncome"] = gp - opex
+			}
+		}
+	}
+
 	// For banks, also recompute NetCashFlowInvest as the residual of the
 	// investing section: invest = total_investing - capex. Bank investing
 	// activities include loan originations, fed funds, and repo transactions
