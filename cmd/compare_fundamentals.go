@@ -260,6 +260,7 @@ type rawCompareFlags struct {
 	format         string
 	output         string
 	excludeForeign bool
+	groupBy        string
 }
 
 type compareOptions struct {
@@ -272,19 +273,30 @@ type compareOptions struct {
 	absTol     float64
 	format     string
 	output     string
+	groupBy    string
 }
 
 func resolveCompareOptions(raw rawCompareFlags) (compareOptions, error) {
+	groupBy := raw.groupBy
+	if groupBy == "" {
+		groupBy = "ticker"
+	}
+
 	opts := compareOptions{
 		tickers: raw.tickers,
 		relTol:  raw.relTol,
 		absTol:  raw.absTol,
 		format:  raw.format,
 		output:  raw.output,
+		groupBy: groupBy,
 	}
 
 	if raw.format != "text" && raw.format != "csv" {
 		return compareOptions{}, fmt.Errorf("invalid --format %q: must be text or csv", raw.format)
+	}
+
+	if groupBy != "ticker" && groupBy != "field" {
+		return compareOptions{}, fmt.Errorf("invalid --group-by %q: must be ticker or field", raw.groupBy)
 	}
 
 	if raw.since != "" {
@@ -637,14 +649,16 @@ type diffWriter interface {
 }
 
 // mdDiffWriter buffers all diff records and writes them as markdown tables
-// grouped by ticker / composite FIGI on Close.
+// grouped by ticker / composite FIGI (or by field if groupBy == "field") on
+// Close.
 type mdDiffWriter struct {
-	w    io.Writer
-	recs []diffRecord
+	w       io.Writer
+	recs    []diffRecord
+	groupBy string
 }
 
-func newMDDiffWriter(w io.Writer) *mdDiffWriter {
-	return &mdDiffWriter{w: w}
+func newMDDiffWriter(w io.Writer, groupBy string) *mdDiffWriter {
+	return &mdDiffWriter{w: w, groupBy: groupBy}
 }
 
 func (m *mdDiffWriter) Write(rec diffRecord) error {
@@ -653,6 +667,23 @@ func (m *mdDiffWriter) Write(rec diffRecord) error {
 }
 
 func (m *mdDiffWriter) Close() error {
+	var err error
+	if m.groupBy == "field" {
+		err = m.writeGroupedByField()
+	} else {
+		err = m.writeGroupedByTicker()
+	}
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(m.w, "\n**Total diffs: %d**\n", len(m.recs))
+
+	return nil
+}
+
+func (m *mdDiffWriter) writeGroupedByTicker() error {
 	// Group records by (ticker, compositeFigi).
 	type groupKey struct{ ticker, figi string }
 
@@ -727,7 +758,103 @@ func (m *mdDiffWriter) Close() error {
 		}
 	}
 
-	fmt.Fprintf(m.w, "\n**Total diffs: %d**\n", len(m.recs))
+	return nil
+}
+
+func (m *mdDiffWriter) writeGroupedByField() error {
+	// Missing-row records have no field; emit them under a synthetic group.
+	const missingGroup = ""
+
+	groups := make(map[string][]diffRecord)
+
+	var order []string
+
+	for _, r := range m.recs {
+		field := r.field
+		if r.kind != diffField {
+			field = missingGroup
+		}
+
+		if _, ok := groups[field]; !ok {
+			order = append(order, field)
+		}
+
+		groups[field] = append(groups[field], r)
+	}
+
+	sort.Slice(order, func(i, j int) bool {
+		// Put missing-row group last so it doesn't crowd the real fields.
+		if order[i] == missingGroup {
+			return false
+		}
+
+		if order[j] == missingGroup {
+			return true
+		}
+
+		return order[i] < order[j]
+	})
+
+	for i, field := range order {
+		if i > 0 {
+			fmt.Fprintln(m.w)
+		}
+
+		recs := groups[field]
+
+		sort.SliceStable(recs, func(i, j int) bool {
+			if recs[i].ticker != recs[j].ticker {
+				return recs[i].ticker < recs[j].ticker
+			}
+
+			if !recs[i].dateKey.Equal(recs[j].dateKey) {
+				return recs[i].dateKey.Before(recs[j].dateKey)
+			}
+
+			return recs[i].dimension < recs[j].dimension
+		})
+
+		if field == missingGroup {
+			fmt.Fprintf(m.w, "## *(missing rows)*\n\n")
+		} else {
+			fmt.Fprintf(m.w, "## %s\n\n", field)
+		}
+
+		fmt.Fprintln(m.w, "| Ticker | Date Key | Dimension | SEC | Sharadar | Diff % |")
+		fmt.Fprintln(m.w, "|--------|----------|-----------|----:|--------:|-------:|")
+
+		prevTicker := ""
+
+		for j, r := range recs {
+			// Insert a separator row between ticker groups.
+			if j > 0 && r.ticker != prevTicker {
+				fmt.Fprintln(m.w, "| | | | | | |")
+			}
+
+			displayTicker := r.ticker
+			if r.ticker == prevTicker {
+				displayTicker = ""
+			}
+
+			switch r.kind {
+			case diffField:
+				_, relDiff := diffStats(r.secValue, r.sharadarValue)
+				diffPct := formatDiffPercent(relDiff)
+				fmt.Fprintf(m.w, "| %s | %s | %s | %s | %s | %s |\n",
+					displayTicker, r.dateKey.Format("2006-01-02"), r.dimension,
+					formatValueCompact(r.secValue), formatValueCompact(r.sharadarValue),
+					diffPct)
+			case diffMissingSec:
+				fmt.Fprintf(m.w, "| %s | %s | %s | *(missing in sec)* | | |\n",
+					displayTicker, r.dateKey.Format("2006-01-02"), r.dimension)
+			case diffMissingShar:
+				fmt.Fprintf(m.w, "| %s | %s | %s | | *(missing in sharadar)* | |\n",
+					displayTicker, r.dateKey.Format("2006-01-02"), r.dimension)
+			}
+
+			prevTicker = r.ticker
+		}
+	}
 
 	return nil
 }
@@ -927,6 +1054,14 @@ tolerance plus an absolute tolerance floor.`,
 }
 
 func runCompareFundamentals(cmd *cobra.Command, args []string) {
+	if viper.GetBool("compare-fundamentals.list-fields") {
+		for _, f := range fundamentalFields {
+			fmt.Println(f.column)
+		}
+
+		return
+	}
+
 	ctx := context.Background()
 
 	raw := rawCompareFlags{
@@ -940,6 +1075,7 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		format:         viper.GetString("compare-fundamentals.format"),
 		output:         viper.GetString("compare-fundamentals.output"),
 		excludeForeign: viper.GetBool("compare-fundamentals.exclude-foreign"),
+		groupBy:        viper.GetString("compare-fundamentals.group-by"),
 	}
 
 	opts, err := resolveCompareOptions(raw)
@@ -1034,7 +1170,7 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 	case "csv":
 		writer = newCSVDiffWriter(&buf)
 	default:
-		writer = newMDDiffWriter(&buf)
+		writer = newMDDiffWriter(&buf, opts.groupBy)
 	}
 
 	progressCh := make(chan cfProgressMsg, 8)
@@ -1195,8 +1331,10 @@ func init() {
 	compareFundamentalsCmd.Flags().String("format", "text", "Output format: text or csv")
 	compareFundamentalsCmd.Flags().String("output", "", "Write output to this file instead of stdout")
 	compareFundamentalsCmd.Flags().Bool("exclude-foreign", true, "Exclude tickers with no ARQ data in the SEC table (foreign filers)")
+	compareFundamentalsCmd.Flags().Bool("list-fields", false, "Print the available fundamental field names and exit")
+	compareFundamentalsCmd.Flags().String("group-by", "ticker", "Group text output by: ticker or field")
 
-	for _, name := range []string{"ticker", "since", "until", "dimension", "fields", "rel-tol", "abs-tol", "format", "output", "exclude-foreign"} {
+	for _, name := range []string{"ticker", "since", "until", "dimension", "fields", "rel-tol", "abs-tol", "format", "output", "exclude-foreign", "list-fields", "group-by"} {
 		if err := viper.BindPFlag("compare-fundamentals."+name, compareFundamentalsCmd.Flags().Lookup(name)); err != nil {
 			log.Panic().Err(err).Str("flag", name).Msg("BindPFlag failed for compare-fundamentals")
 		}

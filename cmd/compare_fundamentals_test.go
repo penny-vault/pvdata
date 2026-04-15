@@ -430,7 +430,7 @@ var _ = Describe("mdDiffWriter", func() {
 
 		var buf bytes.Buffer
 
-		w := newMDDiffWriter(&buf)
+		w := newMDDiffWriter(&buf, "ticker")
 		Expect(w.Write(rec)).To(Succeed())
 		Expect(w.Close()).To(Succeed())
 
@@ -451,7 +451,7 @@ var _ = Describe("mdDiffWriter", func() {
 
 		var buf bytes.Buffer
 
-		w := newMDDiffWriter(&buf)
+		w := newMDDiffWriter(&buf, "ticker")
 		Expect(w.Write(rec)).To(Succeed())
 		Expect(w.Close()).To(Succeed())
 		Expect(buf.String()).To(ContainSubstring("missing in sharadar"))
@@ -469,7 +469,7 @@ var _ = Describe("mdDiffWriter", func() {
 		}
 
 		var buf bytes.Buffer
-		w := newMDDiffWriter(&buf)
+		w := newMDDiffWriter(&buf, "ticker")
 		for _, r := range recs {
 			Expect(w.Write(r)).To(Succeed())
 		}
@@ -493,7 +493,7 @@ var _ = Describe("mdDiffWriter", func() {
 		}
 
 		var buf bytes.Buffer
-		w := newMDDiffWriter(&buf)
+		w := newMDDiffWriter(&buf, "ticker")
 		for _, r := range recs {
 			Expect(w.Write(r)).To(Succeed())
 		}
@@ -532,7 +532,7 @@ var _ = Describe("mdDiffWriter", func() {
 		}
 
 		var buf bytes.Buffer
-		w := newMDDiffWriter(&buf)
+		w := newMDDiffWriter(&buf, "ticker")
 		for _, r := range recs {
 			Expect(w.Write(r)).To(Succeed())
 		}
