@@ -192,7 +192,7 @@ var FieldMappings = []FieldMapping{
 		FallbackTags: []string{
 			"ReceivablesNetCurrent",
 			"AccruedInterestAndAccountsReceivable", // JPM extension tag
-			"NotesReceivableNet",                    // Insurance/conglomerates with loan portfolios (BRK/B)
+			"NotesReceivableNet",                   // Insurance/conglomerates with loan portfolios (BRK/B)
 		},
 		Op:               OpAdd,
 		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
