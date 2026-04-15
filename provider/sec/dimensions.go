@@ -178,8 +178,32 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 		}
 	}
 
+	// Filter out spurious 10-Q periods at fiscal year-end dates. Banks (JPM)
+	// have 10-Q facts at the annual period end (comparative data + one-off
+	// transaction dates like PaymentsToAcquireBusinessesGross at 2025-01-31
+	// which normalizes to 2024-12-31). When a 10-K period exists at the same
+	// normalized date AND the 10-Q's raw PeriodEnd is far from the normalized
+	// date (> 10 days), the 10-Q is spurious — not a real quarterly filing.
+	// Real quarterly filings have PeriodEnd within a few days of their
+	// normalized quarter end (e.g., AAPL Q1 at 2024-12-28 → 2024-12-31).
 	periods := make([]Period, 0, len(dedupedPeriods))
 	for _, p := range dedupedPeriods {
+		if p.FormType == "10-Q" {
+			normalEnd := NormalizeEventDate(p.PeriodEnd, p.FormType)
+			annualKey := periodKey{end: normalEnd, form: "10-K"}
+
+			if _, hasAnnual := dedupedPeriods[annualKey]; hasAnnual {
+				dist := p.PeriodEnd.Sub(normalEnd)
+				if dist < 0 {
+					dist = -dist
+				}
+
+				if dist.Hours()/24 > 10 {
+					continue
+				}
+			}
+		}
+
 		periods = append(periods, *p)
 	}
 
@@ -340,14 +364,13 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 	result := make(map[string]float64)
 
 	for _, m := range FieldMappings {
-		// Per-share flow fields: YTD cumulative avoids rounding error when
-		// summing individually rounded quarterly per-share values.
-		// Period-average fields (e.g. WeightedAverageShares): the company-
-		// reported YTD average captures day-weighted precision that is lost
-		// when summing individually rounded quarterly averages.
-		switch {
-		case m.StatementType == StmtFlow && m.ValueType == "float64":
-		case m.StatementType == StmtPeriodAverage:
+		// Flow fields: YTD cumulative avoids rounding error from summing
+		// individually rounded quarterly values, and captures any cross-
+		// quarter restatements (e.g. JPM Q3 cumulative 43,199M vs single-
+		// quarter sum 43,197M). Period-average fields: the company-reported
+		// YTD average captures day-weighted precision.
+		switch m.StatementType {
+		case StmtFlow, StmtPeriodAverage:
 		default:
 			continue
 		}

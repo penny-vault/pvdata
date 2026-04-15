@@ -112,8 +112,10 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	limiter := rate.NewLimiter(rate.Limit(reqPerSec), 1)
 	client := NewSECClient(userAgent, limiter)
 
-	// Load CIK -> asset map from database (primary lookup path)
-	dbCIKMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
+	// Load CIK -> asset map from database (primary lookup path).
+	// dbTickerMap indexes every asset by ticker so we can resolve tickers
+	// that share a CIK (e.g. JPM, AMJ, AMJB, VYLD all map to CIK 19617).
+	dbCIKMap, dbTickerMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading CIK map from database")
 
@@ -166,7 +168,11 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		Int("from_sec", fromSEC).
 		Msg("built combined CIK map")
 
-	// Apply ticker/FIGI filter if set
+	// Apply ticker/FIGI filter if set. Multiple tickers can share a single
+	// CIK, so the CIK map may store a different ticker than the one
+	// requested. We fall back to dbTickerMap which indexes every DB asset
+	// by ticker, ensuring e.g. --ticker JPM resolves even when the CIK map
+	// entry for CIK 19617 holds VYLD.
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
 	if tickerFilter != "" || figiFilter != "" {
 		filtered := make(map[int]AssetInfo)
@@ -179,6 +185,14 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 			}
 		}
 
+		// Ticker not found via CIK map scan — try the ticker index which
+		// covers all DB assets regardless of CIK collisions.
+		if len(filtered) == 0 && tickerFilter != "" {
+			if asset, ok := dbTickerMap[strings.ToUpper(tickerFilter)]; ok {
+				filtered[asset.CIK] = asset
+			}
+		}
+
 		if len(filtered) == 0 {
 			candidates := make([]string, 0, len(cikMap))
 			for _, info := range cikMap {
@@ -186,6 +200,15 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 					candidates = append(candidates, info.Ticker)
 				} else {
 					candidates = append(candidates, info.CompositeFigi)
+				}
+			}
+
+			// Also include tickers from the full DB index so the fuzzy
+			// suggestions cover all known tickers, not just CIK-map
+			// survivors.
+			if tickerFilter != "" {
+				for t := range dbTickerMap {
+					candidates = append(candidates, t)
 				}
 			}
 
@@ -793,6 +816,38 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		stripStaleAndRecompute(quarters[i].mrEmit, staleMRFields)
 	}
 
+	// For banks, override MR DPS with prior quarter's declared rate (= cash-
+	// paid). Must happen before annual emission so MRY can sum the corrected
+	// cash-paid quarterly values.
+	if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+		for i := 1; i < len(quarters); i++ {
+			prev := &quarters[i-1]
+			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
+
+			if !found {
+				prevDPS, found = prev.arEmit["DividendsPerBasicCommonShare"]
+			}
+
+			if !found {
+				prevDPS, found = prev.mrEmit["DividendsPerBasicCommonShare"]
+			}
+
+			if !found && i > 1 {
+				grandPrev := &quarters[i-2]
+
+				prevDPS, found = grandPrev.arFields["DividendsPerBasicCommonShare"]
+
+				if !found {
+					prevDPS, found = grandPrev.arEmit["DividendsPerBasicCommonShare"]
+				}
+			}
+
+			if found {
+				quarters[i].mrEmit["DividendsPerBasicCommonShare"] = prevDPS
+			}
+		}
+	}
+
 	// Period-average fields (AverageAssets, EquityAvg, InvestedCapitalAverage)
 	// and derived ratios (ROA, ROE, ROIC) are intentionally NOT computed for
 	// quarterly dimensions (ARQ/MRQ). See #56 for rationale.
@@ -906,6 +961,14 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		stripStaleAndRecompute(a.arEmit, annualTWHStale)
 		stripStaleAndRecompute(a.mrEmit, annualTWHStale)
 
+		// Apply bank overrides to annual emit maps. Only for banks —
+		// the bundlesFinancing (NVDA) path modifies NCFCOMMON via tax
+		// withholding strip, making the annual residual incorrect.
+		if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+			overrideNCFDebtResidual(cf, a.arEmit, a.period.PeriodEnd, a.period.FormType)
+			overrideNCFDebtResidual(cf, a.mrEmit, a.period.PeriodEnd, a.period.FormType)
+		}
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
@@ -920,6 +983,28 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// MRY — override SharesBasic for MR semantics (see quarterly override above).
 		if val, ok := resolveSharesBasicAsOf(cf, a.period.PeriodEnd); ok {
 			a.mrEmit["SharesBasic"] = val
+		}
+
+		// For banks, replace MRY DPS with the sum of cash-paid quarterly DPS.
+		// The annual mrEmit has the declared DPS from the 10-K; MRY should
+		// match the MRT trailing sum of cash-paid (prior quarter declared) values.
+		if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && conceptFiledQuarterly(cf, []string{"Deposits"}) {
+			cashDPSSum := 0.0
+			cashDPSCount := 0
+
+			for j := range quarters {
+				if NormalizeEventDate(quarters[j].period.PeriodEnd, "10-K").Equal(NormalizeEventDate(a.period.PeriodEnd, "10-K")) {
+					// This quarter belongs to this fiscal year
+					if v, ok := quarters[j].mrEmit["DividendsPerBasicCommonShare"]; ok {
+						cashDPSSum += v
+						cashDPSCount++
+					}
+				}
+			}
+
+			if cashDPSCount == 4 {
+				a.mrEmit["DividendsPerBasicCommonShare"] = cashDPSSum
+			}
 		}
 
 		fundamental = BuildFundamental(a.mrEmit, asset.Ticker, asset.CompositeFigi, "MRY",
@@ -953,6 +1038,40 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
 
+		// For banks, use the prior quarter's declared DPS as the cash-paid
+		// DPS for MR dimensions only. Try arFields, then arEmit for
+		// synthesized Q4 quarters. Only affects MR dimensions — AR keeps
+		// the declared value.
+		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+			prev := &quarters[i-1]
+			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
+
+			if !found {
+				prevDPS, found = prev.arEmit["DividendsPerBasicCommonShare"]
+			}
+
+			if !found {
+				prevDPS, found = prev.mrEmit["DividendsPerBasicCommonShare"]
+			}
+
+			// For Q1 of each year: the prior Q4 is synthesized and may not
+			// have DPS in any map. Fall back to Q3 (i-2) which is a regular
+			// 10-Q quarter with DPS available.
+			if !found && i > 1 {
+				grandPrev := &quarters[i-2]
+
+				prevDPS, found = grandPrev.arFields["DividendsPerBasicCommonShare"]
+
+				if !found {
+					prevDPS, found = grandPrev.arEmit["DividendsPerBasicCommonShare"]
+				}
+			}
+
+			if found {
+				q.mrEmit["DividendsPerBasicCommonShare"] = prevDPS
+			}
+		}
+
 		if !since.IsZero() && q.period.MRFiledDate.Before(since) {
 			continue
 		}
@@ -962,8 +1081,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// Sharadar's quarterly NCFDEBT captures small items (e.g. finance
 		// lease payments) that aren't separately tagged in XBRL. The
 		// residual naturally picks them up when the other components match.
-		overrideNCFDebtResidual(cf, q.arEmit)
-		overrideNCFDebtResidual(cf, q.mrEmit)
+		overrideNCFDebtResidual(cf, q.arEmit, q.period.PeriodEnd, q.period.FormType)
+		overrideNCFDebtResidual(cf, q.mrEmit, q.period.PeriodEnd, q.period.FormType)
 
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",
@@ -1068,6 +1187,16 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
+		// For banks, the annual MR DPS should use cash-paid (sum of
+		// prior-quarter declared rates), not the declared total from
+		// the 10-K. Without this, overridePeriodAvg would replace the
+		// correctly-summed TTM cash-paid DPS with the declared annual.
+		// Use Deposits as the bank sentinel (more specific than absence of
+		// AssetsCurrent, which test fixtures may lack).
+		if matchingMR != nil && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && conceptFiledQuarterly(cf, []string{"Deposits"}) {
+			delete(matchingMR, "DividendsPerBasicCommonShare")
+		}
+
 		overridePeriodAvg := func(ttm, annualFields map[string]float64) {
 			if annualFields == nil {
 				return
@@ -1111,8 +1240,23 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			arQSlice[j] = quarters[i-3+j].arEmit
 		}
 
+		// bankFixTTMNCI replaces the TTM NCI sum with the annual value when
+		// the TTM coincides with a fiscal year. Quarterly NCI values may
+		// not sum to the annual due to the cumulative vs single-quarter
+		// discrepancy in NetIncome (2M for JPM).
+		bankFixTTMNCI := func(ttm, annualFields map[string]float64) {
+			if annualFields == nil || conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+				return
+			}
+
+			if v, ok := annualFields["NetIncomeToNonControllingInterests"]; ok {
+				ttm["NetIncomeToNonControllingInterests"] = v
+			}
+		}
+
 		if ttm := ComputeTTM(arQSlice, false); ttm != nil {
 			overridePeriodAvg(ttm, matchingAR)
+			bankFixTTMNCI(ttm, matchingAR)
 
 			for k, v := range ComputeMultiQAverages(ttm, arQSlice) {
 				ttm[k] = v
@@ -1138,6 +1282,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		if ttm := ComputeTTM(mrQSlice, true); ttm != nil {
 			overridePeriodAvg(ttm, matchingMR)
+			bankFixTTMNCI(ttm, matchingMR)
 
 			for k, v := range ComputeMultiQAverages(ttm, mrQSlice) {
 				ttm[k] = v
@@ -1168,6 +1313,67 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		EnrichMarketData(fundamentals, priceLookupFn)
+	}
+
+	// Clean up stale records for this ticker before sending new observations.
+	// Prior runs may have used different dateKey conventions (e.g., filing
+	// date vs period end), leaving orphan rows that create spurious diffs.
+	// Collect the set of valid (dimension, event_date) pairs from the current
+	// run and delete any existing records not in this set.
+	if asset.CompositeFigi != "" && len(buffered) > 0 {
+		cleanupCtx := context.Background()
+
+		tbl := sub.DataTablesMap[data.FundamentalsKey]
+		if tbl != "" {
+			type obsKey struct {
+				dim       string
+				eventDate time.Time
+			}
+
+			validKeys := make(map[obsKey]bool)
+
+			for _, obs := range buffered {
+				if obs.Fundamental != nil {
+					validKeys[obsKey{obs.Fundamental.Dimension, obs.Fundamental.EventDate}] = true
+				}
+			}
+
+			conn, err := sub.Library.Pool.Acquire(cleanupCtx)
+			if err == nil {
+				rows, err := conn.Query(cleanupCtx,
+					fmt.Sprintf("SELECT dimension, event_date FROM %s WHERE composite_figi = $1", tbl),
+					asset.CompositeFigi)
+				if err == nil {
+					var toDelete []obsKey
+
+					for rows.Next() {
+						var (
+							dim string
+							ed  time.Time
+						)
+						if err := rows.Scan(&dim, &ed); err == nil {
+							if !validKeys[obsKey{dim, ed}] {
+								toDelete = append(toDelete, obsKey{dim, ed})
+							}
+						}
+					}
+
+					rows.Close()
+
+					for _, k := range toDelete {
+						_, _ = conn.Exec(cleanupCtx,
+							fmt.Sprintf("DELETE FROM %s WHERE composite_figi = $1 AND dimension = $2 AND event_date = $3", tbl),
+							asset.CompositeFigi, k.dim, k.eventDate)
+					}
+
+					if len(toDelete) > 0 {
+						log.Debug().Str("ticker", asset.Ticker).Int("deleted", len(toDelete)).Msg("cleaned up stale observations")
+					}
+				}
+
+				conn.Release()
+			}
+		}
 	}
 
 	// Send all buffered observations to the output channel.

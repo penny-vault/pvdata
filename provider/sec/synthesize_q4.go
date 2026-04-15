@@ -112,14 +112,31 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 				continue
 			}
 
-			// Per-share flow fields: use the last preceding quarter's YTD
-			// cumulative value for the subtraction. The company-reported
-			// cumulative avoids rounding error from summing individually
-			// rounded quarterly per-share values.
-			if m.ValueType == "float64" {
-				lastQ := preceding[0] // most recent quarter before the 10-K
-				if cumPS := cumPSFn(lastQ); cumPS != nil {
-					if cumVal, ok := cumPS[m.FieldName]; ok {
+			// Prefer the last preceding quarter's YTD cumulative value for the
+			// subtraction. The company-reported cumulative accounts for any
+			// restatements across quarters and avoids rounding error from
+			// summing individually rounded per-share values. For int64 flow
+			// fields (e.g. NetIncome), the cumulative also captures small
+			// adjustments (JPM: Q3 cumulative 43,199M vs Q1+Q2+Q3 sum 43,197M).
+			//
+			// Only use cumulative values that span more than one quarter
+			// (> 120 days). Single-quarter "longest" values are just the
+			// quarterly amount, not a YTD cumulative, and would give wrong
+			// results (Q4 = Annual - Q3_single instead of Annual - Q1Q2Q3_sum).
+			lastQ := preceding[0] // most recent quarter before the 10-K
+			if cumPS := cumPSFn(lastQ); cumPS != nil {
+				if cumVal, ok := cumPS[m.FieldName]; ok {
+					// Verify the value is actually cumulative by checking if
+					// it's larger than any single-quarter emit value.
+					// For Q3 (3rd quarter), cumulative should be roughly 3x
+					// the average quarter. Use a simple heuristic: cumulative
+					// must differ from the single-quarter emit by > 10%.
+					singleQ := 0.0
+					if emit := emitFn(lastQ); emit != nil {
+						singleQ = emit[m.FieldName]
+					}
+
+					if singleQ == 0 || math.Abs(cumVal-singleQ)/math.Abs(singleQ) > 0.1 {
 						result[m.FieldName] = annualVal - cumVal
 
 						continue

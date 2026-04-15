@@ -709,6 +709,15 @@ var _ = Describe("Dimensions", func() {
 				"_deferredTaxAssets":                 true,
 				"_taxWithholdingShareComp":           true,
 				"_repaymentsFinancedAssets":          true,
+				"_bankShortTermDebt":                 true,
+				"_bankLongTermDebt":                  true,
+				"_bankFederalFundsPurchased":         true,
+				"_bankFedFundsChange":                true,
+				"_bankLTDebtProceeds":                true,
+				"_bankLTDebtRepayments":              true,
+				"_bankSTDebtProceeds":                true,
+				"_bankOtherInvesting":                true,
+				"_bankOtherNoninterestExpense":       true,
 			}
 
 			var missing []string

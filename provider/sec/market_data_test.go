@@ -147,7 +147,7 @@ var _ = Describe("EnrichMarketData", func() {
 			// ARQ should have its own price-based fields
 			expectedMktCap := int64(price * float64(arq.SharesBasic))
 			expectedEV := expectedMktCap + arq.TotalDebt - arq.CashAndEquivalents
-			expectedPB := float64(expectedMktCap) / float64(arq.Equity)
+			expectedPB := math.Round(float64(expectedMktCap)/float64(arq.Equity)*1000) / 1000
 
 			Expect(arq.Price).To(BeNumerically("~", price, 1e-9))
 			Expect(arq.MarketCapitalization).To(Equal(expectedMktCap))

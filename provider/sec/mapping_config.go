@@ -133,6 +133,7 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"CashAndCashEquivalentsAtCarryingValue",
 			"CashCashEquivalentsAndShortTermInvestments",
+			"CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", // Banks (JPM) use this
 			"Cash",
 			"CashEquivalentsAtCarryingValue",
 		},
@@ -185,9 +186,13 @@ var FieldMappings = []FieldMapping{
 	// Receivables = TradeReceivables + NonTradeReceivables. Sharadar
 	// defines this as "trade and non-trade receivables." Apple tags these
 	// separately (AccountsReceivableNetCurrent + NontradeReceivablesCurrent).
+	// Banks (JPM) use a combined extension tag for accrued interest + A/R.
 	{
 		FieldName: "Receivables", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"ReceivablesNetCurrent"},
+		FallbackTags: []string{
+			"ReceivablesNetCurrent",
+			"AccruedInterestAndAccountsReceivable", // JPM extension tag
+		},
 		Op:               OpAdd,
 		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
 		OptionalOperands: true,
@@ -197,6 +202,7 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"AccountsPayableCurrent",
 			"AccountsPayableAndAccruedLiabilitiesCurrent",
+			"AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent", // Banks (JPM) use combined current+noncurrent
 		},
 	},
 	{
@@ -214,8 +220,14 @@ var FieldMappings = []FieldMapping{
 		RequireQuarterly: true,
 		XBRLTags:         []string{"OperatingLeaseRightOfUseAsset"},
 	},
+	// PropertyPlantAndEquipmentNet: use the combined extension tag if
+	// available (JPM files a combined premises+equipment+ROU tag); otherwise
+	// sum the sub-components.
 	{
 		FieldName: "PropertyPlantAndEquipmentNet", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{
+			"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization", // JPM extension
+		},
 		Op:               OpAdd,
 		Operands:         []string{"_ppneRaw", "_operatingLeaseROU"},
 		OptionalOperands: true,
@@ -235,10 +247,15 @@ var FieldMappings = []FieldMapping{
 	// Intangibles: Sharadar defines this as "all intangible assets and
 	// goodwill." Use the combined tag if available; otherwise sum Goodwill +
 	// other intangibles. MSFT reports Goodwill and FiniteLivedIntangibleAssetsNet
-	// separately; the sum captures both.
+	// separately; the sum captures both. Banks (JPM) file a combined extension
+	// tag that includes goodwill, MSR, and other intangibles.
 	{
 		FieldName: "Intangibles", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"IntangibleAssetsNetIncludingGoodwill"},
+		FallbackTags: []string{
+			"IntangibleAssetsNetIncludingGoodwill",
+			"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets", // JPM 10-Q extension
+			"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets", // JPM 10-K extension (different casing)
+		},
 		Op:               OpAdd,
 		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},
 		OptionalOperands: true,
@@ -296,23 +313,31 @@ var FieldMappings = []FieldMapping{
 		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
 		OptionalOperands:   true,
 	},
+	// Debt sub-components are gated on AssetsCurrent: companies that classify
+	// assets as current/non-current (non-banks) also classify debt that way.
+	// Banks (JPM) do not file AssetsCurrent and Sharadar reports DebtCurrent=0
+	// and DebtNonCurrent=0 for them.
 	{
 		FieldName: "ShortTermDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"ShortTermBorrowings"},
+		RequireIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"ShortTermBorrowings"},
 	},
 	{
 		FieldName: "LongTermDebtCurrentMaturities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"LongTermDebtCurrent"},
+		RequireIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"LongTermDebtCurrent"},
 	},
 	{
 		FieldName: "CommercialPaperDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"CommercialPaper"},
+		RequireIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"CommercialPaper"},
 	},
 	// DebtCurrent = ShortTermDebt + LongTermDebtCurrentMaturities +
 	// CommercialPaperDebt. Sharadar includes all forms of current debt
 	// (bonds, commercial paper, notes payable, credit facilities). Apple
 	// tags LongTermDebtCurrent and CommercialPaper separately; the sum
-	// captures both.
+	// captures both. For banks (no AssetsCurrent), all components are
+	// gated off so DebtCurrent = 0.
 	{
 		FieldName: "DebtCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		FallbackTags:     []string{"DebtCurrent"},
@@ -322,6 +347,7 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_longTermDebtNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags: []string{
 			"LongTermDebtNoncurrent",
 			"LongTermDebt",
@@ -334,8 +360,9 @@ var FieldMappings = []FieldMapping{
 	// (separate line) and not AAPL (10-K note disclosure only).
 	{
 		FieldName: "_operatingLeaseLiabilityNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		RequireQuarterly: true,
-		XBRLTags:         []string{"OperatingLeaseLiabilityNoncurrent"},
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"OperatingLeaseLiabilityNoncurrent"},
 	},
 	{
 		FieldName: "DebtNonCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
@@ -343,10 +370,36 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_longTermDebtNoncurrent", "_operatingLeaseLiabilityNoncurrent"},
 		OptionalOperands: true,
 	},
+	// --- Bank-specific debt sub-fields ---
+	// Banks don't classify debt as current/non-current. Sharadar computes
+	// TotalDebt for banks as ShortTermBorrowings + LongTermDebt +
+	// FederalFundsPurchased. These sub-fields are gated with
+	// ExcludeIfQuarterly on AssetsCurrent so they only resolve for banks.
+	{
+		FieldName: "_bankShortTermDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"ShortTermBorrowings"},
+	},
+	{
+		FieldName: "_bankLongTermDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags: []string{
+			"LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities",
+			"LongTermDebt",
+		},
+	},
+	{
+		FieldName: "_bankFederalFundsPurchased", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"FederalFundsPurchasedAndSecuritiesSoldUnderAgreementsToRepurchase"},
+	},
 	{
 		FieldName: "TotalDebt", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op:               OpAdd,
-		Operands:         []string{"DebtCurrent", "DebtNonCurrent"},
+		Op: OpAdd,
+		Operands: []string{
+			"DebtCurrent", "DebtNonCurrent",
+			"_bankShortTermDebt", "_bankLongTermDebt", "_bankFederalFundsPurchased",
+		},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for DeferredRevenue derivation ---
@@ -414,7 +467,6 @@ var FieldMappings = []FieldMapping{
 		FieldName: "AccumulatedRetainedEarningsDeficit", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{"RetainedEarningsAccumulatedDeficit"},
 	},
-
 	// ==================== INCOME STATEMENT (flow) ====================
 
 	{
@@ -423,6 +475,7 @@ var FieldMappings = []FieldMapping{
 			"Revenues",
 			"RevenueFromContractWithCustomerExcludingAssessedTax",
 			"RevenueFromContractWithCustomerIncludingAssessedTax",
+			"RevenuesNetOfInterestExpense", // Banks (JPM) report this on 10-Q instead of Revenues
 			"SalesRevenueNet",
 			"SalesRevenueGoodsNet",
 			"SalesRevenueServicesNet",
@@ -444,10 +497,18 @@ var FieldMappings = []FieldMapping{
 			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
 		},
 	},
+	// GrossProfit: use the direct tag if available; otherwise derive from
+	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
+	// CostOfRevenue; with CostOfRevenue absent (treated as 0), the derived
+	// value equals Revenues -- matching Sharadar's treatment of bank revenue
+	// as 100% gross.
 	{
-		FieldName: "GrossProfit", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"GrossProfit"},
-		// Fallback: Revenues - CostOfRevenue
+		FieldName: "GrossProfit", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags:     []string{"GrossProfit"},
+		Op:               OpLinearCombination,
+		Operands:         []string{"Revenues", "CostOfRevenue"},
+		Coefficients:     []float64{1, -1},
+		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for SG&A derivation ---
 	{
@@ -486,10 +547,13 @@ var FieldMappings = []FieldMapping{
 	// from GrossProfit − OperatingIncome. Sharadar defines OpEx as SGA +
 	// R&D (excluding CoR). MSFT omits the OperatingExpenses XBRL tag in
 	// older filings, but GrossProfit and OperatingIncome are always present.
+	// Banks (JPM) report NoninterestExpense which maps to Sharadar OpEx.
 	// Must come AFTER OperatingIncome so the dependency is resolved first.
+	// For banks that don't report OperatingIncomeLoss, OperatingIncome is
+	// recomputed as GrossProfit - OperatingExpenses in overrideNCFDebtResidual.
 	{
 		FieldName: "OperatingExpenses", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		FallbackTags: []string{"OperatingExpenses", "CostsAndExpenses"},
+		FallbackTags: []string{"OperatingExpenses", "CostsAndExpenses", "NoninterestExpense"},
 		Op:           OpSubtract,
 		Operands:     []string{"GrossProfit", "OperatingIncome"},
 	},
@@ -502,6 +566,13 @@ var FieldMappings = []FieldMapping{
 		// net value would incorrectly subtract from EBIT.
 		// InterestExpenseNonoperating is used by MSFT on 10-Q filings where
 		// the generic InterestExpense tag is only filed on 10-K.
+		//
+		// RequireIfQuarterly on AssetsCurrent: banks (JPM) file the generic
+		// InterestExpense tag for some quarters but not others, and for banks
+		// this is operational interest (cost of deposits) — NOT financing
+		// expense. Including it in EBIT breaks Q4 synthesis (annual has 0
+		// but one quarter has 24B). Banks without AssetsCurrent skip this.
+		RequireIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags: []string{
 			"InterestExpense",
 			"InterestExpenseDebt",
@@ -517,7 +588,13 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "NetIncome", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		// Prefer NetIncomeLossAvailableToCommonStockholdersBasic: Sharadar defines
+		// netinc as "net income loss to common shareholders" which deducts NCI and
+		// preferred dividends. Banks (JPM) file NetIncomeLoss as the consolidated
+		// figure (including NCI); the Available-to-Common variant gives the correct
+		// parent-only value. For companies without NCI (AAPL, MSFT), both are equal.
 		XBRLTags: []string{
+			"NetIncomeLossAvailableToCommonStockholdersBasic",
 			"NetIncomeLoss",
 			"ProfitLoss",
 		},
@@ -544,11 +621,19 @@ var FieldMappings = []FieldMapping{
 			"DiscontinuedOperationIncomeLossFromDiscontinuedOperationDuringPhaseOutPeriodNetOfTax",
 		},
 	},
+	// NetIncomeToNonControllingInterests: use the direct tag if available.
+	// Banks (JPM) don't report this tag; derive as ConsolidatedIncome -
+	// NetIncome - PreferredDividends. ConsolidatedIncome uses NetIncomeLoss
+	// (consolidated), while NetIncome uses the common-stockholder variant.
 	{
-		FieldName: "NetIncomeToNonControllingInterests", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{
+		FieldName: "NetIncomeToNonControllingInterests", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{
 			"NetIncomeLossAttributableToNoncontrollingInterest",
 		},
+		Op:               OpLinearCombination,
+		Operands:         []string{"ConsolidatedIncome", "NetIncome", "PreferredDividendsIncomeStatementImpact"},
+		Coefficients:     []float64{1, -1, -1},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "PreferredDividendsIncomeStatementImpact", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -679,8 +764,13 @@ var FieldMappings = []FieldMapping{
 			"CapitalExpendituresIncurredButNotYetPaid",
 		},
 	},
+	// Sharadar reports 0 for share-based compensation for banks. Banks
+	// include SBC in their compensation expense (LaborAndRelatedExpense)
+	// and Sharadar does not separate it. Gate on AssetsCurrent to exclude
+	// banks (which don't classify assets as current/non-current).
 	{
 		FieldName: "ShareBasedCompensation", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags: []string{
 			"ShareBasedCompensation",
 			"AllocatedShareBasedCompensationExpense",
@@ -780,6 +870,41 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_proceedsDebt", "_repaymentsDebt", "_repaymentsFinancedAssets", "_netShortTermDebt"},
 		Coefficients:     []float64{1, -1, -1, 1},
 		OptionalOperands: true,
+	},
+	// --- Bank-specific NCFDEBT sub-fields ---
+	// Banks (JPM) have additional debt-related financing activities not
+	// captured by the standard debt proceeds/repayments tags. These are
+	// gated on absence of AssetsCurrent (bank detection). StmtFlow ensures
+	// YTD cumulative values are properly de-cumulated to single-quarter amounts.
+	{
+		FieldName: "_bankFedFundsChange", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"IncreaseDecreaseInFederalFundsPurchasedAndSecuritiesSoldUnderAgreementsToRepurchaseNet"},
+	},
+	{
+		FieldName: "_bankLTDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfLongTermDebt"},
+	},
+	{
+		FieldName: "_bankLTDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfLongTermDebt"},
+	},
+	{
+		FieldName: "_bankSTDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"ProceedsFromShortTermDebt", "ProceedsFromRepaymentsOfShortTermDebt"},
+	},
+	{
+		FieldName: "_bankOtherInvesting", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"PaymentsForProceedsFromOtherInvestingActivities"},
+	},
+	{
+		FieldName: "_bankOtherNoninterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"OtherNoninterestExpense"},
 	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -888,22 +1013,24 @@ var FieldMappings = []FieldMapping{
 		Op:       OpAdd,
 		Operands: []string{"EBIT", "DepreciationAmortizationAndAccretion"},
 	},
-	// EBT = NetIncome + IncomeTaxExpense
+	// EBT = NetIncome + IncomeTaxExpense. No FallbackTags: the direct XBRL tags
+	// (IncomeLossFromContinuingOperationsBeforeIncomeTaxes...) report consolidated
+	// pre-tax income including NCI. The formula uses the already-corrected
+	// NetIncome (parent-only for companies with NCI like JPM).
 	{
 		FieldName: "EBT", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		FallbackTags: []string{
-			"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-			"IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
-		},
 		Op:       OpAdd,
 		Operands: []string{"NetIncome", "IncomeTaxExpense"},
 	},
 	// FreeCashFlow = NetCashFlowFromOperations + CapitalExpenditure
-	// (CapitalExpenditure is already negative after Negate, so addition is correct)
+	// (CapitalExpenditure is already negative after Negate, so addition is correct).
+	// OptionalOperands: banks (JPM) do not report PaymentsToAcquirePropertyPlantAndEquipment
+	// so CapitalExpenditure is absent; FCF = NCFOps when capex is missing.
 	{
 		FieldName: "FreeCashFlow", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:       OpAdd,
-		Operands: []string{"NetCashFlowFromOperations", "CapitalExpenditure"},
+		Op:               OpAdd,
+		Operands:         []string{"NetCashFlowFromOperations", "CapitalExpenditure"},
+		OptionalOperands: true,
 	},
 	// WorkingCapital = CurrentAssets - CurrentLiabilities
 	{

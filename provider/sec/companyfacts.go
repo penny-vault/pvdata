@@ -277,13 +277,6 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 	}
 
 	root := gjson.ParseBytes(resp.Body())
-	recent := root.Get("filings.recent")
-
-	forms := recent.Get("form").Array()
-	accessions := recent.Get("accessionNumber").Array()
-	docs := recent.Get("primaryDocument").Array()
-	filingDates := recent.Get("filingDate").Array()
-	reportDates := recent.Get("reportDate").Array()
 
 	// Collect recent 10-K and 10-Q filings for extension enrichment. We need
 	// enough history so that Q4 synthesis for the prior fiscal year uses
@@ -305,39 +298,86 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 	// If a filing cutoff is set, skip filings filed after it.
 	cutoff, hasCutoff := provider.FilingCutoffFromContext(ctx)
 
-	for i := range forms {
-		form := forms[i].String()
-		if form != "10-K" && form != "10-Q" {
-			continue
-		}
+	// scanFilingList scans a gjson filing list (recent or overflow) for
+	// 10-K and 10-Q filings. Returns true when we've found enough.
+	scanFilingList := func(list gjson.Result) bool {
+		forms := list.Get("form").Array()
+		accessions := list.Get("accessionNumber").Array()
+		docs := list.Get("primaryDocument").Array()
+		filingDates := list.Get("filingDate").Array()
+		reportDates := list.Get("reportDate").Array()
 
-		fi := filingInfo{
-			accession: accessions[i].String(),
-			doc:       docs[i].String(),
-			filedDate: filingDates[i].String(),
-			form:      form,
-		}
-
-		if i < len(reportDates) {
-			fi.reportDate = reportDates[i].String()
-		}
-
-		// Skip filings filed after the cutoff date.
-		if hasCutoff {
-			if filedTime, err := time.Parse(dateFormat, fi.filedDate); err == nil && filedTime.After(cutoff) {
+		for i := range forms {
+			form := forms[i].String()
+			if form != "10-K" && form != "10-Q" {
 				continue
+			}
+
+			fi := filingInfo{
+				accession: accessions[i].String(),
+				doc:       docs[i].String(),
+				filedDate: filingDates[i].String(),
+				form:      form,
+			}
+
+			if i < len(reportDates) {
+				fi.reportDate = reportDates[i].String()
+			}
+
+			if hasCutoff {
+				if filedTime, err := time.Parse(dateFormat, fi.filedDate); err == nil && filedTime.After(cutoff) {
+					continue
+				}
+			}
+
+			filings = append(filings, fi)
+
+			if form == "10-K" {
+				kCount++
+				if kCount >= 3 {
+					return true
+				}
 			}
 		}
 
-		filings = append(filings, fi)
+		return false
+	}
 
-		if form == "10-K" {
-			kCount++
-			if kCount >= 3 {
-				break // stop after the third 10-K
+	// Scan the recent filings first.
+	if scanFilingList(root.Get("filings.recent")) {
+		goto done
+	}
+
+	// If we haven't found enough 10-K filings, load overflow submission
+	// files. Large filers (e.g. JPM with 23K+ filings/year) push older
+	// 10-K/10-Q filings into overflow files.
+	{
+		overflowFiles := root.Get("filings.files").Array()
+		for _, f := range overflowFiles {
+			if ctx.Err() != nil {
+				break
+			}
+
+			fileName := f.Get("name").String()
+			if fileName == "" {
+				continue
+			}
+
+			overflowURL := submissionsURL + fileName
+
+			overflowResp, err := client.R().SetContext(ctx).Get(overflowURL)
+			if err != nil || overflowResp.StatusCode() != http.StatusOK {
+				log.Debug().Str("file", fileName).Msg("failed to fetch overflow submissions file")
+				continue
+			}
+
+			if scanFilingList(gjson.ParseBytes(overflowResp.Body())) {
+				break
 			}
 		}
 	}
+
+done:
 
 	log.Debug().Int("cik", cik).Int("filings", len(filings)).Msg("enriching with extension facts from XBRL instance documents")
 
@@ -350,7 +390,12 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 	}
 
 	// Log extension facts found for key concepts.
-	for _, key := range []string{"DepreciationAmortizationAndOther"} {
+	for _, key := range []string{
+		"DepreciationAmortizationAndOther",
+		"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets",
+		"AccruedInterestAndAccountsReceivable",
+		"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+	} {
 		if facts, ok := cf.Facts[key]; ok {
 			for _, f := range facts {
 				log.Debug().Str("concept", key).Time("end", f.End).Time("start", f.Start).Time("filed", f.Filed).Str("form", f.Form).Float64("val", f.Val).Msg("extension fact")

@@ -569,6 +569,9 @@ var _ = Describe("Mapping Engine", func() {
 			debtCF := &CompanyFacts{
 				CIK: 320193, EntityName: "Apple Inc",
 				Facts: map[string][]Fact{
+					"AssetsCurrent": {
+						{End: periodEnd, Filed: filed, Val: 100_000_000_000, Form: "10-Q"},
+					},
 					"LongTermDebtCurrent": {
 						{End: periodEnd, Filed: filed, Val: 10_762_000_000, Form: "10-Q"},
 					},
@@ -599,6 +602,7 @@ var _ = Describe("Mapping Engine", func() {
 			icCF := &CompanyFacts{
 				CIK: 1, EntityName: "Test Co",
 				Facts: map[string][]Fact{
+					"AssetsCurrent":                         {{End: periodEnd, Filed: filed, Val: 100_000, Form: "10-Q"}},
 					"LongTermDebtCurrent":                   {{End: periodEnd, Filed: filed, Val: 10_000, Form: "10-Q"}},
 					"LongTermDebtNoncurrent":                {{End: periodEnd, Filed: filed, Val: 90_000, Form: "10-Q"}},
 					"Assets":                                {{End: periodEnd, Filed: filed, Val: 350_000, Form: "10-Q"}},

@@ -488,15 +488,23 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 
 // overrideNCFDebtResidual recomputes NetCashFlowDebt as the residual of
 // the financing section: debt = financing - common - dividend. This captures
-// small items (finance lease payments, debt issuance costs) that are not
-// separately tagged in XBRL but are included in the financing total.
+// items that are not separately tagged in XBRL but are included in the
+// financing total.
 //
-// Only applied when AccruedLiabilitiesCurrent is filed on 10-Q (NVDA),
-// indicating the company bundles financing items into broader categories.
-// For companies like AAPL that present debt cash flows as separate lines,
-// the direct XBRL-based computation is correct.
-func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64) {
-	if !conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"}) {
+// Applied in two cases:
+//  1. AccruedLiabilitiesCurrent is filed on 10-Q (NVDA) — the company bundles
+//     financing items into broader categories.
+//  2. AssetsCurrent is NOT filed on 10-Q (banks like JPM) — bank financing
+//     activities include deposits, fed funds, and repo agreements that aren't
+//     captured by the standard debt-proceeds/repayments tags.
+//
+// For companies like AAPL that present debt cash flows as separate lines
+// and DO file AssetsCurrent, the direct XBRL-based computation is correct.
+func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time, formType string) {
+	isBank := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"})
+	bundlesFinancing := conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"})
+
+	if !isBank && !bundlesFinancing {
 		return
 	}
 
@@ -506,5 +514,165 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64) {
 
 	if hasF && hasC && hasD {
 		fields["NetCashFlowDebt"] = financing - common - dividend
+	}
+
+	// For banks, recompute derived income fields from their Q4 components.
+	// The Q4 synthesis computes each field independently (Annual - Q1-Q2-Q3),
+	// but when NetIncome uses the cumulative path (43,199) while the Q1-Q3
+	// EBT sum uses single-quarter NI (43,197), derived fields like EBT/EBIT
+	// get a 2M inconsistency. Recomputing from formulas ensures consistency.
+	if isBank {
+		if ni, hasNI := fields["NetIncome"]; hasNI {
+			tax := fields["IncomeTaxExpense"]
+			intExp := fields["InterestExpense"]
+			da := fields["DepreciationAmortizationAndAccretion"]
+
+			fields["EBT"] = ni + tax
+			fields["EBIT"] = ni + tax + intExp
+			fields["EBITDA"] = ni + tax + intExp + da
+
+			// Recompute NCI from corrected values
+			if consolidated, hasCons := fields["ConsolidatedIncome"]; hasCons {
+				pref := fields["PreferredDividendsIncomeStatementImpact"]
+				fields["NetIncomeToNonControllingInterests"] = consolidated - ni - pref
+			}
+		}
+	}
+
+	// For banks, override NCFDEBT with a direct computation from de-cumulated
+	// bank-specific fields. The residual approach doesn't work for banks
+	// because the financing total includes deposits, preferred stock, and
+	// other non-debt items. The sub-fields (_bankFedFundsChange, etc.) are
+	// mapped as StmtFlow in FieldMappings so YTD cumulative values are
+	// properly de-cumulated before reaching this point.
+	if isBank {
+		bankDebtFields := []struct {
+			name string
+			sign float64
+		}{
+			{"_bankFedFundsChange", 1},
+			{"_bankLTDebtProceeds", 1},
+			{"_bankLTDebtRepayments", -1},
+			{"_bankSTDebtProceeds", 1},
+		}
+
+		ncfDebt := 0.0
+		found := false
+
+		for _, f := range bankDebtFields {
+			if v, ok := fields[f.name]; ok {
+				ncfDebt += f.sign * v
+				found = true
+			}
+		}
+
+		if found {
+			fields["NetCashFlowDebt"] = ncfDebt
+		}
+	}
+
+	// For banks, ensure NetCashFlowBusiness is present in the fields map
+	// (even as 0) so the strictFlow TTM check passes. Without this, quarters
+	// where no acquisitions occurred have the field absent, causing the
+	// MRT TTM to skip it entirely (found < 4 with strictFlow=true).
+	if isBank {
+		if _, ok := fields["NetCashFlowBusiness"]; !ok {
+			fields["NetCashFlowBusiness"] = 0
+		}
+	}
+
+	// For banks, derive OperatingIncome = GrossProfit - OperatingExpenses
+	// when OperatingIncomeLoss isn't available. OperatingExpenses resolves
+	// from NoninterestExpense FallbackTag, and GrossProfit = Revenues.
+	if isBank {
+		if _, hasOI := fields["OperatingIncome"]; !hasOI {
+			gp, hasGP := fields["GrossProfit"]
+			opex, hasOE := fields["OperatingExpenses"]
+
+			if hasGP && hasOE {
+				fields["OperatingIncome"] = gp - opex
+			}
+		}
+	}
+
+	// For banks, also recompute NetCashFlowInvest as the residual of the
+	// investing section: invest = total_investing - capex. Bank investing
+	// activities include loan originations, fed funds, and repo transactions
+	// that standard investment-security tags don't capture. Business
+	// acquisitions are already part of the investing total and are tracked
+	// separately as NetCashFlowBusiness.
+	if isBank {
+		investing, hasI := fields["NetCashFlowFromInvesting"]
+		if hasI {
+			capex := fields["CapitalExpenditure"]     // 0 when absent (banks)
+			otherInv := fields["_bankOtherInvesting"] // 0 when absent
+			biz := fields["NetCashFlowBusiness"]      // 0 when absent; already negated
+			// Add back "other" investing and subtract business acquisitions
+			// (both are in the investing total but Sharadar classifies them
+			// separately as NCFBIZ and other, not NCFINV).
+			fields["NetCashFlowInvest"] = investing - capex + otherInv - biz
+		}
+	}
+
+	// For banks, override balance sheet fields from extension tags. The
+	// mapping-level FallbackTags work for AR dimensions but the MR filing
+	// date filter can exclude extension facts from the MR CompanyFacts.
+	// Resolving directly from the UNFILTERED cf ensures extension tags are
+	// always available.
+	if isBank {
+		bankExtTags := []struct {
+			field string
+			tags  []string
+		}{
+			// JPM 10-K and 10-Q use different casing for extension concepts.
+			{"Intangibles", []string{
+				"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets", // 10-Q
+				"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets", // 10-K
+			}},
+			{"PropertyPlantAndEquipmentNet", []string{
+				"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+			}},
+			{"Receivables", []string{"AccruedInterestAndAccountsReceivable"}},
+		}
+
+		for _, ext := range bankExtTags {
+			if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: ext.tags}, periodEnd, formType); ok {
+				fields[ext.field] = v
+			}
+		}
+	}
+
+	// For banks, compute SGA = NoninterestExpense - OtherNoninterestExpense.
+	// Sharadar excludes "OtherNoninterestExpense" (a catch-all for misc items
+	// like FDIC assessments, regulatory fees, litigation) from SGA.
+	// Uses the mapped _bankOtherNoninterestExpense field which is properly
+	// de-cumulated (critical for Q4 synthesis where the raw tag isn't available).
+	if isBank {
+		nonintExp, hasNIE := fields["OperatingExpenses"] // resolved from NoninterestExpense FallbackTag
+		if hasNIE {
+			otherNIE := fields["_bankOtherNoninterestExpense"] // 0 when absent
+			fields["SellingGeneralAndAdministrativeExpense"] = nonintExp - otherNIE
+		}
+	}
+
+	// For banks, compute Investments as the balance sheet residual:
+	// TotalAssets - CashAndEquivalents - Receivables - PP&E - Intangibles - OtherAssets.
+	// This captures loans, securities, fed funds, and other invested assets.
+	if isBank {
+		totalAssets, hasTA := fields["TotalAssets"]
+
+		if hasTA {
+			cash := fields["CashAndEquivalents"]
+			recv := fields["Receivables"]
+			ppe := fields["PropertyPlantAndEquipmentNet"]
+			intang := fields["Intangibles"]
+			oa := 0.0
+
+			if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{"OtherAssets"}}, periodEnd, formType); ok {
+				oa = v
+			}
+
+			fields["Investments"] = totalAssets - cash - recv - ppe - intang - oa
+		}
 	}
 }
