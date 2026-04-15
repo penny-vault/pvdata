@@ -516,6 +516,29 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		fields["NetCashFlowDebt"] = financing - common - dividend
 	}
 
+	// For banks, recompute derived income fields from their Q4 components.
+	// The Q4 synthesis computes each field independently (Annual - Q1-Q2-Q3),
+	// but when NetIncome uses the cumulative path (43,199) while the Q1-Q3
+	// EBT sum uses single-quarter NI (43,197), derived fields like EBT/EBIT
+	// get a 2M inconsistency. Recomputing from formulas ensures consistency.
+	if isBank {
+		if ni, hasNI := fields["NetIncome"]; hasNI {
+			tax, _ := fields["IncomeTaxExpense"]
+			intExp, _ := fields["InterestExpense"]
+			da, _ := fields["DepreciationAmortizationAndAccretion"]
+
+			fields["EBT"] = ni + tax
+			fields["EBIT"] = ni + tax + intExp
+			fields["EBITDA"] = ni + tax + intExp + da
+
+			// Recompute NCI from corrected values
+			if consolidated, hasCons := fields["ConsolidatedIncome"]; hasCons {
+				pref, _ := fields["PreferredDividendsIncomeStatementImpact"]
+				fields["NetIncomeToNonControllingInterests"] = consolidated - ni - pref
+			}
+		}
+	}
+
 	// For banks, override NCFDEBT with a direct computation from de-cumulated
 	// bank-specific fields. The residual approach doesn't work for banks
 	// because the financing total includes deposits, preferred stock, and
