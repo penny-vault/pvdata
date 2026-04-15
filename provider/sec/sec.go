@@ -996,6 +996,18 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		overrideNCFDebtResidual(cf, q.arEmit, q.period.PeriodEnd, q.period.FormType)
 		overrideNCFDebtResidual(cf, q.mrEmit, q.period.PeriodEnd, q.period.FormType)
 
+		// For banks, use the prior quarter's declared DPS as the cash-paid
+		// DPS for MR dimensions only. Sharadar AR uses declared (current
+		// quarter) but MR uses cash-paid (= prior quarter's declared rate).
+		// Use arFields (original resolved values, NOT the overridden emit)
+		// to avoid cascading the override through subsequent quarters.
+		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+			prev := &quarters[i-1]
+			if prevDPS, ok := prev.arFields["DividendsPerBasicCommonShare"]; ok {
+				q.mrEmit["DividendsPerBasicCommonShare"] = prevDPS
+			}
+		}
+
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",
 			q.period.ARFiledDate, calendarDate, q.period.PeriodEnd, q.period.ARFiledDate)
