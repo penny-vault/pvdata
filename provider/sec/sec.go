@@ -984,6 +984,22 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
 
+		// For banks, use the prior quarter's declared DPS as the cash-paid
+		// DPS for MR dimensions only. Try arFields, then arEmit for
+		// synthesized Q4 quarters. Only affects MR dimensions — AR keeps
+		// the declared value.
+		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+			prev := &quarters[i-1]
+			prevDPS, ok := prev.arFields["DividendsPerBasicCommonShare"]
+			if !ok {
+				prevDPS, ok = prev.arEmit["DividendsPerBasicCommonShare"]
+			}
+
+			if ok {
+				q.mrEmit["DividendsPerBasicCommonShare"] = prevDPS
+			}
+		}
+
 		if !since.IsZero() && q.period.MRFiledDate.Before(since) {
 			continue
 		}
@@ -995,18 +1011,6 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// residual naturally picks them up when the other components match.
 		overrideNCFDebtResidual(cf, q.arEmit, q.period.PeriodEnd, q.period.FormType)
 		overrideNCFDebtResidual(cf, q.mrEmit, q.period.PeriodEnd, q.period.FormType)
-
-		// For banks, use the prior quarter's declared DPS as the cash-paid
-		// DPS for MR dimensions only. Sharadar AR uses declared (current
-		// quarter) but MR uses cash-paid (= prior quarter's declared rate).
-		// Use arFields (original resolved values, NOT the overridden emit)
-		// to avoid cascading the override through subsequent quarters.
-		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
-			prev := &quarters[i-1]
-			if prevDPS, ok := prev.arFields["DividendsPerBasicCommonShare"]; ok {
-				q.mrEmit["DividendsPerBasicCommonShare"] = prevDPS
-			}
-		}
 
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",
