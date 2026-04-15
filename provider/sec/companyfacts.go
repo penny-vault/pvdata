@@ -730,7 +730,7 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			val:    rf.value,
 			start:  ctx.start,
 			member: ctx.dimMembers[0],
-			isFlow: !ctx.start.IsZero(), // duration facts have a start date
+			isFlow: !ctx.start.IsZero(),
 		})
 	}
 
