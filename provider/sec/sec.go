@@ -996,6 +996,11 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			overrideNCFDebtResidual(cf, a.mrEmit, a.period.PeriodEnd, a.period.FormType)
 		}
 
+		if !conceptFiledQuarterly(cf, []string{"Deposits", "DepositsDomestic", "DepositsTotal"}) {
+			deriveCostOfRevenueBottomUp(a.arEmit)
+			deriveCostOfRevenueBottomUp(a.mrEmit)
+		}
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
@@ -1110,6 +1115,14 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// residual naturally picks them up when the other components match.
 		overrideNCFDebtResidual(cf, q.arEmit, q.period.PeriodEnd, q.period.FormType)
 		overrideNCFDebtResidual(cf, q.mrEmit, q.period.PeriodEnd, q.period.FormType)
+
+		// Derive CostOfRevenue bottom-up for insurance/conglomerates without
+		// standard COGS tags. Banks (which report Deposits) have Revenue =
+		// GrossProfit by definition (no COGS), so this derivation is skipped.
+		if !conceptFiledQuarterly(cf, []string{"Deposits", "DepositsDomestic", "DepositsTotal"}) {
+			deriveCostOfRevenueBottomUp(q.arEmit)
+			deriveCostOfRevenueBottomUp(q.mrEmit)
+		}
 
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",

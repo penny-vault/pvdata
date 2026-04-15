@@ -522,7 +522,11 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 // For companies like AAPL that present debt cash flows as separate lines
 // and DO file AssetsCurrent, the direct XBRL-based computation is correct.
 func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time, formType string) {
-	isBank := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"})
+	// Banks lack AssetsCurrent (no current/non-current classification) AND
+	// report Deposits (a bank-specific liability). Insurance conglomerates
+	// like BRK/B also lack AssetsCurrent but don't have Deposits.
+	isBank := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) &&
+		conceptFiledQuarterly(cf, []string{"Deposits", "DepositsDomestic", "DepositsTotal"})
 	bundlesFinancing := conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"})
 
 	if !isBank && !bundlesFinancing {
@@ -696,4 +700,52 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 			fields["Investments"] = totalAssets - cash - recv - ppe - intang - oa
 		}
 	}
+}
+
+// deriveCostOfRevenueBottomUp recomputes income statement fields for companies
+// that don't report CostOfRevenue or OperatingIncomeLoss directly (insurance
+// and conglomerate companies like BRK/B). When CostOfRevenue is missing but
+// OperatingIncome and SGA are available, the income statement is reconstructed
+// bottom-up:
+//
+//	OperatingExpenses = SGA + R&D
+//	GrossProfit = OperatingIncome + OperatingExpenses
+//	CostOfRevenue = Revenues - GrossProfit
+func deriveCostOfRevenueBottomUp(fields map[string]float64) {
+	// Only apply when CostOfRevenue is missing and OperatingIncome is present.
+	if _, hasCOR := fields["CostOfRevenue"]; hasCOR {
+		return
+	}
+
+	opIncome, hasOI := fields["OperatingIncome"]
+	if !hasOI {
+		return
+	}
+
+	sga := fields["SellingGeneralAndAdministrativeExpense"] // 0 when absent
+	rnd := fields["RandDExpenses"]                          // 0 when absent
+
+	// Need at least SGA to derive the income statement.
+	if sga == 0 {
+		return
+	}
+
+	opEx := sga + rnd
+	grossProfit := opIncome + opEx
+	revenue, hasRev := fields["Revenues"]
+
+	if !hasRev || revenue == 0 {
+		return
+	}
+
+	costOfRevenue := revenue - grossProfit
+
+	// Sanity check: COGS should be positive and less than revenue.
+	if costOfRevenue < 0 || costOfRevenue >= revenue {
+		return
+	}
+
+	fields["CostOfRevenue"] = costOfRevenue
+	fields["GrossProfit"] = grossProfit
+	fields["OperatingExpenses"] = opEx
 }

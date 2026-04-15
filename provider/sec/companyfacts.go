@@ -695,6 +695,7 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 		val    float64
 		start  time.Time
 		member string // dimension member value for deduplication
+		isFlow bool   // true for duration facts (income/cash flow), false for instant (balance sheet)
 	}
 
 	groups := make(map[periodKey][]dimFact)
@@ -729,6 +730,7 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			val:    rf.value,
 			start:  ctx.start,
 			member: ctx.dimMembers[0],
+			isFlow: !ctx.start.IsZero(), // duration facts have a start date
 		})
 	}
 
