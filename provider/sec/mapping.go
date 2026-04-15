@@ -626,8 +626,8 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}{
 			// JPM 10-K and 10-Q use different casing for extension concepts.
 			{"Intangibles", []string{
-				"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets",   // 10-Q
-				"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets",   // 10-K
+				"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets", // 10-Q
+				"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets", // 10-K
 			}},
 			{"PropertyPlantAndEquipmentNet", []string{
 				"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",

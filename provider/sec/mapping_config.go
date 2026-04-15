@@ -253,8 +253,8 @@ var FieldMappings = []FieldMapping{
 		FieldName: "Intangibles", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		FallbackTags: []string{
 			"IntangibleAssetsNetIncludingGoodwill",
-			"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets",  // JPM 10-Q extension
-			"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets",  // JPM 10-K extension (different casing)
+			"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets", // JPM 10-Q extension
+			"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets", // JPM 10-K extension (different casing)
 		},
 		Op:               OpAdd,
 		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},

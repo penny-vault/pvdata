@@ -1231,8 +1231,23 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			arQSlice[j] = quarters[i-3+j].arEmit
 		}
 
+		// bankFixTTMNCI replaces the TTM NCI sum with the annual value when
+		// the TTM coincides with a fiscal year. Quarterly NCI values may
+		// not sum to the annual due to the cumulative vs single-quarter
+		// discrepancy in NetIncome (2M for JPM).
+		bankFixTTMNCI := func(ttm, annualFields map[string]float64) {
+			if annualFields == nil || conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+				return
+			}
+
+			if v, ok := annualFields["NetIncomeToNonControllingInterests"]; ok {
+				ttm["NetIncomeToNonControllingInterests"] = v
+			}
+		}
+
 		if ttm := ComputeTTM(arQSlice, false); ttm != nil {
 			overridePeriodAvg(ttm, matchingAR)
+			bankFixTTMNCI(ttm, matchingAR)
 
 			for k, v := range ComputeMultiQAverages(ttm, arQSlice) {
 				ttm[k] = v
@@ -1258,6 +1273,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		if ttm := ComputeTTM(mrQSlice, true); ttm != nil {
 			overridePeriodAvg(ttm, matchingMR)
+			bankFixTTMNCI(ttm, matchingMR)
 
 			for k, v := range ComputeMultiQAverages(ttm, mrQSlice) {
 				ttm[k] = v
@@ -1288,6 +1304,63 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		EnrichMarketData(fundamentals, priceLookupFn)
+	}
+
+	// Clean up stale records for this ticker before sending new observations.
+	// Prior runs may have used different dateKey conventions (e.g., filing
+	// date vs period end), leaving orphan rows that create spurious diffs.
+	// Collect the set of valid (dimension, event_date) pairs from the current
+	// run and delete any existing records not in this set.
+	if asset.CompositeFigi != "" && len(buffered) > 0 {
+		cleanupCtx := context.Background()
+		tbl := sub.DataTablesMap[data.FundamentalsKey]
+		if tbl != "" {
+			type obsKey struct {
+				dim       string
+				eventDate time.Time
+			}
+
+			validKeys := make(map[obsKey]bool)
+			for _, obs := range buffered {
+				if obs.Fundamental != nil {
+					validKeys[obsKey{obs.Fundamental.Dimension, obs.Fundamental.EventDate}] = true
+				}
+			}
+
+			conn, err := sub.Library.Pool.Acquire(cleanupCtx)
+			if err == nil {
+				rows, err := conn.Query(cleanupCtx,
+					fmt.Sprintf("SELECT dimension, event_date FROM %s WHERE composite_figi = $1", tbl),
+					asset.CompositeFigi)
+				if err == nil {
+					var toDelete []obsKey
+
+					for rows.Next() {
+						var dim string
+						var ed time.Time
+						if err := rows.Scan(&dim, &ed); err == nil {
+							if !validKeys[obsKey{dim, ed}] {
+								toDelete = append(toDelete, obsKey{dim, ed})
+							}
+						}
+					}
+
+					rows.Close()
+
+					for _, k := range toDelete {
+						_, _ = conn.Exec(cleanupCtx,
+							fmt.Sprintf("DELETE FROM %s WHERE composite_figi = $1 AND dimension = $2 AND event_date = $3", tbl),
+							asset.CompositeFigi, k.dim, k.eventDate)
+					}
+
+					if len(toDelete) > 0 {
+						log.Debug().Str("ticker", asset.Ticker).Int("deleted", len(toDelete)).Msg("cleaned up stale observations")
+					}
+				}
+
+				conn.Release()
+			}
+		}
 	}
 
 	// Send all buffered observations to the output channel.
