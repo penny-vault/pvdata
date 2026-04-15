@@ -573,9 +573,11 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		if hasI {
 			capex, _ := fields["CapitalExpenditure"]     // 0 when absent (banks)
 			otherInv, _ := fields["_bankOtherInvesting"] // 0 when absent
-			// Add back "other" investing (it's a net payment included in the
-			// investing total but NOT in Sharadar's NCFINV).
-			fields["NetCashFlowInvest"] = investing - capex + otherInv
+			biz, _ := fields["NetCashFlowBusiness"]      // 0 when absent; already negated
+			// Add back "other" investing and subtract business acquisitions
+			// (both are in the investing total but Sharadar classifies them
+			// separately as NCFBIZ and other, not NCFINV).
+			fields["NetCashFlowInvest"] = investing - capex + otherInv - biz
 		}
 	}
 
@@ -610,14 +612,12 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	// For banks, compute SGA = NoninterestExpense - OtherNoninterestExpense.
 	// Sharadar excludes "OtherNoninterestExpense" (a catch-all for misc items
 	// like FDIC assessments, regulatory fees, litigation) from SGA.
+	// Uses the mapped _bankOtherNoninterestExpense field which is properly
+	// de-cumulated (critical for Q4 synthesis where the raw tag isn't available).
 	if isBank {
 		nonintExp, hasNIE := fields["OperatingExpenses"] // resolved from NoninterestExpense FallbackTag
 		if hasNIE {
-			otherNIE := 0.0
-			if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{"OtherNoninterestExpense"}}, periodEnd, formType); ok {
-				otherNIE = v
-			}
-
+			otherNIE, _ := fields["_bankOtherNoninterestExpense"] // 0 when absent
 			fields["SellingGeneralAndAdministrativeExpense"] = nonintExp - otherNIE
 		}
 	}

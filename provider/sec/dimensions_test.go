@@ -717,6 +717,7 @@ var _ = Describe("Dimensions", func() {
 				"_bankLTDebtRepayments":              true,
 				"_bankSTDebtProceeds":                true,
 				"_bankOtherInvesting":                true,
+				"_bankOtherNoninterestExpense":       true,
 			}
 
 			var missing []string

@@ -902,6 +902,11 @@ var FieldMappings = []FieldMapping{
 		XBRLTags:           []string{"PaymentsForProceedsFromOtherInvestingActivities"},
 	},
 	{
+		FieldName: "_bankOtherNoninterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"OtherNoninterestExpense"},
+	},
+	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		Negate: true,
 		XBRLTags: []string{
