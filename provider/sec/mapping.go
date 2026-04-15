@@ -548,6 +548,16 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}
 	}
 
+	// For banks, ensure NetCashFlowBusiness is present in the fields map
+	// (even as 0) so the strictFlow TTM check passes. Without this, quarters
+	// where no acquisitions occurred have the field absent, causing the
+	// MRT TTM to skip it entirely (found < 4 with strictFlow=true).
+	if isBank {
+		if _, ok := fields["NetCashFlowBusiness"]; !ok {
+			fields["NetCashFlowBusiness"] = 0
+		}
+	}
+
 	// For banks, derive OperatingIncome = GrossProfit - OperatingExpenses
 	// when OperatingIncomeLoss isn't available. OperatingExpenses resolves
 	// from NoninterestExpense FallbackTag, and GrossProfit = Revenues.
