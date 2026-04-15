@@ -178,27 +178,44 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 		}
 	}
 
-	// Filter out spurious 10-Q periods at fiscal year-end dates. Banks (JPM)
-	// have 10-Q facts at the annual period end (comparative data + one-off
-	// transaction dates like PaymentsToAcquireBusinessesGross at 2025-01-31
-	// which normalizes to 2024-12-31). When a 10-K period exists at the same
-	// normalized date AND the 10-Q's raw PeriodEnd is far from the normalized
-	// date (> 10 days), the 10-Q is spurious — not a real quarterly filing.
-	// Real quarterly filings have PeriodEnd within a few days of their
-	// normalized quarter end (e.g., AAPL Q1 at 2024-12-28 → 2024-12-31).
+	// Filter out spurious 10-Q periods that collide with a 10-K at the same
+	// normalized date. Two kinds of spurious 10-Q appear in practice:
+	//
+	//   1. Far-from-quarter-end: one-off transaction dates (e.g. JPM's
+	//      PaymentsToAcquireBusinessesGross at 2025-01-31 which normalizes
+	//      to 2024-12-31). Raw PeriodEnd is > 10 days from the normalized
+	//      quarter end; real quarterly filings are within a few days.
+	//
+	//   2. At-fiscal-year-end: duration facts in a 10-Q that happen to end
+	//      at the prior fiscal year-end (e.g. GS/JPM comparative or rolling
+	//      facts at 2024-12-31 in a Q1/Q2/Q3 2025 10-Q). Raw PeriodEnd
+	//      equals the 10-K's raw PeriodEnd; a company does not file a
+	//      separate 10-Q covering the same end date as its 10-K.
+	//
+	// We keep legitimate 10-Q periods that merely share a normalized date
+	// with a 10-K because of calendar-normalization (e.g. AAPL fiscal Q1
+	// at 2024-12-28 normalizes to 2024-12-31; its 10-K at 2024-09-28 also
+	// normalizes to 2024-12-31 via the annual-to-year-end rule, but the
+	// two raw PeriodEnds are ~3 months apart).
+	const sameFiscalEndDays = 10
+
 	periods := make([]Period, 0, len(dedupedPeriods))
 	for _, p := range dedupedPeriods {
 		if p.FormType == "10-Q" {
 			normalEnd := NormalizeEventDate(p.PeriodEnd, p.FormType)
 			annualKey := periodKey{end: normalEnd, form: "10-K"}
 
-			if _, hasAnnual := dedupedPeriods[annualKey]; hasAnnual {
-				dist := p.PeriodEnd.Sub(normalEnd)
-				if dist < 0 {
-					dist = -dist
+			if annual, hasAnnual := dedupedPeriods[annualKey]; hasAnnual {
+				// Case 1: raw PeriodEnd far from the normalized quarter end.
+				dist := absDuration(p.PeriodEnd.Sub(normalEnd))
+				if dist.Hours()/24 > 10 {
+					continue
 				}
 
-				if dist.Hours()/24 > 10 {
+				// Case 2: raw PeriodEnd coincides with the 10-K's raw
+				// PeriodEnd (same fiscal year-end).
+				annualDist := absDuration(p.PeriodEnd.Sub(annual.PeriodEnd))
+				if annualDist.Hours()/24 <= sameFiscalEndDays {
 					continue
 				}
 			}
