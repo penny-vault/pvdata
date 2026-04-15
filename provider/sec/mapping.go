@@ -572,6 +572,21 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}
 	}
 
+	// For banks, compute SGA = NoninterestExpense - OtherNoninterestExpense.
+	// Sharadar excludes "OtherNoninterestExpense" (a catch-all for misc items
+	// like FDIC assessments, regulatory fees, litigation) from SGA.
+	if isBank {
+		nonintExp, hasNIE := fields["OperatingExpenses"] // resolved from NoninterestExpense FallbackTag
+		if hasNIE {
+			otherNIE := 0.0
+			if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{"OtherNoninterestExpense"}}, periodEnd, formType); ok {
+				otherNIE = v
+			}
+
+			fields["SellingGeneralAndAdministrativeExpense"] = nonintExp - otherNIE
+		}
+	}
+
 	// For banks, compute Investments as the balance sheet residual:
 	// TotalAssets - CashAndEquivalents - Receivables - PP&E - Intangibles - OtherAssets.
 	// This captures loans, securities, fed funds, and other invested assets.
