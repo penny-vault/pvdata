@@ -178,8 +178,25 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 		}
 	}
 
+	// Filter out spurious periods whose raw PeriodEnd is too far from the
+	// nearest calendar quarter end. Banks (JPM) have facts with non-standard
+	// dates (e.g., EntityCommonStockSharesOutstanding at 2025-01-31 on 10-K
+	// cover page, PaymentsToAcquireBusinessesGross at acquisition closing
+	// dates). These create ghost periods that disrupt TTM computation.
+	const maxGhostPeriodDays = 10
+
 	periods := make([]Period, 0, len(dedupedPeriods))
 	for _, p := range dedupedPeriods {
+		qe := nearestQuarterEnd(p.PeriodEnd)
+		dist := p.PeriodEnd.Sub(qe)
+		if dist < 0 {
+			dist = -dist
+		}
+
+		if dist.Hours()/24 > maxGhostPeriodDays {
+			continue
+		}
+
 		periods = append(periods, *p)
 	}
 
