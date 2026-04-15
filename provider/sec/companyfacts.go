@@ -429,8 +429,38 @@ func parseExtensionFactsFromFiling(ctx context.Context, client *resty.Client, ci
 	parseXBRLInstanceExtensions(resp.Body(), cf, filed, formType)
 }
 
+// dimensionalShareConcepts lists us-gaap concepts for per-share and share
+// count data that some multi-class filers (e.g. BRK/B) report ONLY with
+// dimensional XBRL (one value per share class). The companyfacts API
+// excludes dimensional facts, so they must be captured from the inline XBRL
+// instance when the context carries a "ClassB" member.
+var dimensionalShareConcepts = map[string]bool{
+	"WeightedAverageNumberOfSharesOutstandingBasic":          true,
+	"WeightedAverageNumberOfDilutedSharesOutstanding":        true,
+	"WeightedAverageNumberOfShareOutstandingBasicAndDiluted": true,
+	"EarningsPerShareBasic":                                  true,
+	"EarningsPerShareDiluted":                                true,
+	"CommonStockSharesOutstanding":                           true,
+}
+
+// contextHasClassBMember returns true if any dimension member in the context
+// contains "ClassB" (matching both standard us-gaap:CommonClassBMember and
+// company extensions like brka:EquivalentClassBMember).
+func contextHasClassBMember(ctx contextPeriod) bool {
+	for _, m := range ctx.dimMembers {
+		if strings.Contains(m, "ClassB") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // parseXBRLInstanceExtensions parses an XBRL instance XML document and
 // extracts extension facts (concepts not in us-gaap or dei namespaces).
+// It also captures us-gaap share/EPS concepts from dimensional contexts
+// with a Class B member, since multi-class filers may only report these
+// dimensionally (not in the companyfacts API).
 // It uses encoding/xml for proper XML parsing.
 func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Time, formType string) {
 	decoder := xml.NewDecoder(bytes.NewReader(xmlData))
@@ -445,10 +475,11 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 	// for facts. To avoid two passes over the byte stream, collect raw
 	// fact data during the first pass.
 	type rawFact struct {
-		conceptName string
-		contextRef  string
-		unitRef     string
-		value       float64
+		conceptName    string
+		contextRef     string
+		unitRef        string
+		value          float64
+		isShareConcept bool // true for us-gaap share/EPS concepts captured for dimensional resolution
 	}
 
 	var rawFacts []rawFact
@@ -469,19 +500,22 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 			parseXBRLContext(decoder, &se, contexts)
 
 		default:
-			// Check if this element is a fact from a non-standard namespace.
 			ns := se.Name.Space
-			if ns == "" || ns == "http://fasb.org/us-gaap/2024" ||
-				ns == "http://xbrl.sec.gov/dei/2024" ||
+			conceptName := se.Name.Local
+
+			// Determine if this is a us-gaap share concept we want from
+			// dimensional contexts, or an extension (non-standard) concept.
+			isStdNS := ns == "" ||
 				strings.Contains(ns, "us-gaap") ||
 				strings.Contains(ns, "/dei/") ||
 				strings.Contains(ns, "xbrl.org") ||
 				strings.Contains(ns, "w3.org") ||
-				strings.Contains(ns, "xbrl.sec.gov/ecd") {
+				strings.Contains(ns, "xbrl.sec.gov/ecd")
+			isShareConcept := isStdNS && dimensionalShareConcepts[conceptName]
+
+			if isStdNS && !isShareConcept {
 				continue
 			}
-
-			conceptName := se.Name.Local
 
 			var contextRef, unitRef string
 
@@ -529,10 +563,11 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 			}
 
 			rawFacts = append(rawFacts, rawFact{
-				conceptName: conceptName,
-				contextRef:  contextRef,
-				unitRef:     unitRef,
-				value:       val,
+				conceptName:    conceptName,
+				contextRef:     contextRef,
+				unitRef:        unitRef,
+				value:          val,
+				isShareConcept: isShareConcept,
 			})
 		}
 	}
@@ -540,12 +575,23 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 	// Second step: match facts to contexts and build Fact objects.
 	for _, rf := range rawFacts {
 		ctx, ok := contexts[rf.contextRef]
-		if !ok || ctx.hasDim {
+		if !ok {
 			continue
 		}
 
-		// Only include USD-denominated facts (skip unit validation since
-		// the XBRL instance uses unit references, not unit types directly).
+		if rf.isShareConcept {
+			// Share/EPS concepts: only capture from Class B dimensional
+			// contexts. Non-dimensional values are already in companyfacts.
+			if !ctx.hasDim || !contextHasClassBMember(ctx) {
+				continue
+			}
+		} else {
+			// Extension facts: skip dimensional contexts (as before).
+			if ctx.hasDim {
+				continue
+			}
+		}
+
 		fact := Fact{
 			End:   ctx.end,
 			Start: ctx.start,
@@ -567,9 +613,10 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 
 // contextPeriod holds period and dimension info for an XBRL context.
 type contextPeriod struct {
-	start  time.Time
-	end    time.Time
-	hasDim bool
+	start      time.Time
+	end        time.Time
+	hasDim     bool
+	dimMembers []string // dimension member values (e.g. "brka:EquivalentClassBMember")
 }
 
 // parseXBRLContext parses a single <xbrli:context> element from the XML stream.
@@ -621,6 +668,12 @@ func parseXBRLContext(decoder *xml.Decoder, se *xml.StartElement, contexts map[s
 				depth--
 			case "explicitMember":
 				cp.hasDim = true
+
+				if memberText, err := readElementText(decoder); err == nil {
+					cp.dimMembers = append(cp.dimMembers, memberText)
+				}
+
+				depth-- // readElementText consumed the end element
 			}
 
 		case xml.EndElement:

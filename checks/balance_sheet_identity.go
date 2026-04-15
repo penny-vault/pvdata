@@ -22,12 +22,15 @@ import (
 	"github.com/penny-vault/pvdata/data"
 )
 
-// BalanceSheetIdentity checks that Assets = Liabilities + Equity within 0.1% tolerance (min 1000).
+// BalanceSheetIdentity checks that Assets = Liabilities + Equity within 0.5%
+// tolerance (min 1000). The 0.5% threshold accommodates companies with
+// significant non-controlling interests (e.g. BRK/B ~0.2% NCI) where the
+// equity field uses parent-only StockholdersEquity to match Sharadar.
 type BalanceSheetIdentity struct{}
 
 func (c *BalanceSheetIdentity) Name() string { return "balance_sheet_identity" }
 func (c *BalanceSheetIdentity) Description() string {
-	return "Assets must equal Liabilities + Equity (0.1% tolerance)"
+	return "Assets must equal Liabilities + Equity (0.5% tolerance)"
 }
 func (c *BalanceSheetIdentity) Phase() CheckPhase { return PhaseInline }
 func (c *BalanceSheetIdentity) Severity() CheckSeverity {
@@ -48,7 +51,7 @@ func (c *BalanceSheetIdentity) Validate(_ context.Context, obs *data.Observation
 
 	expected := f.TotalLiabilities + f.Equity
 	diff := math.Abs(float64(f.TotalAssets - expected))
-	tolerance := math.Max(0.001*math.Abs(float64(f.TotalAssets)), 1000)
+	tolerance := math.Max(0.005*math.Abs(float64(f.TotalAssets)), 1000)
 
 	if diff > tolerance {
 		return []CheckResult{

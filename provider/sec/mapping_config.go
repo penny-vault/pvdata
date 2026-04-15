@@ -567,12 +567,14 @@ var FieldMappings = []FieldMapping{
 		// InterestExpenseNonoperating is used by MSFT on 10-Q filings where
 		// the generic InterestExpense tag is only filed on 10-K.
 		//
-		// RequireIfQuarterly on AssetsCurrent: banks (JPM) file the generic
+		// ExcludeIfQuarterly on Deposits: banks (JPM) file the generic
 		// InterestExpense tag for some quarters but not others, and for banks
 		// this is operational interest (cost of deposits) — NOT financing
 		// expense. Including it in EBIT breaks Q4 synthesis (annual has 0
-		// but one quarter has 24B). Banks without AssetsCurrent skip this.
-		RequireIfQuarterly: []string{"AssetsCurrent"},
+		// but one quarter has 24B). Gating on Deposits (a bank-specific
+		// liability) excludes real banks while allowing insurance
+		// conglomerates like BRK/B that also lack AssetsCurrent.
+		ExcludeIfQuarterly: []string{"Deposits"},
 		XBRLTags: []string{
 			"InterestExpense",
 			"InterestExpenseDebt",
