@@ -699,6 +699,8 @@ var _ = Describe("Dimensions", func() {
 				"_deferredRevenueNoncurrent":         true,
 				"_ppneRaw":                           true,
 				"_operatingLeaseROU":                 true,
+				"_propertyHeldForLease":              true,
+				"_costsAndExpenses":                  true,
 				"_deferredTaxLiabilities":            true,
 				"_accruedIncomeTaxesCurrent":         true,
 				"_accruedIncomeTaxesNoncurrent":      true,
@@ -717,6 +719,8 @@ var _ = Describe("Dimensions", func() {
 				"_bankLTDebtRepayments":              true,
 				"_bankSTDebtProceeds":                true,
 				"_bankOtherInvesting":                true,
+				"_revenuesDirect":                    true,
+				"_investmentGains":                   true,
 				"_bankOtherNoninterestExpense":       true,
 			}
 

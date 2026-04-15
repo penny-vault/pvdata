@@ -107,7 +107,22 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 				continue
 			}
 
-			mktCap := int64(price * float64(f.SharesBasic))
+			// Compute share_factor for multi-class share companies.
+			// When weighted-average diluted shares significantly exceed
+			// shares outstanding, the company has multiple share classes
+			// where the traded instrument represents a fraction of the
+			// total economic ownership (e.g. BRK/B: 1 Class A = 1500
+			// Class B). The share_factor bridges SharesBasic to the
+			// total equivalent shares for market cap calculation.
+			shareFactor := 1.0
+			if f.SharesBasic > 0 && f.WeightedAverageSharesDiluted > 0 {
+				ratio := float64(f.WeightedAverageSharesDiluted) / float64(f.SharesBasic)
+				if ratio > 1.1 {
+					shareFactor = math.Round(ratio*1000) / 1000
+				}
+			}
+
+			mktCap := int64(price * float64(f.SharesBasic) * shareFactor)
 
 			// MR dimensions use the previous quarter's debt and cash for
 			// enterprise value. Sharadar's MR price/shares reflect the most
@@ -133,10 +148,20 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			}
 
 			f.Price = price
-			f.ShareFactor = 1.0
+			f.ShareFactor = shareFactor
 			f.FxUSD = 1.0
 			f.MarketCapitalization = mktCap
 			f.EnterpriseValue = ev
+
+			// For multi-class companies, WeightedAverageShares from the XBRL
+			// tag represents the combined total across all share classes
+			// (e.g. BRK/B: 2.16B B-equivalent including Class A). Sharadar
+			// instead uses the per-class shares (same as SharesBasic) for
+			// WeightedAverageShares, with share_factor bridging to the total.
+			// This gives per-share metrics denominated in the traded class.
+			if shareFactor > 1.1 && f.SharesBasic > 0 {
+				f.WeightedAverageShares = int64(f.SharesBasic)
+			}
 
 			if f.Equity != 0 {
 				f.PB = math.Round(float64(mktCap)/float64(f.Equity)*1000) / 1000

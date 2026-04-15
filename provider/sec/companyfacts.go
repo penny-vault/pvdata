@@ -22,6 +22,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -441,6 +442,7 @@ var dimensionalShareConcepts = map[string]bool{
 	"EarningsPerShareBasic":                                  true,
 	"EarningsPerShareDiluted":                                true,
 	"CommonStockSharesOutstanding":                           true,
+	"EntityCommonStockSharesOutstanding":                     true, // DEI cover-page shares; multi-class filers report per-class
 }
 
 // contextHasClassBMember returns true if any dimension member in the context
@@ -456,11 +458,58 @@ func contextHasClassBMember(ctx contextPeriod) bool {
 	return false
 }
 
+// rawFact holds a parsed XBRL fact from the inline XBRL instance document.
+type rawFact struct {
+	conceptName    string
+	contextRef     string
+	unitRef        string
+	value          float64
+	isShareConcept bool // true for us-gaap share/EPS concepts captured for dimensional resolution
+	isGapFill      bool // true for standard us-gaap concepts captured to fill companyfacts API gaps
+}
+
+// hasFactForPeriod returns true if CompanyFacts already contains at least one
+// fact for the given concept name and period end date. This is used to avoid
+// duplicating data that the companyfacts API already provides.
+func hasFactForPeriod(cf *CompanyFacts, conceptName string, end time.Time) bool {
+	facts, ok := cf.Facts[conceptName]
+	if !ok || len(facts) == 0 {
+		return false
+	}
+
+	for i := range facts {
+		if facts[i].End.Equal(end) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// hasFactForPeriodAndForm returns true if CompanyFacts already contains a fact
+// matching the concept, period end, and form type.
+func hasFactForPeriodAndForm(cf *CompanyFacts, conceptName string, end time.Time, formType string) bool {
+	facts, ok := cf.Facts[conceptName]
+	if !ok || len(facts) == 0 {
+		return false
+	}
+
+	for i := range facts {
+		if facts[i].End.Equal(end) && facts[i].Form == formType {
+			return true
+		}
+	}
+
+	return false
+}
+
 // parseXBRLInstanceExtensions parses an XBRL instance XML document and
 // extracts extension facts (concepts not in us-gaap or dei namespaces).
 // It also captures us-gaap share/EPS concepts from dimensional contexts
 // with a Class B member, since multi-class filers may only report these
-// dimensionally (not in the companyfacts API).
+// dimensionally (not in the companyfacts API). Additionally, it captures
+// standard us-gaap concepts from non-dimensional contexts when the
+// companyfacts API is missing data for that concept and period (gap-fill).
 // It uses encoding/xml for proper XML parsing.
 func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Time, formType string) {
 	decoder := xml.NewDecoder(bytes.NewReader(xmlData))
@@ -474,13 +523,6 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 	// We need to scan the entire document to build contexts, then re-scan
 	// for facts. To avoid two passes over the byte stream, collect raw
 	// fact data during the first pass.
-	type rawFact struct {
-		conceptName    string
-		contextRef     string
-		unitRef        string
-		value          float64
-		isShareConcept bool // true for us-gaap share/EPS concepts captured for dimensional resolution
-	}
 
 	var rawFacts []rawFact
 
@@ -513,9 +555,15 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 				strings.Contains(ns, "xbrl.sec.gov/ecd")
 			isShareConcept := isStdNS && dimensionalShareConcepts[conceptName]
 
-			if isStdNS && !isShareConcept {
-				continue
-			}
+			// Standard us-gaap concepts that are NOT share concepts are
+			// captured as gap-fill candidates. The companyfacts API sometimes
+			// omits consolidated facts for conglomerates and insurance
+			// companies (e.g. BRK/B's PropertyPlantAndEquipmentNet,
+			// CostOfGoodsAndServicesSold). These facts exist in the inline
+			// XBRL but are absent from the API. We capture them from
+			// non-dimensional contexts and only add them when no existing
+			// fact covers the same period.
+			isGapFill := isStdNS && !isShareConcept
 
 			var contextRef, unitRef string
 
@@ -568,6 +616,7 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 				unitRef:        unitRef,
 				value:          val,
 				isShareConcept: isShareConcept,
+				isGapFill:      isGapFill,
 			})
 		}
 	}
@@ -583,6 +632,17 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 			// Share/EPS concepts: only capture from Class B dimensional
 			// contexts. Non-dimensional values are already in companyfacts.
 			if !ctx.hasDim || !contextHasClassBMember(ctx) {
+				continue
+			}
+		} else if rf.isGapFill {
+			// Standard us-gaap gap-fill: only from non-dimensional contexts,
+			// and only when the companyfacts API doesn't already have a fact
+			// for this concept and period end date.
+			if ctx.hasDim {
+				continue
+			}
+
+			if hasFactForPeriod(cf, rf.conceptName, ctx.end) {
 				continue
 			}
 		} else {
@@ -603,10 +663,155 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 		cf.Facts[rf.conceptName] = append(cf.Facts[rf.conceptName], fact)
 	}
 
+	// Synthesize consolidated facts from dimensional data for concepts
+	// that have no non-dimensional data in CompanyFacts.
+	synthesizeConsolidatedFacts(cf, rawFacts, contexts, filed, formType)
+
 	// Sort facts by filing date.
 	for _, facts := range cf.Facts {
 		sort.SliceStable(facts, func(i, j int) bool {
 			return facts[i].Filed.Before(facts[j].Filed)
+		})
+	}
+}
+
+// synthesizeConsolidatedFacts creates consolidated (non-dimensional) facts from
+// dimensional segment data for concepts missing from CompanyFacts. Conglomerates
+// like BRK/B report certain balance sheet and income statement items only with
+// segment dimensions (e.g. srt:ProductOrServiceAxis with InsuranceAndOther and
+// RailroadUtilitiesAndEnergy members). The consolidated value is the sum of
+// top-level segment totals along the product/service axis.
+//
+// Only facts with exactly one dimension member on the srt:ProductOrServiceAxis
+// are considered. Sub-segments (whose values sum to a parent segment's value)
+// are detected and excluded to avoid double-counting.
+func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts map[string]contextPeriod, filed time.Time, formType string) {
+	type periodKey struct {
+		concept string
+		end     time.Time
+	}
+
+	type dimFact struct {
+		val    float64
+		start  time.Time
+		member string // dimension member value for deduplication
+	}
+
+	groups := make(map[periodKey][]dimFact)
+
+	for _, rf := range rawFacts {
+		if !rf.isGapFill {
+			continue
+		}
+
+		ctx, ok := contexts[rf.contextRef]
+		if !ok || !ctx.hasDim {
+			continue
+		}
+
+		// Only facts with exactly one dimension on the ProductOrServiceAxis.
+		if len(ctx.dimMembers) != 1 || len(ctx.dimAxes) != 1 {
+			continue
+		}
+
+		if !strings.Contains(ctx.dimAxes[0], "ProductOrServiceAxis") {
+			continue
+		}
+
+		// Use form-type-aware check: a 10-Q synthetic fact shouldn't prevent
+		// creating a 10-K synthetic fact for the same concept+period.
+		if hasFactForPeriodAndForm(cf, rf.conceptName, ctx.end, formType) {
+			continue
+		}
+
+		pk := periodKey{concept: rf.conceptName, end: ctx.end}
+		groups[pk] = append(groups[pk], dimFact{
+			val:    rf.value,
+			start:  ctx.start,
+			member: ctx.dimMembers[0],
+		})
+	}
+
+	const tolerance = 0.02
+
+	for pk, facts := range groups {
+		// Deduplicate by member: same member+period can appear multiple
+		// times in a filing (balance sheet vs. segment note). Keep the
+		// first occurrence.
+		seen := make(map[string]bool)
+		deduped := facts[:0]
+
+		for _, f := range facts {
+			if seen[f.member] {
+				continue
+			}
+
+			seen[f.member] = true
+
+			deduped = append(deduped, f)
+		}
+
+		facts = deduped
+
+		if len(facts) < 2 {
+			continue
+		}
+
+		// Detect sub-segments: if fact[j] + fact[k] ≈ fact[i], then j and k
+		// are sub-segments of i. Mark j and k as children.
+		isChild := make([]bool, len(facts))
+
+		for i, parent := range facts {
+			if parent.val == 0 {
+				continue
+			}
+
+			for j := range facts {
+				if j == i {
+					continue
+				}
+
+				for k := j + 1; k < len(facts); k++ {
+					if k == i {
+						continue
+					}
+
+					pairSum := facts[j].val + facts[k].val
+					if pairSum != 0 && math.Abs(pairSum-parent.val)/math.Abs(parent.val) < tolerance {
+						isChild[j] = true
+						isChild[k] = true
+					}
+				}
+			}
+		}
+
+		var sum float64
+		var count int
+		var start time.Time
+
+		for i, f := range facts {
+			if isChild[i] {
+				continue
+			}
+
+			sum += f.val
+			count++
+
+			if !f.start.IsZero() {
+				start = f.start
+			}
+		}
+
+		if count < 2 {
+			continue
+		}
+
+		cf.Facts[pk.concept] = append(cf.Facts[pk.concept], Fact{
+			End:   pk.end,
+			Start: start,
+			Val:   sum,
+			Filed: filed,
+			Form:  formType,
 		})
 	}
 }
@@ -617,6 +822,7 @@ type contextPeriod struct {
 	end        time.Time
 	hasDim     bool
 	dimMembers []string // dimension member values (e.g. "brka:EquivalentClassBMember")
+	dimAxes    []string // dimension axis names (e.g. "srt:ProductOrServiceAxis")
 }
 
 // parseXBRLContext parses a single <xbrli:context> element from the XML stream.
@@ -668,6 +874,16 @@ func parseXBRLContext(decoder *xml.Decoder, se *xml.StartElement, contexts map[s
 				depth--
 			case "explicitMember":
 				cp.hasDim = true
+
+				// Capture the dimension axis name from the "dimension" attribute.
+				var dimAttr string
+				for _, attr := range t.Attr {
+					if attr.Name.Local == "dimension" {
+						dimAttr = attr.Value
+					}
+				}
+
+				cp.dimAxes = append(cp.dimAxes, dimAttr)
 
 				if memberText, err := readElementText(decoder); err == nil {
 					cp.dimMembers = append(cp.dimMembers, memberText)

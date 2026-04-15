@@ -191,8 +191,9 @@ var FieldMappings = []FieldMapping{
 		FieldName: "Receivables", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		FallbackTags: []string{
 			"ReceivablesNetCurrent",
+			"PremiumsAndOtherReceivablesNet",       // Insurance companies (BRK/B) — premiums + trade receivables
 			"AccruedInterestAndAccountsReceivable", // JPM extension tag
-			"NotesReceivableNet",                   // Insurance/conglomerates with loan portfolios (BRK/B)
+			"NotesReceivableNet",                   // Insurance/conglomerates with loan portfolios
 		},
 		Op:               OpAdd,
 		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
@@ -221,6 +222,12 @@ var FieldMappings = []FieldMapping{
 		RequireQuarterly: true,
 		XBRLTags:         []string{"OperatingLeaseRightOfUseAsset"},
 	},
+	// Property subject to operating leases (lessor-side assets like railcars,
+	// utility equipment) is included in PP&E for conglomerates like BRK/B.
+	{
+		FieldName: "_propertyHeldForLease", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"PropertySubjectToOrAvailableForOperatingLeaseNet"},
+	},
 	// PropertyPlantAndEquipmentNet: use the combined extension tag if
 	// available (JPM files a combined premises+equipment+ROU tag); otherwise
 	// sum the sub-components.
@@ -230,7 +237,7 @@ var FieldMappings = []FieldMapping{
 			"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization", // JPM extension
 		},
 		Op:               OpAdd,
-		Operands:         []string{"_ppneRaw", "_operatingLeaseROU"},
+		Operands:         []string{"_ppneRaw", "_operatingLeaseROU", "_propertyHeldForLease"},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for Intangibles derivation ---
@@ -310,7 +317,11 @@ var FieldMappings = []FieldMapping{
 		// When AccruedLiabilitiesCurrent is filed on 10-Q, the company bundles
 		// tax liabilities into broader accrued/other line items (NVDA). Only
 		// resolve when tax items are separate balance sheet lines (MSFT).
+		// IncomeTaxesPrincipallyDeferred is a BRK/B extension tag for the
+		// consolidated deferred tax liability (filed quarterly, unlike the
+		// standard DeferredIncomeTaxLiabilitiesNet which BRK only files on 10-K).
 		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		FallbackTags:       []string{"IncomeTaxesPrincipallyDeferred"},
 		Op:                 OpAdd,
 		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
 		OptionalOperands:   true,
@@ -397,7 +408,12 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "TotalDebt", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		Op: OpAdd,
+		// DebtAndCapitalLeaseObligations is reported by conglomerates and
+		// insurance companies (e.g. BRK/B) that don't classify debt as
+		// current/non-current. It captures all debt including capital
+		// lease obligations in a single line item.
+		FallbackTags: []string{"DebtAndCapitalLeaseObligations"},
+		Op:           OpAdd,
 		Operands: []string{
 			"DebtCurrent", "DebtNonCurrent",
 			"_bankShortTermDebt", "_bankLongTermDebt", "_bankFederalFundsPurchased",
@@ -433,10 +449,13 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "DeferredRevenue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
-		FallbackTags:       []string{"DeferredRevenue"},
-		Op:                 OpAdd,
-		Operands:           []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
-		OptionalOperands:   true,
+		FallbackTags: []string{
+			"DeferredRevenue",
+			"UnearnedPremiums", // Insurance companies (BRK/B) — premiums collected but not yet earned
+		},
+		Op:               OpAdd,
+		Operands:         []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "TotalLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -471,8 +490,9 @@ var FieldMappings = []FieldMapping{
 	},
 	// ==================== INCOME STATEMENT (flow) ====================
 
+	// --- Internal sub-fields for Revenues derivation ---
 	{
-		FieldName: "Revenues", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_revenuesDirect", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"Revenues",
 			"RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -489,6 +509,31 @@ var FieldMappings = []FieldMapping{
 			"FinancialServicesRevenue",
 			"ElectricUtilityRevenue",
 		},
+	},
+	// Insurance and conglomerate companies (e.g. BRK/B) report investment
+	// gains/losses as a separate income statement line below the Revenues
+	// tag. Sharadar includes these in revenue because investment activity
+	// is core to the business. The ExcludeIfQuarterly gate ensures this
+	// only activates for companies WITHOUT a standard COGS breakdown
+	// (i.e., non-standard income statements).
+	{
+		FieldName: "_investmentGains", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"CostOfGoodsAndServicesSold",
+			"CostOfRevenue",
+			"CostOfGoodsSold",
+			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+		},
+		XBRLTags: []string{"GainLossOnInvestments"},
+	},
+	// Revenues = _revenuesDirect + _investmentGains. For standard companies
+	// (with COGS), _investmentGains is gated off and Revenues = _revenuesDirect.
+	// For insurance/conglomerates, investment gains are included.
+	{
+		FieldName: "Revenues", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		Op:               OpAdd,
+		Operands:         []string{"_revenuesDirect", "_investmentGains"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "CostOfRevenue", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -539,26 +584,15 @@ var FieldMappings = []FieldMapping{
 		FieldName: "RandDExpenses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"ResearchAndDevelopmentExpense"},
 	},
+	// CostsAndExpenses is total income statement costs. Used to derive
+	// OperatingIncome for companies without an explicit OperatingIncomeLoss
+	// tag (insurance/conglomerates like BRK/B).
 	{
-		FieldName: "OperatingIncome", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{
-			"OperatingIncomeLoss",
-		},
+		FieldName: "_costsAndExpenses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"CostsAndExpenses"},
 	},
-	// OperatingExpenses: use the direct tag if available; otherwise derive
-	// from GrossProfit − OperatingIncome. Sharadar defines OpEx as SGA +
-	// R&D (excluding CoR). MSFT omits the OperatingExpenses XBRL tag in
-	// older filings, but GrossProfit and OperatingIncome are always present.
-	// Banks (JPM) report NoninterestExpense which maps to Sharadar OpEx.
-	// Must come AFTER OperatingIncome so the dependency is resolved first.
-	// For banks that don't report OperatingIncomeLoss, OperatingIncome is
-	// recomputed as GrossProfit - OperatingExpenses in overrideNCFDebtResidual.
-	{
-		FieldName: "OperatingExpenses", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		FallbackTags: []string{"OperatingExpenses", "CostsAndExpenses", "NoninterestExpense"},
-		Op:           OpSubtract,
-		Operands:     []string{"GrossProfit", "OperatingIncome"},
-	},
+	// InterestExpense: must come before OperatingIncome since the derived
+	// OperatingIncome formula uses it as an operand.
 	{
 		FieldName: "InterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		// Do NOT add InterestIncomeExpenseNet here: it is a signed net value
@@ -582,6 +616,32 @@ var FieldMappings = []FieldMapping{
 			"InterestExpenseDebt",
 			"InterestExpenseNonoperating",
 		},
+	},
+	// OperatingIncome: use the direct OperatingIncomeLoss tag when available.
+	// For companies without it (non-standard income statements), derive as
+	// Revenues - CostsAndExpenses + InterestExpense. This gives income from
+	// all operations (including investment gains for insurance companies)
+	// before interest and taxes — matching Sharadar's operating income definition.
+	{
+		FieldName: "OperatingIncome", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{"OperatingIncomeLoss"},
+		Op:           OpLinearCombination,
+		Operands:     []string{"Revenues", "_costsAndExpenses", "InterestExpense"},
+		Coefficients: []float64{1, -1, 1},
+	},
+	// OperatingExpenses: use the direct tag if available; otherwise derive
+	// from GrossProfit − OperatingIncome. Sharadar defines OpEx as SGA +
+	// R&D (excluding CoR). MSFT omits the OperatingExpenses XBRL tag in
+	// older filings, but GrossProfit and OperatingIncome are always present.
+	// Banks (JPM) report NoninterestExpense which maps to Sharadar OpEx.
+	// Must come AFTER OperatingIncome so the dependency is resolved first.
+	// For banks that don't report OperatingIncomeLoss, OperatingIncome is
+	// recomputed as GrossProfit - OperatingExpenses in overrideNCFDebtResidual.
+	{
+		FieldName: "OperatingExpenses", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{"OperatingExpenses", "NoninterestExpense"},
+		Op:           OpSubtract,
+		Operands:     []string{"GrossProfit", "OperatingIncome"},
 	},
 	{
 		FieldName: "IncomeTaxExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
