@@ -816,6 +816,33 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		stripStaleAndRecompute(quarters[i].mrEmit, staleMRFields)
 	}
 
+	// For banks, override MR DPS with prior quarter's declared rate (= cash-
+	// paid). Must happen before annual emission so MRY can sum the corrected
+	// cash-paid quarterly values.
+	if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+		for i := 1; i < len(quarters); i++ {
+			prev := &quarters[i-1]
+			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
+			if !found {
+				prevDPS, found = prev.arEmit["DividendsPerBasicCommonShare"]
+			}
+			if !found {
+				prevDPS, found = prev.mrEmit["DividendsPerBasicCommonShare"]
+			}
+			if !found && i > 1 {
+				grandPrev := &quarters[i-2]
+				prevDPS, found = grandPrev.arFields["DividendsPerBasicCommonShare"]
+				if !found {
+					prevDPS, found = grandPrev.arEmit["DividendsPerBasicCommonShare"]
+				}
+			}
+
+			if found {
+				quarters[i].mrEmit["DividendsPerBasicCommonShare"] = prevDPS
+			}
+		}
+	}
+
 	// Period-average fields (AverageAssets, EquityAvg, InvestedCapitalAverage)
 	// and derived ratios (ROA, ROE, ROIC) are intentionally NOT computed for
 	// quarterly dimensions (ARQ/MRQ). See #56 for rationale.
@@ -951,6 +978,28 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// MRY — override SharesBasic for MR semantics (see quarterly override above).
 		if val, ok := resolveSharesBasicAsOf(cf, a.period.PeriodEnd); ok {
 			a.mrEmit["SharesBasic"] = val
+		}
+
+		// For banks, replace MRY DPS with the sum of cash-paid quarterly DPS.
+		// The annual mrEmit has the declared DPS from the 10-K; MRY should
+		// match the MRT trailing sum of cash-paid (prior quarter declared) values.
+		if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && conceptFiledQuarterly(cf, []string{"Deposits"}) {
+			cashDPSSum := 0.0
+			cashDPSCount := 0
+
+			for j := range quarters {
+				if NormalizeEventDate(quarters[j].period.PeriodEnd, "10-K").Equal(NormalizeEventDate(a.period.PeriodEnd, "10-K")) {
+					// This quarter belongs to this fiscal year
+					if v, ok := quarters[j].mrEmit["DividendsPerBasicCommonShare"]; ok {
+						cashDPSSum += v
+						cashDPSCount++
+					}
+				}
+			}
+
+			if cashDPSCount == 4 {
+				a.mrEmit["DividendsPerBasicCommonShare"] = cashDPSSum
+			}
 		}
 
 		fundamental = BuildFundamental(a.mrEmit, asset.Ticker, asset.CompositeFigi, "MRY",
@@ -1127,6 +1176,16 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 				break
 			}
+		}
+
+		// For banks, the annual MR DPS should use cash-paid (sum of
+		// prior-quarter declared rates), not the declared total from
+		// the 10-K. Without this, overridePeriodAvg would replace the
+		// correctly-summed TTM cash-paid DPS with the declared annual.
+		// Use Deposits as the bank sentinel (more specific than absence of
+		// AssetsCurrent, which test fixtures may lack).
+		if matchingMR != nil && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && conceptFiledQuarterly(cf, []string{"Deposits"}) {
+			delete(matchingMR, "DividendsPerBasicCommonShare")
 		}
 
 		overridePeriodAvg := func(ttm, annualFields map[string]float64) {
