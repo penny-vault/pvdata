@@ -533,7 +533,7 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 
 			// Recompute NCI from corrected values
 			if consolidated, hasCons := fields["ConsolidatedIncome"]; hasCons {
-				pref, _ := fields["PreferredDividendsIncomeStatementImpact"]
+				pref := fields["PreferredDividendsIncomeStatementImpact"]
 				fields["NetIncomeToNonControllingInterests"] = consolidated - ni - pref
 			}
 		}
@@ -604,9 +604,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	if isBank {
 		investing, hasI := fields["NetCashFlowFromInvesting"]
 		if hasI {
-			capex, _ := fields["CapitalExpenditure"]     // 0 when absent (banks)
-			otherInv, _ := fields["_bankOtherInvesting"] // 0 when absent
-			biz, _ := fields["NetCashFlowBusiness"]      // 0 when absent; already negated
+			capex := fields["CapitalExpenditure"]     // 0 when absent (banks)
+			otherInv := fields["_bankOtherInvesting"] // 0 when absent
+			biz := fields["NetCashFlowBusiness"]      // 0 when absent; already negated
 			// Add back "other" investing and subtract business acquisitions
 			// (both are in the investing total but Sharadar classifies them
 			// separately as NCFBIZ and other, not NCFINV).
