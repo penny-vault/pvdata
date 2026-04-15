@@ -364,13 +364,13 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 	result := make(map[string]float64)
 
 	for _, m := range FieldMappings {
-		// Per-share flow fields: YTD cumulative avoids rounding error when
-		// summing individually rounded quarterly per-share values.
-		// Period-average fields (e.g. WeightedAverageShares): the company-
-		// reported YTD average captures day-weighted precision that is lost
-		// when summing individually rounded quarterly averages.
+		// Flow fields: YTD cumulative avoids rounding error from summing
+		// individually rounded quarterly values, and captures any cross-
+		// quarter restatements (e.g. JPM Q3 cumulative 43,199M vs single-
+		// quarter sum 43,197M). Period-average fields: the company-reported
+		// YTD average captures day-weighted precision.
 		switch {
-		case m.StatementType == StmtFlow && m.ValueType == "float64":
+		case m.StatementType == StmtFlow:
 		case m.StatementType == StmtPeriodAverage:
 		default:
 			continue
