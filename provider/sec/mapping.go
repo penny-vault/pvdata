@@ -571,8 +571,11 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	if isBank {
 		investing, hasI := fields["NetCashFlowFromInvesting"]
 		if hasI {
-			capex, _ := fields["CapitalExpenditure"] // 0 when absent (banks)
-			fields["NetCashFlowInvest"] = investing - capex
+			capex, _ := fields["CapitalExpenditure"]     // 0 when absent (banks)
+			otherInv, _ := fields["_bankOtherInvesting"] // 0 when absent
+			// Add back "other" investing (it's a net payment included in the
+			// investing total but NOT in Sharadar's NCFINV).
+			fields["NetCashFlowInvest"] = investing - capex + otherInv
 		}
 	}
 

@@ -897,6 +897,11 @@ var FieldMappings = []FieldMapping{
 		XBRLTags:           []string{"ProceedsFromShortTermDebt", "ProceedsFromRepaymentsOfShortTermDebt"},
 	},
 	{
+		FieldName: "_bankOtherInvesting", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"PaymentsForProceedsFromOtherInvestingActivities"},
+	},
+	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		Negate: true,
 		XBRLTags: []string{
