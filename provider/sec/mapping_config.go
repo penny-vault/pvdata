@@ -871,6 +871,31 @@ var FieldMappings = []FieldMapping{
 		Coefficients:     []float64{1, -1, -1, 1},
 		OptionalOperands: true,
 	},
+	// --- Bank-specific NCFDEBT sub-fields ---
+	// Banks (JPM) have additional debt-related financing activities not
+	// captured by the standard debt proceeds/repayments tags. These are
+	// gated on absence of AssetsCurrent (bank detection). StmtFlow ensures
+	// YTD cumulative values are properly de-cumulated to single-quarter amounts.
+	{
+		FieldName: "_bankFedFundsChange", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"IncreaseDecreaseInFederalFundsPurchasedAndSecuritiesSoldUnderAgreementsToRepurchaseNet"},
+	},
+	{
+		FieldName: "_bankLTDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"ProceedsFromIssuanceOfLongTermDebtAndCapitalSecuritiesNet", "ProceedsFromIssuanceOfLongTermDebt"},
+	},
+	{
+		FieldName: "_bankLTDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"RepaymentsOfLongTermDebtAndCapitalSecurities", "RepaymentsOfLongTermDebt"},
+	},
+	{
+		FieldName: "_bankSTDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"ProceedsFromShortTermDebt", "ProceedsFromRepaymentsOfShortTermDebt"},
+	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		Negate: true,

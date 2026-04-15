@@ -17,7 +17,6 @@ package sec
 
 import (
 	"math"
-	"strings"
 	"time"
 )
 
@@ -514,29 +513,39 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	dividend, hasD := fields["NetCashFlowDividend"]
 
 	if hasF && hasC && hasD {
-		ncfDebt := financing - common - dividend
+		fields["NetCashFlowDebt"] = financing - common - dividend
+	}
 
-		// For banks, subtract preferred stock activities (issuance/repurchase)
-		// from the residual. These are in the financing total but are not debt.
-		if isBank {
-			prefTags := []string{
-				"ProceedsFromIssuanceOfPreferredStockAndPreferenceStock",
-				"PaymentsForRepurchaseOfRedeemablePreferredStock",
-				"PaymentsForRepurchaseOfPreferredStockAndPreferenceStock",
-			}
+	// For banks, override NCFDEBT with a direct computation from de-cumulated
+	// bank-specific fields. The residual approach doesn't work for banks
+	// because the financing total includes deposits, preferred stock, and
+	// other non-debt items. The sub-fields (_bankFedFundsChange, etc.) are
+	// mapped as StmtFlow in FieldMappings so YTD cumulative values are
+	// properly de-cumulated before reaching this point.
+	if isBank {
+		bankDebtFields := []struct {
+			name string
+			sign float64
+		}{
+			{"_bankFedFundsChange", 1},
+			{"_bankLTDebtProceeds", 1},
+			{"_bankLTDebtRepayments", -1},
+			{"_bankSTDebtProceeds", 1},
+		}
 
-			for _, tag := range prefTags {
-				if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{tag}}, periodEnd, formType); ok {
-					if strings.HasPrefix(tag, "Proceeds") {
-						ncfDebt -= v // proceeds increase financing, subtract from debt
-					} else {
-						ncfDebt += v // payments decrease financing, add back to debt
-					}
-				}
+		ncfDebt := 0.0
+		found := false
+
+		for _, f := range bankDebtFields {
+			if v, ok := fields[f.name]; ok {
+				ncfDebt += f.sign * v
+				found = true
 			}
 		}
 
-		fields["NetCashFlowDebt"] = ncfDebt
+		if found {
+			fields["NetCashFlowDebt"] = ncfDebt
+		}
 	}
 
 	// For banks, derive OperatingIncome = GrossProfit - OperatingExpenses

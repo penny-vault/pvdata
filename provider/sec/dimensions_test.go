@@ -712,6 +712,10 @@ var _ = Describe("Dimensions", func() {
 				"_bankShortTermDebt":                 true,
 				"_bankLongTermDebt":                  true,
 				"_bankFederalFundsPurchased":         true,
+				"_bankFedFundsChange":                true,
+				"_bankLTDebtProceeds":                true,
+				"_bankLTDebtRepayments":              true,
+				"_bankSTDebtProceeds":                true,
 			}
 
 			var missing []string
