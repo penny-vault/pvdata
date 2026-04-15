@@ -544,6 +544,34 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}
 	}
 
+	// For banks, override balance sheet fields from extension tags. The
+	// mapping-level FallbackTags work for AR dimensions but the MR filing
+	// date filter can exclude extension facts from the MR CompanyFacts.
+	// Resolving directly from the UNFILTERED cf ensures extension tags are
+	// always available.
+	if isBank {
+		bankExtTags := []struct {
+			field string
+			tags  []string
+		}{
+			// JPM 10-K and 10-Q use different casing for extension concepts.
+			{"Intangibles", []string{
+				"GoodwillServicingAssetsAtFairValueAndOtherIntangibleAssets",   // 10-Q
+				"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets",   // 10-K
+			}},
+			{"PropertyPlantAndEquipmentNet", []string{
+				"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+			}},
+			{"Receivables", []string{"AccruedInterestAndAccountsReceivable"}},
+		}
+
+		for _, ext := range bankExtTags {
+			if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: ext.tags}, periodEnd, formType); ok {
+				fields[ext.field] = v
+			}
+		}
+	}
+
 	// For banks, compute Investments as the balance sheet residual:
 	// TotalAssets - CashAndEquivalents - Receivables - PP&E - Intangibles - OtherAssets.
 	// This captures loans, securities, fed funds, and other invested assets.
