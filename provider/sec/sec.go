@@ -929,6 +929,14 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		stripStaleAndRecompute(a.arEmit, annualTWHStale)
 		stripStaleAndRecompute(a.mrEmit, annualTWHStale)
 
+		// Apply bank overrides to annual emit maps. Only for banks —
+		// the bundlesFinancing (NVDA) path modifies NCFCOMMON via tax
+		// withholding strip, making the annual residual incorrect.
+		if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+			overrideNCFDebtResidual(cf, a.arEmit, a.period.PeriodEnd, a.period.FormType)
+			overrideNCFDebtResidual(cf, a.mrEmit, a.period.PeriodEnd, a.period.FormType)
+		}
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
