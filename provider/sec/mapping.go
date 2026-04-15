@@ -650,7 +650,7 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	if isBank {
 		nonintExp, hasNIE := fields["OperatingExpenses"] // resolved from NoninterestExpense FallbackTag
 		if hasNIE {
-			otherNIE, _ := fields["_bankOtherNoninterestExpense"] // 0 when absent
+			otherNIE := fields["_bankOtherNoninterestExpense"] // 0 when absent
 			fields["SellingGeneralAndAdministrativeExpense"] = nonintExp - otherNIE
 		}
 	}
@@ -662,10 +662,10 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		totalAssets, hasTA := fields["TotalAssets"]
 
 		if hasTA {
-			cash, _ := fields["CashAndEquivalents"]
-			recv, _ := fields["Receivables"]
-			ppe, _ := fields["PropertyPlantAndEquipmentNet"]
-			intang, _ := fields["Intangibles"]
+			cash := fields["CashAndEquivalents"]
+			recv := fields["Receivables"]
+			ppe := fields["PropertyPlantAndEquipmentNet"]
+			intang := fields["Intangibles"]
 			oa := 0.0
 
 			if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{"OtherAssets"}}, periodEnd, formType); ok {

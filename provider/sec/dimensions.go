@@ -369,9 +369,8 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 		// quarter restatements (e.g. JPM Q3 cumulative 43,199M vs single-
 		// quarter sum 43,197M). Period-average fields: the company-reported
 		// YTD average captures day-weighted precision.
-		switch {
-		case m.StatementType == StmtFlow:
-		case m.StatementType == StmtPeriodAverage:
+		switch m.StatementType {
+		case StmtFlow, StmtPeriodAverage:
 		default:
 			continue
 		}
