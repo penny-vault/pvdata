@@ -192,6 +192,7 @@ var FieldMappings = []FieldMapping{
 		FallbackTags: []string{
 			"ReceivablesNetCurrent",
 			"AccruedInterestAndAccountsReceivable", // JPM extension tag
+			"NotesReceivableNet",                    // Insurance/conglomerates with loan portfolios (BRK/B)
 		},
 		Op:               OpAdd,
 		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
@@ -242,6 +243,7 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"IntangibleAssetsNetExcludingGoodwill",
 			"FiniteLivedIntangibleAssetsNet",
+			"IndefiniteLivedIntangibleAssetsExcludingGoodwill", // BRK/B and other conglomerates with brand/franchise intangibles
 		},
 	},
 	// Intangibles: Sharadar defines this as "all intangible assets and
@@ -652,8 +654,14 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"EarningsPerShareBasic"},
 	},
 	{
-		FieldName: "EPSDiluted", Type: MappingDirect, StatementType: StmtFlow, ValueType: "float64",
-		XBRLTags: []string{"EarningsPerShareDiluted"},
+		// EPSDiluted: use the XBRL tag if available; otherwise derive from
+		// NetIncomeCommonStock / WeightedAverageSharesDiluted. Multi-class
+		// filers like BRK/B don't report EarningsPerShareDiluted.
+		FieldName: "EPSDiluted", Type: MappingDerived, StatementType: StmtFlow, ValueType: "float64",
+		FallbackTags: []string{"EarningsPerShareDiluted"},
+		Op:           OpDivide,
+		Operands:     []string{"NetIncomeCommonStock", "WeightedAverageSharesDiluted"},
+		RoundDigits:  6,
 	},
 	{
 		FieldName: "DividendsPerBasicCommonShare", Type: MappingDirect, StatementType: StmtFlow, ValueType: "float64",
