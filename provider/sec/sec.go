@@ -823,15 +823,20 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		for i := 1; i < len(quarters); i++ {
 			prev := &quarters[i-1]
 			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
+
 			if !found {
 				prevDPS, found = prev.arEmit["DividendsPerBasicCommonShare"]
 			}
+
 			if !found {
 				prevDPS, found = prev.mrEmit["DividendsPerBasicCommonShare"]
 			}
+
 			if !found && i > 1 {
 				grandPrev := &quarters[i-2]
+
 				prevDPS, found = grandPrev.arFields["DividendsPerBasicCommonShare"]
+
 				if !found {
 					prevDPS, found = grandPrev.arEmit["DividendsPerBasicCommonShare"]
 				}
@@ -1039,20 +1044,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// the declared value.
 		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
 			prev := &quarters[i-1]
-			// Check all available maps for the prior quarter's DPS.
 			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
+
 			if !found {
 				prevDPS, found = prev.arEmit["DividendsPerBasicCommonShare"]
 			}
+
 			if !found {
 				prevDPS, found = prev.mrEmit["DividendsPerBasicCommonShare"]
 			}
+
 			// For Q1 of each year: the prior Q4 is synthesized and may not
 			// have DPS in any map. Fall back to Q3 (i-2) which is a regular
 			// 10-Q quarter with DPS available.
 			if !found && i > 1 {
 				grandPrev := &quarters[i-2]
+
 				prevDPS, found = grandPrev.arFields["DividendsPerBasicCommonShare"]
+
 				if !found {
 					prevDPS, found = grandPrev.arEmit["DividendsPerBasicCommonShare"]
 				}
@@ -1313,6 +1322,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// run and delete any existing records not in this set.
 	if asset.CompositeFigi != "" && len(buffered) > 0 {
 		cleanupCtx := context.Background()
+
 		tbl := sub.DataTablesMap[data.FundamentalsKey]
 		if tbl != "" {
 			type obsKey struct {
@@ -1321,6 +1331,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 
 			validKeys := make(map[obsKey]bool)
+
 			for _, obs := range buffered {
 				if obs.Fundamental != nil {
 					validKeys[obsKey{obs.Fundamental.Dimension, obs.Fundamental.EventDate}] = true
@@ -1336,8 +1347,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 					var toDelete []obsKey
 
 					for rows.Next() {
-						var dim string
-						var ed time.Time
+						var (
+							dim string
+							ed  time.Time
+						)
 						if err := rows.Scan(&dim, &ed); err == nil {
 							if !validKeys[obsKey{dim, ed}] {
 								toDelete = append(toDelete, obsKey{dim, ed})

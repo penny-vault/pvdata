@@ -523,9 +523,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	// get a 2M inconsistency. Recomputing from formulas ensures consistency.
 	if isBank {
 		if ni, hasNI := fields["NetIncome"]; hasNI {
-			tax, _ := fields["IncomeTaxExpense"]
-			intExp, _ := fields["InterestExpense"]
-			da, _ := fields["DepreciationAmortizationAndAccretion"]
+			tax := fields["IncomeTaxExpense"]
+			intExp := fields["InterestExpense"]
+			da := fields["DepreciationAmortizationAndAccretion"]
 
 			fields["EBT"] = ni + tax
 			fields["EBIT"] = ni + tax + intExp

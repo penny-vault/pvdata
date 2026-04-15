@@ -376,6 +376,7 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 			}
 		}
 	}
+
 done:
 
 	log.Debug().Int("cik", cik).Int("filings", len(filings)).Msg("enriching with extension facts from XBRL instance documents")
