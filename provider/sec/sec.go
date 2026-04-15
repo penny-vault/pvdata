@@ -738,18 +738,45 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			continue
 		}
 
-		// Skip if a quarter already exists at this period end (e.g. if a
-		// company unusually filed a 10-Q for Q4 alongside its 10-K).
-		alreadyExists := false
+		// Check if a quarter already exists at this period end. If it does
+		// but lacks revenue data (e.g. a phantom quarter from comparative
+		// balance sheet data in a subsequent 10-Q), replace it with the
+		// synthesized Q4 which has complete flow data.
+		existingIdx := -1
 
-		for _, q := range quarters {
+		for idx, q := range quarters {
 			if q.period.PeriodEnd.Equal(a.period.PeriodEnd) {
-				alreadyExists = true
+				existingIdx = idx
+
 				break
 			}
 		}
 
-		if alreadyExists {
+		if existingIdx >= 0 {
+			existingQ := &quarters[existingIdx]
+
+			_, hasRevAR := existingQ.arEmit["Revenues"]
+			_, hasRevMR := existingQ.mrEmit["Revenues"]
+
+			if hasRevAR || hasRevMR {
+				// Existing quarter has revenue data — keep it.
+				continue
+			}
+
+			// Replace the phantom quarter with the synthesized Q4.
+			quarters[existingIdx] = quarterData{
+				period: Period{
+					PeriodEnd:   a.period.PeriodEnd,
+					FormType:    "10-Q",
+					ARFiledDate: a.period.ARFiledDate,
+					MRFiledDate: a.period.MRFiledDate,
+				},
+				arFields: arQ4,
+				mrFields: mrQ4,
+				arEmit:   arQ4,
+				mrEmit:   mrQ4,
+			}
+
 			continue
 		}
 

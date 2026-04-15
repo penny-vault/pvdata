@@ -192,6 +192,7 @@ var FieldMappings = []FieldMapping{
 		FallbackTags: []string{
 			"ReceivablesNetCurrent",
 			"AccruedInterestAndAccountsReceivable", // JPM extension tag
+			"NotesReceivableNet",                   // Insurance/conglomerates with loan portfolios (BRK/B)
 		},
 		Op:               OpAdd,
 		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
@@ -242,6 +243,7 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"IntangibleAssetsNetExcludingGoodwill",
 			"FiniteLivedIntangibleAssetsNet",
+			"IndefiniteLivedIntangibleAssetsExcludingGoodwill", // BRK/B and other conglomerates with brand/franchise intangibles
 		},
 	},
 	// Intangibles: Sharadar defines this as "all intangible assets and
@@ -567,12 +569,14 @@ var FieldMappings = []FieldMapping{
 		// InterestExpenseNonoperating is used by MSFT on 10-Q filings where
 		// the generic InterestExpense tag is only filed on 10-K.
 		//
-		// RequireIfQuarterly on AssetsCurrent: banks (JPM) file the generic
+		// ExcludeIfQuarterly on Deposits: banks (JPM) file the generic
 		// InterestExpense tag for some quarters but not others, and for banks
 		// this is operational interest (cost of deposits) — NOT financing
 		// expense. Including it in EBIT breaks Q4 synthesis (annual has 0
-		// but one quarter has 24B). Banks without AssetsCurrent skip this.
-		RequireIfQuarterly: []string{"AssetsCurrent"},
+		// but one quarter has 24B). Gating on Deposits (a bank-specific
+		// liability) excludes real banks while allowing insurance
+		// conglomerates like BRK/B that also lack AssetsCurrent.
+		ExcludeIfQuarterly: []string{"Deposits"},
 		XBRLTags: []string{
 			"InterestExpense",
 			"InterestExpenseDebt",
@@ -650,8 +654,14 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"EarningsPerShareBasic"},
 	},
 	{
-		FieldName: "EPSDiluted", Type: MappingDirect, StatementType: StmtFlow, ValueType: "float64",
-		XBRLTags: []string{"EarningsPerShareDiluted"},
+		// EPSDiluted: use the XBRL tag if available; otherwise derive from
+		// NetIncomeCommonStock / WeightedAverageSharesDiluted. Multi-class
+		// filers like BRK/B don't report EarningsPerShareDiluted.
+		FieldName: "EPSDiluted", Type: MappingDerived, StatementType: StmtFlow, ValueType: "float64",
+		FallbackTags: []string{"EarningsPerShareDiluted"},
+		Op:           OpDivide,
+		Operands:     []string{"NetIncomeCommonStock", "WeightedAverageSharesDiluted"},
+		RoundDigits:  6,
 	},
 	{
 		FieldName: "DividendsPerBasicCommonShare", Type: MappingDirect, StatementType: StmtFlow, ValueType: "float64",

@@ -450,32 +450,53 @@ func OverrideDPSFromCash(fields map[string]float64) {
 	}
 }
 
-// resolveSharesBasicAsOf returns the EntityCommonStockSharesOutstanding
-// value from the most recently filed 10-K or 10-Q as of the given date.
-// Sharadar's MR dimensions use "latest known cover-page shares as of the
-// period end" rather than the shares from the filing that reports the
-// period's own data. Returns (0, false) when no suitable fact is found.
+// resolveSharesBasicAsOf returns the shares outstanding value from the most
+// recently filed 10-K or 10-Q as of the given date.
+//
+// It checks two sources in order:
+//  1. EntityCommonStockSharesOutstanding (DEI cover-page count)
+//  2. CommonStockSharesOutstanding (us-gaap, captured from Class B
+//     dimensional contexts for multi-class filers like BRK/B)
+//
+// The most recently filed value across both sources is used. Stale values
+// (filed more than 2 years before asOfDate) are ignored so that old DEI
+// entries from companies that stopped reporting the tag don't persist.
+//
+// Returns (0, false) when no suitable fact is found.
 func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool) {
-	facts, ok := cf.Facts["EntityCommonStockSharesOutstanding"]
-	if !ok {
-		return 0, false
-	}
+	staleThreshold := asOfDate.AddDate(-2, 0, 0)
 
 	var best *Fact
 
-	for i := range facts {
-		f := &facts[i]
-
-		if f.Form != "10-K" && f.Form != "10-Q" {
+	for _, conceptName := range []string{
+		"EntityCommonStockSharesOutstanding",
+		"CommonStockSharesOutstanding",
+	} {
+		facts, ok := cf.Facts[conceptName]
+		if !ok {
 			continue
 		}
 
-		if f.Filed.After(asOfDate) {
-			continue
-		}
+		for i := range facts {
+			f := &facts[i]
 
-		if best == nil || f.Filed.After(best.Filed) {
-			best = f
+			if f.Form != "10-K" && f.Form != "10-Q" {
+				continue
+			}
+
+			if f.Filed.After(asOfDate) {
+				continue
+			}
+
+			// Skip stale entries (e.g. BRK/B stopped reporting DEI
+			// EntityCommonStockSharesOutstanding after 2011).
+			if f.Filed.Before(staleThreshold) {
+				continue
+			}
+
+			if best == nil || f.Filed.After(best.Filed) {
+				best = f
+			}
 		}
 	}
 
