@@ -17,6 +17,7 @@ package sec
 
 import (
 	"math"
+	"strings"
 	"time"
 )
 
@@ -513,7 +514,29 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	dividend, hasD := fields["NetCashFlowDividend"]
 
 	if hasF && hasC && hasD {
-		fields["NetCashFlowDebt"] = financing - common - dividend
+		ncfDebt := financing - common - dividend
+
+		// For banks, subtract preferred stock activities (issuance/repurchase)
+		// from the residual. These are in the financing total but are not debt.
+		if isBank {
+			prefTags := []string{
+				"ProceedsFromIssuanceOfPreferredStockAndPreferenceStock",
+				"PaymentsForRepurchaseOfRedeemablePreferredStock",
+				"PaymentsForRepurchaseOfPreferredStockAndPreferenceStock",
+			}
+
+			for _, tag := range prefTags {
+				if v, ok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{tag}}, periodEnd, formType); ok {
+					if strings.HasPrefix(tag, "Proceeds") {
+						ncfDebt -= v // proceeds increase financing, subtract from debt
+					} else {
+						ncfDebt += v // payments decrease financing, add back to debt
+					}
+				}
+			}
+		}
+
+		fields["NetCashFlowDebt"] = ncfDebt
 	}
 
 	// For banks, derive OperatingIncome = GrossProfit - OperatingExpenses

@@ -139,7 +139,7 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			f.EnterpriseValue = ev
 
 			if f.Equity != 0 {
-				f.PB = float64(mktCap) / float64(f.Equity)
+				f.PB = math.Round(float64(mktCap)/float64(f.Equity)*1000) / 1000
 			}
 		}
 
@@ -175,21 +175,21 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			ev := f.EnterpriseValue
 
 			if f.NetIncomeCommonStock != 0 {
-				f.PE = float64(mktCap) / float64(f.NetIncomeCommonStock)
+				f.PE = math.Round(float64(mktCap)/float64(f.NetIncomeCommonStock)*1000) / 1000
 			}
 
 			if f.Revenues != 0 {
-				f.PS = float64(mktCap) / float64(f.Revenues)
+				f.PS = math.Round(float64(mktCap)/float64(f.Revenues)*1000) / 1000
 			}
 
 			if f.EPS != 0 {
-				f.PE1 = f.Price / f.EPS
+				f.PE1 = math.Round(f.Price/f.EPS*1000) / 1000
 			}
 
 			if f.Revenues != 0 && f.WeightedAverageShares != 0 {
-				f.PS1 = f.Price / (float64(f.Revenues) / float64(f.WeightedAverageShares))
+				f.PS1 = math.Round(f.Price/(float64(f.Revenues)/float64(f.WeightedAverageShares))*1000) / 1000
 			} else if f.SalesPerShare != 0 {
-				f.PS1 = f.Price / f.SalesPerShare
+				f.PS1 = math.Round(f.Price/f.SalesPerShare*1000) / 1000
 			}
 
 			if f.EBIT != 0 {
