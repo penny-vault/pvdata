@@ -990,12 +990,26 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// the declared value.
 		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
 			prev := &quarters[i-1]
-			prevDPS, ok := prev.arFields["DividendsPerBasicCommonShare"]
-			if !ok {
-				prevDPS, ok = prev.arEmit["DividendsPerBasicCommonShare"]
+			// Check all available maps for the prior quarter's DPS.
+			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
+			if !found {
+				prevDPS, found = prev.arEmit["DividendsPerBasicCommonShare"]
+			}
+			if !found {
+				prevDPS, found = prev.mrEmit["DividendsPerBasicCommonShare"]
+			}
+			// For Q1 of each year: the prior Q4 is synthesized and may not
+			// have DPS in any map. Fall back to Q3 (i-2) which is a regular
+			// 10-Q quarter with DPS available.
+			if !found && i > 1 {
+				grandPrev := &quarters[i-2]
+				prevDPS, found = grandPrev.arFields["DividendsPerBasicCommonShare"]
+				if !found {
+					prevDPS, found = grandPrev.arEmit["DividendsPerBasicCommonShare"]
+				}
 			}
 
-			if ok {
+			if found {
 				q.mrEmit["DividendsPerBasicCommonShare"] = prevDPS
 			}
 		}
