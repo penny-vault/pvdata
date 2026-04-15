@@ -158,16 +158,48 @@ var FieldMappings = []FieldMapping{
 			"AvailableForSaleSecuritiesDebtSecuritiesNoncurrent",
 		},
 	},
-	// Investments = InvestmentsCurrent + InvestmentsNonCurrent. Sharadar
-	// defines this as "total amount of marketable and non-marketable
-	// securities, loans receivable and other invested assets." Companies
-	// like Apple tag current/noncurrent separately rather than a single
-	// "Investments" concept; the sum captures both.
+	// Insurance/conglomerate investment sub-fields. These companies (BRK/B)
+	// hold equity securities, debt securities, and equity method investments
+	// that aren't captured by the standard Current/NonCurrent breakdown.
+	// ExcludeIfQuarterly gates these off when the company files standard
+	// investment tags (ShortTermInvestments, MarketableSecuritiesCurrent)
+	// to avoid double-counting with InvestmentsCurrent/InvestmentsNonCurrent.
+	{
+		FieldName: "_equitySecuritiesFvNi", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent"},
+		XBRLTags:           []string{"EquitySecuritiesFvNi"},
+	},
+	{
+		FieldName: "_equityMethodInvestments", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent"},
+		XBRLTags:           []string{"EquityMethodInvestments"},
+	},
+	{
+		FieldName: "_debtSecurities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent"},
+		XBRLTags:           []string{"AvailableForSaleSecuritiesDebtSecurities"},
+	},
+	{
+		FieldName: "_treasuryBills", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent"},
+		XBRLTags: []string{
+			"USTreasuryBills", // BRK/B extension tag for short-term Treasury holdings
+		},
+	},
+	// Investments = InvestmentsCurrent + InvestmentsNonCurrent + equity/debt
+	// securities + equity method investments + Treasury bills. Sharadar defines
+	// this as "total amount of marketable and non-marketable securities, loans
+	// receivable and other invested assets." Standard companies use Current/
+	// NonCurrent; insurance/conglomerates report per-asset-class.
 	{
 		FieldName: "Investments", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"Investments"},
-		Op:               OpAdd,
-		Operands:         []string{"InvestmentsCurrent", "InvestmentsNonCurrent"},
+		FallbackTags: []string{"Investments"},
+		Op:           OpAdd,
+		Operands: []string{
+			"InvestmentsCurrent", "InvestmentsNonCurrent",
+			"_equitySecuritiesFvNi", "_equityMethodInvestments",
+			"_debtSecurities", "_treasuryBills",
+		},
 		OptionalOperands: true,
 	},
 	{
