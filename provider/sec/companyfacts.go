@@ -731,6 +731,7 @@ var singleSegmentAllowed = map[string]bool{
 	"PolicyholderFunds":                      true,
 	"USTreasuryBills":                        true, // BRK extension: only reported under InsuranceAndOther segment
 	"OtherExpenses":                          true, // BRK: Railroad segment other expenses (above-the-line, non-SGA)
+	"ProceedsFromIssuanceOfLongTermDebt":     true, // BRK: only Railroad segment issues LT debt
 }
 
 // extensionSynthesisConcepts lists extension (non-us-gaap) concept names that
