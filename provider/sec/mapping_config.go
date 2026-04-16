@@ -249,16 +249,22 @@ var FieldMappings = []FieldMapping{
 	},
 	// Operating lease ROU assets are included in PP&E when the company
 	// reports them as a separate balance sheet line (filed on 10-Q).
+	// Exclude banks: Sharadar reports bank PP&E as just
+	// PropertyPlantAndEquipmentNet without operating lease assets.
 	{
 		FieldName: "_operatingLeaseROU", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		RequireQuarterly: true,
-		XBRLTags:         []string{"OperatingLeaseRightOfUseAsset"},
+		RequireQuarterly:   true,
+		ExcludeIfQuarterly: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
+		XBRLTags:           []string{"OperatingLeaseRightOfUseAsset"},
 	},
 	// Property subject to operating leases (lessor-side assets like railcars,
 	// utility equipment) is included in PP&E for conglomerates like BRK/B.
+	// Exclude banks: they report PropertySubjectToOrAvailableForOperatingLeaseNet
+	// for leased real estate, which Sharadar does not include in PP&E.
 	{
 		FieldName: "_propertyHeldForLease", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"PropertySubjectToOrAvailableForOperatingLeaseNet"},
+		ExcludeIfQuarterly: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
+		XBRLTags:           []string{"PropertySubjectToOrAvailableForOperatingLeaseNet"},
 	},
 	// PropertyPlantAndEquipmentNet: use the combined extension tag if
 	// available (JPM files a combined premises+equipment+ROU tag); otherwise
@@ -567,6 +573,12 @@ var FieldMappings = []FieldMapping{
 			"CostOfRevenue",
 			"CostOfGoodsSold",
 			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+			// Exclude for banks: investment gains are already included in
+			// NoninterestIncome which flows into bank revenue. Adding them
+			// separately would double-count.
+			"Deposits",
+			"DepositsDomestic",
+			"DepositsTotal",
 		},
 		XBRLTags: []string{"GainLossOnInvestments"},
 	},

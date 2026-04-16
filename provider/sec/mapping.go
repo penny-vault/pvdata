@@ -257,12 +257,32 @@ func needsDecumulation(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 }
 
 // conceptFiledQuarterly returns true if any of the given XBRL concept names
-// has at least one fact filed on a 10-Q form in cf within the last 3 years.
-// This distinguishes balance sheet line items (filed quarterly) from
-// supplemental disclosures (10-K only). The recency check avoids false
-// positives from tags that were filed on 10-Q years ago but have since been
-// discontinued (e.g. AAPL's AccruedIncomeTaxesCurrent, last on 10-Q in 2010).
+// has at least one fact filed on a 10-Q form in cf within the last 3 years
+// (relative to the latest fact end date across ALL concepts in cf, not the
+// current wall-clock time). This allows the function to work correctly when
+// resolving historical periods where the filtered CompanyFacts only has old
+// data. The recency check avoids false positives from tags that were filed
+// on 10-Q years ago but have since been discontinued (e.g. AAPL's
+// AccruedIncomeTaxesCurrent, last on 10-Q in 2010).
 func conceptFiledQuarterly(cf *CompanyFacts, tags []string) bool {
+	// Find the latest end date across ALL concepts as the reference time.
+	// Using the company's most recent reporting period ensures the recency
+	// check works regardless of which specific tags are being queried.
+	var latestEnd time.Time
+
+	for _, facts := range cf.Facts {
+		if len(facts) > 0 {
+			last := facts[len(facts)-1] // facts are sorted by Filed ascending
+			if last.End.After(latestEnd) {
+				latestEnd = last.End
+			}
+		}
+	}
+
+	if latestEnd.IsZero() {
+		return false
+	}
+
 	for _, tag := range tags {
 		facts, ok := cf.Facts[tag]
 		if !ok {
@@ -271,8 +291,7 @@ func conceptFiledQuarterly(cf *CompanyFacts, tags []string) bool {
 
 		for i := range facts {
 			if facts[i].Form == "10-Q" && !facts[i].End.IsZero() {
-				// Consider only facts from the last ~3 years
-				age := time.Since(facts[i].End)
+				age := latestEnd.Sub(facts[i].End)
 				if age < 3*365*24*time.Hour {
 					return true
 				}
