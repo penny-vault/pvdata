@@ -73,6 +73,12 @@ type CompanyFacts struct {
 	CIK        int               // Central Index Key
 	EntityName string            // Company name
 	Facts      map[string][]Fact // Map of concept name to facts (e.g. "Assets" -> []Fact)
+
+	// NonPreferredUnitConcepts tracks concepts loaded from non-preferred
+	// units (e.g. EUR, GBP, JPY instead of USD). These values may be
+	// foreign-currency denominations rather than consolidated USD totals.
+	// Dimensional synthesis can replace these with correct segment sums.
+	NonPreferredUnitConcepts map[string]bool
 }
 
 // FilterByFilingDate removes all facts that were filed after the given cutoff
@@ -158,8 +164,16 @@ func parseNamespaceFacts(nsData gjson.Result, cf *CompanyFacts) {
 			}
 		}
 
-		// If no preferred unit found, try the first available unit
+		// If no preferred unit found, try the first available unit.
+		// Some concepts (e.g. BRK's DebtAndCapitalLeaseObligations) only
+		// have foreign-currency units in the API. We load them as
+		// placeholders; dimensional synthesis will replace them with
+		// correct consolidated values when inline XBRL data is available.
+		isNonPreferred := false
+
 		if !selectedUnit.Exists() {
+			isNonPreferred = true
+
 			units.ForEach(func(_, unitData gjson.Result) bool {
 				selectedUnit = unitData
 				return false // stop after first
@@ -230,6 +244,14 @@ func parseNamespaceFacts(nsData gjson.Result, cf *CompanyFacts) {
 			})
 
 			cf.Facts[conceptName.String()] = facts
+
+			if isNonPreferred {
+				if cf.NonPreferredUnitConcepts == nil {
+					cf.NonPreferredUnitConcepts = make(map[string]bool)
+				}
+
+				cf.NonPreferredUnitConcepts[conceptName.String()] = true
+			}
 		}
 
 		return true
@@ -667,10 +689,12 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 	// that have no non-dimensional data in CompanyFacts.
 	synthesizeConsolidatedFacts(cf, rawFacts, contexts, filed, formType)
 
-	// Sort facts by filing date.
-	for _, facts := range cf.Facts {
-		sort.SliceStable(facts, func(i, j int) bool {
-			return facts[i].Filed.Before(facts[j].Filed)
+	// Sort facts by filing date. Use the map key to access the current
+	// slice — the range variable is a copy of the slice header and may
+	// be stale if synthesizeConsolidatedFacts replaced the slice.
+	for concept := range cf.Facts {
+		sort.SliceStable(cf.Facts[concept], func(i, j int) bool {
+			return cf.Facts[concept][i].Filed.Before(cf.Facts[concept][j].Filed)
 		})
 	}
 }
@@ -732,10 +756,15 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			continue
 		}
 
-		// Use form-type-aware check: a 10-Q synthetic fact shouldn't prevent
-		// creating a 10-K synthetic fact for the same concept+period.
-		if hasFactForPeriodAndForm(cf, rf.conceptName, ctx.end, formType) {
-			continue
+		// For concepts with preferred USD units in the API, skip synthesis
+		// when the API already has data for this period+form — the API
+		// value is authoritative. For non-preferred-unit concepts (e.g.
+		// BRK's DebtAndCapitalLeaseObligations in EUR), always collect
+		// so synthesis can replace with correct segment sums.
+		if !cf.NonPreferredUnitConcepts[rf.conceptName] {
+			if hasFactForPeriodAndForm(cf, rf.conceptName, ctx.end, formType) {
+				continue
+			}
 		}
 
 		pk := periodKey{concept: rf.conceptName, end: ctx.end}
@@ -830,13 +859,39 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			continue
 		}
 
-		cf.Facts[pk.concept] = append(cf.Facts[pk.concept], Fact{
+		newFact := Fact{
 			End:   pk.end,
 			Start: start,
 			Val:   sum,
 			Filed: filed,
 			Form:  formType,
-		})
+		}
+
+		// When synthesis produces a multi-segment value (count >= 2) for
+		// a non-preferred-unit concept, replace ALL existing facts for
+		// the same period+form. The API may have loaded facts from
+		// foreign-currency units (e.g. BRK's EUR-denominated debt).
+		// Preserve the earliest original filing date so the synthesized
+		// fact passes the same filing-date filters as the original.
+		if count >= 2 && cf.NonPreferredUnitConcepts[pk.concept] {
+			filtered := make([]Fact, 0, len(cf.Facts[pk.concept]))
+			earliestFiled := filed
+
+			for _, f := range cf.Facts[pk.concept] {
+				if f.End.Equal(pk.end) && f.Form == formType {
+					if f.Filed.Before(earliestFiled) {
+						earliestFiled = f.Filed
+					}
+				} else {
+					filtered = append(filtered, f)
+				}
+			}
+
+			newFact.Filed = earliestFiled
+			cf.Facts[pk.concept] = append(filtered, newFact)
+		} else {
+			cf.Facts[pk.concept] = append(cf.Facts[pk.concept], newFact)
+		}
 	}
 }
 
