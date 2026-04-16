@@ -402,6 +402,15 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 
 done:
 
+	// Reverse so filings are processed in chronological order (oldest first).
+	// This ensures the original 10-Q's dimensional synthesis facts are
+	// established before later filings' comparative data is processed.
+	// Without this, a Q1-2025 10-Q's restated Q1-2024 comparative would
+	// block the original Q1-2024 synthesis (hasFactForPeriodAndForm).
+	for i, j := 0, len(filings)-1; i < j; i, j = i+1, j-1 {
+		filings[i], filings[j] = filings[j], filings[i]
+	}
+
 	log.Debug().Int("cik", cik).Int("filings", len(filings)).Msg("enriching with extension facts from XBRL instance documents")
 
 	for _, fi := range filings {
