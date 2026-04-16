@@ -833,9 +833,10 @@ var FieldMappings = []FieldMapping{
 	{
 		// EPSDiluted: use the XBRL tag if available; otherwise derive from
 		// NetIncomeCommonStock / WeightedAverageSharesDiluted. Multi-class
-		// filers like BRK/B don't report EarningsPerShareDiluted.
+		// filers like BRK/B don't report EarningsPerShareDiluted but do
+		// report EarningsPerShareBasic for Class B (where basic ≈ diluted).
 		FieldName: "EPSDiluted", Type: MappingDerived, StatementType: StmtFlow, ValueType: "float64",
-		FallbackTags: []string{"EarningsPerShareDiluted"},
+		FallbackTags: []string{"EarningsPerShareDiluted", "EarningsPerShareBasic"},
 		Op:           OpDivide,
 		Operands:     []string{"NetIncomeCommonStock", "WeightedAverageSharesDiluted"},
 		RoundDigits:  6,
