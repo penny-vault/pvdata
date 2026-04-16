@@ -720,6 +720,15 @@ var singleSegmentAllowed = map[string]bool{
 	"PremiumsAndOtherReceivablesNet":         true,
 	"UnearnedPremiums":                       true,
 	"PolicyholderFunds":                      true,
+	"USTreasuryBills":                        true, // BRK extension: only reported under InsuranceAndOther segment
+}
+
+// extensionSynthesisConcepts lists extension (non-us-gaap) concept names that
+// should be eligible for dimensional synthesis in synthesizeConsolidatedFacts.
+// Normally only us-gaap gap-fill concepts are processed; these extension
+// concepts are added because they exist only in dimensional contexts.
+var extensionSynthesisConcepts = map[string]bool{
+	"USTreasuryBills": true,
 }
 
 func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts map[string]contextPeriod, filed time.Time, formType string) {
@@ -738,7 +747,8 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 	groups := make(map[periodKey][]dimFact)
 
 	for _, rf := range rawFacts {
-		if !rf.isGapFill {
+		// Process us-gaap gap-fill facts and whitelisted extension concepts.
+		if !rf.isGapFill && !extensionSynthesisConcepts[rf.conceptName] {
 			continue
 		}
 

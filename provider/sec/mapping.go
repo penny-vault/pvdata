@@ -322,8 +322,17 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 			}
 
 		case MappingDerived:
-			// Try direct XBRL fallback tags first
-			if len(m.FallbackTags) > 0 {
+			// Try direct XBRL fallback tags first.
+			// FallbackRequireIfQuarterly gates the attempt: only try
+			// FallbackTags when a sentinel concept is filed quarterly
+			// (standard companies). Non-standard companies (e.g. BRK/B
+			// without COGS) skip FallbackTags and use the formula.
+			useFallback := len(m.FallbackTags) > 0
+			if useFallback && len(m.FallbackRequireIfQuarterly) > 0 {
+				useFallback = conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly)
+			}
+
+			if useFallback {
 				if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {
 					if m.Negate {
 						val = -val

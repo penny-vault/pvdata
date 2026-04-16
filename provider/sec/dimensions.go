@@ -393,6 +393,17 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 			continue
 		}
 
+		// Skip derived fields whose FallbackTags were gated off during
+		// resolution. ResolveLongestDuration uses FallbackTags, which
+		// would resolve the raw XBRL tag without the formula adjustment
+		// (e.g. Revenues without GainLossOnInvestments for BRK/B). The
+		// Q4 synthesis fallback (sum of de-cumulated quarters) handles
+		// these fields correctly.
+		if m.Type == MappingDerived && len(m.FallbackRequireIfQuarterly) > 0 &&
+			!conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly) {
+			continue
+		}
+
 		if val, ok := ResolveLongestDuration(filtered, m, periodEnd, formType); ok {
 			if m.Negate {
 				val = -val
@@ -617,8 +628,16 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 
 		// Preserve FallbackTag-resolved values: if the field has FallbackTags,
 		// was already resolved, and none of its operands were de-cumulated,
-		// keep the existing value.
-		if len(m.FallbackTags) > 0 {
+		// keep the existing value. Skip this preservation when
+		// FallbackRequireIfQuarterly prevented FallbackTags from being used
+		// during initial resolution (the value came from the formula, not
+		// FallbackTags).
+		fallbackActive := len(m.FallbackTags) > 0
+		if fallbackActive && len(m.FallbackRequireIfQuarterly) > 0 {
+			fallbackActive = conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly)
+		}
+
+		if fallbackActive {
 			if existingVal, exists := result[m.FieldName]; exists {
 				operandChanged := false
 

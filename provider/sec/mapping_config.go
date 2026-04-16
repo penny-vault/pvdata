@@ -70,6 +70,15 @@ type FieldMapping struct {
 	// For derived mappings that also have a direct XBRL fallback
 	FallbackTags []string
 
+	// FallbackRequireIfQuarterly gates FallbackTags on a sentinel concept:
+	// the FallbackTags are only tried when ANY of the listed concepts appear
+	// on a recent 10-Q filing. When none match, the FallbackTags are skipped
+	// and the formula is used instead. This allows the same field to use
+	// direct resolution for standard companies (with COGS) while falling
+	// through to a formula for non-standard companies (insurance/conglomerates
+	// that need investment gains added to revenue).
+	FallbackRequireIfQuarterly []string
+
 	// OptionalOperands makes OpAdd treat missing operands as 0 and resolve
 	// when at least one operand is present, instead of requiring all.
 	OptionalOperands bool
@@ -186,11 +195,22 @@ var FieldMappings = []FieldMapping{
 			"USTreasuryBills", // BRK/B extension tag for short-term Treasury holdings
 		},
 	},
+	// Loans receivable / notes receivable: insurance/conglomerate invested
+	// assets. Sharadar includes these in Investments for BRK/B. Gated to
+	// exclude banks (Deposits) and standard companies (ShortTermInvestments).
+	{
+		FieldName: "_notesReceivable", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"ShortTermInvestments", "MarketableSecuritiesCurrent",
+			"Deposits", "DepositsDomestic", "DepositsTotal",
+		},
+		XBRLTags: []string{"NotesReceivableNet"},
+	},
 	// Investments = InvestmentsCurrent + InvestmentsNonCurrent + equity/debt
-	// securities + equity method investments + Treasury bills. Sharadar defines
-	// this as "total amount of marketable and non-marketable securities, loans
-	// receivable and other invested assets." Standard companies use Current/
-	// NonCurrent; insurance/conglomerates report per-asset-class.
+	// securities + equity method investments + Treasury bills + notes receivable.
+	// Sharadar defines this as "total amount of marketable and non-marketable
+	// securities, loans receivable and other invested assets." Standard companies
+	// use Current/NonCurrent; insurance/conglomerates report per-asset-class.
 	{
 		FieldName: "Investments", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		FallbackTags: []string{"Investments"},
@@ -198,7 +218,7 @@ var FieldMappings = []FieldMapping{
 		Operands: []string{
 			"InvestmentsCurrent", "InvestmentsNonCurrent",
 			"_equitySecuritiesFvNi", "_equityMethodInvestments",
-			"_debtSecurities", "_treasuryBills",
+			"_debtSecurities", "_treasuryBills", "_notesReceivable",
 		},
 		OptionalOperands: true,
 	},
@@ -584,8 +604,9 @@ var FieldMappings = []FieldMapping{
 	},
 	// Revenues: prefer the direct XBRL tag when available (preserves the
 	// exact resolution path used before the BRK/B revenue restructuring).
-	// For companies without a direct Revenues tag but with investment
-	// gains (insurance/conglomerates), the formula adds them.
+	// For companies without COGS/Deposits (insurance/conglomerates like
+	// BRK/B), FallbackRequireIfQuarterly skips the FallbackTags so the
+	// formula adds investment gains to revenue.
 	{
 		FieldName: "Revenues", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
@@ -603,6 +624,15 @@ var FieldMappings = []FieldMapping{
 			"OilAndGasRevenue",
 			"FinancialServicesRevenue",
 			"ElectricUtilityRevenue",
+		},
+		FallbackRequireIfQuarterly: []string{
+			"CostOfGoodsAndServicesSold",
+			"CostOfRevenue",
+			"CostOfGoodsSold",
+			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+			"Deposits",
+			"DepositsDomestic",
+			"DepositsTotal",
 		},
 		Op:               OpAdd,
 		Operands:         []string{"_revenuesDirect", "_investmentGains"},
@@ -1062,6 +1092,9 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_paymentsInvest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"PaymentsToAcquireInvestments",
+			// BRK/B extension: bundles T-bill + AFS debt purchases. Must come
+			// before the standard AFS-only tag so the combined value is used.
+			"PaymentsToAcquireUSTreasuryBillsAndAvailableForSaleSecuritiesDebt",
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
 		},
 	},
@@ -1081,12 +1114,16 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "_proceedsInvestMaturities", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
+			// BRK/B extension: combined T-bill + AFS debt maturities/redemptions
+			"ProceedsFromRedemptionsAndMaturitiesOfUSTreasuryBillsAndAvailableForSaleSecuritiesDebt",
 			"ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities",
 		},
 	},
 	{
 		FieldName: "_proceedsInvestSales", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
+			// BRK/B extension: combined T-bill + AFS debt sales
+			"ProceedsFromSaleOfUSTreasuryBillsAndAvailableForSaleSecuritiesDebt",
 			"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
 		},
 	},
