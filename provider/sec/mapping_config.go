@@ -638,6 +638,20 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_revenuesDirect", "_investmentGains"},
 		OptionalOperands: true,
 	},
+	// Other above-the-line expenses (non-SGA, non-COGS). For insurance/
+	// conglomerates like BRK/B, the Railroad segment reports OtherExpenses
+	// which Sharadar includes in OperatingExpenses. Used by
+	// deriveCostOfRevenueBottomUp to correctly split COGS vs OpEx.
+	{
+		FieldName: "_otherExpenses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"CostOfGoodsAndServicesSold",
+			"CostOfRevenue",
+			"CostOfGoodsSold",
+			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+		},
+		XBRLTags: []string{"OtherExpenses"},
+	},
 	{
 		FieldName: "CostOfRevenue", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{

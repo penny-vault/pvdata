@@ -721,6 +721,7 @@ var singleSegmentAllowed = map[string]bool{
 	"UnearnedPremiums":                       true,
 	"PolicyholderFunds":                      true,
 	"USTreasuryBills":                        true, // BRK extension: only reported under InsuranceAndOther segment
+	"OtherExpenses":                          true, // BRK: Railroad segment other expenses (above-the-line, non-SGA)
 }
 
 // extensionSynthesisConcepts lists extension (non-us-gaap) concept names that

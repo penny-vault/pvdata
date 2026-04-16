@@ -731,15 +731,16 @@ func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 		return
 	}
 
-	sga := fields["SellingGeneralAndAdministrativeExpense"] // 0 when absent
-	rnd := fields["RandDExpenses"]                          // 0 when absent
+	sga := fields["SellingGeneralAndAdministrativeExpense"]  // 0 when absent
+	rnd := fields["RandDExpenses"]                           // 0 when absent
+	otherExp := fields["_otherExpenses"]                     // 0 when absent; Railroad segment for BRK
 
 	// Need at least SGA to derive the income statement.
 	if sga == 0 {
 		return
 	}
 
-	opEx := sga + rnd
+	opEx := sga + rnd + otherExp
 	grossProfit := opIncome + opEx
 	revenue, hasRev := fields["Revenues"]
 
