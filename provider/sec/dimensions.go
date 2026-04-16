@@ -18,6 +18,7 @@ package sec
 import (
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/penny-vault/pvdata/data"
@@ -642,23 +643,24 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 				// preserve the FallbackTag value. This handles cases like
 				// BRK's D&A where DepreciationDepletionAndAmortization has
 				// single-quarter data but sub-component AmortizationOfIntangibleAssets
-				// is YTD-only. Only apply when:
-				// 1. The value wasn't modified by Pass 1 (still equals current)
-				// 2. The FallbackTag concept actually exists in CompanyFacts
-				//    (proving the value came from a real XBRL tag, not formula)
-				// 3. needsDecumulation says the tag doesn't need de-cumulation
-				if origVal, hasCurr := current[m.FieldName]; hasCurr && existingVal == origVal {
-					fallbackResolved := false
-					for _, tag := range m.FallbackTags {
-						if _, ok := cf.Facts[tag]; ok {
-							fallbackResolved = true
+				// is YTD-only. Only apply to non-internal fields (not "_"
+				// prefixed sub-fields like _proceedsInvest whose FallbackTags
+				// may have YTD data that needs recomputation from de-cumulated
+				// sub-components).
+				if !strings.HasPrefix(m.FieldName, "_") {
+					if origVal, hasCurr := current[m.FieldName]; hasCurr && existingVal == origVal {
+						fallbackResolved := false
+						for _, tag := range m.FallbackTags {
+							if _, ok := cf.Facts[tag]; ok {
+								fallbackResolved = true
 
-							break
+								break
+							}
 						}
-					}
 
-					if fallbackResolved && !needsDecumulation(cf, m, periodEnd, formType) {
-						continue
+						if fallbackResolved && !needsDecumulation(cf, m, periodEnd, formType) {
+							continue
+						}
 					}
 				}
 			}
