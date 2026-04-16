@@ -740,8 +740,12 @@ func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 
 	costOfRevenue := revenue - grossProfit
 
-	// Sanity check: COGS should be positive and less than revenue.
-	if costOfRevenue < 0 || costOfRevenue >= revenue {
+	// Sanity check: COGS should be positive. For insurance/conglomerate
+	// companies where revenue includes investment gains/losses, COGS can
+	// legitimately exceed revenue in years with large unrealized losses
+	// (e.g. BRK 2022: COGS 238B > Revenue 234B due to -53B unrealized
+	// investment losses). So only check the lower bound.
+	if costOfRevenue < 0 {
 		return
 	}
 
