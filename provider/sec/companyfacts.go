@@ -685,6 +685,18 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 // Only facts with exactly one dimension member on the srt:ProductOrServiceAxis
 // are considered. Sub-segments (whose values sum to a parent segment's value)
 // are detected and excluded to avoid double-counting.
+// singleSegmentAllowed lists concepts where a single ProductOrServiceAxis
+// segment value represents the consolidated total. These are items reported
+// only by one segment because the other segment uses different cost categories.
+// For example, conglomerates report SGA under Insurance while operating
+// subsidiaries classify overhead as railroad/utility operating expenses.
+var singleSegmentAllowed = map[string]bool{
+	"SellingGeneralAndAdministrativeExpense": true,
+	"IntangibleAssetsNetExcludingGoodwill":   true,
+	"PremiumsAndOtherReceivablesNet":         true,
+	"UnearnedPremiums":                       true,
+}
+
 func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts map[string]contextPeriod, filed time.Time, formType string) {
 	type periodKey struct {
 		concept string
@@ -755,7 +767,11 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 
 		facts = deduped
 
-		if len(facts) < 2 {
+		if len(facts) < 2 && !singleSegmentAllowed[pk.concept] {
+			continue
+		}
+
+		if len(facts) == 0 {
 			continue
 		}
 
@@ -804,7 +820,12 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			}
 		}
 
-		if count < 2 {
+		// Some concepts are correctly represented by a single segment when
+		// the other segment doesn't report this item (different cost taxonomy).
+		// For example, SGA and intangibles-ex-goodwill in conglomerates are
+		// reported only under the Insurance segment because operating
+		// subsidiaries classify their overhead under segment-specific tags.
+		if count < 2 && !singleSegmentAllowed[pk.concept] {
 			continue
 		}
 
