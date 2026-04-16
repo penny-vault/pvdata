@@ -695,6 +695,7 @@ var singleSegmentAllowed = map[string]bool{
 	"IntangibleAssetsNetExcludingGoodwill":   true,
 	"PremiumsAndOtherReceivablesNet":         true,
 	"UnearnedPremiums":                       true,
+	"PolicyholderFunds":                      true,
 }
 
 func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts map[string]contextPeriod, filed time.Time, formType string) {

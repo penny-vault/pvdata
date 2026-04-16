@@ -478,15 +478,27 @@ var FieldMappings = []FieldMapping{
 	// portion when the company reports it separately (MSFT: Short-term + Long-term
 	// unearned revenue). When only the current tag exists (AAPL: no noncurrent
 	// tag), OptionalOperands yields just the current value.
+	// Insurance deferred revenue sub-fields. ExcludeIfQuarterly on
+	// AccruedLiabilitiesCurrent prevents activation for NVDA-type companies.
+	{
+		FieldName: "_unearnedPremiums", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		XBRLTags:           []string{"UnearnedPremiums"},
+	},
+	{
+		FieldName: "_policyholderFunds", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		XBRLTags:           []string{"PolicyholderFunds"},
+	},
 	{
 		FieldName: "DeferredRevenue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
-		FallbackTags: []string{
-			"DeferredRevenue",
-			"UnearnedPremiums", // Insurance companies (BRK/B) — premiums collected but not yet earned
+		FallbackTags:       []string{"DeferredRevenue"},
+		Op:                 OpAdd,
+		Operands: []string{
+			"_deferredRevenueCurrent", "_deferredRevenueNoncurrent",
+			"_unearnedPremiums", "_policyholderFunds",
 		},
-		Op:               OpAdd,
-		Operands:         []string{"_deferredRevenueCurrent", "_deferredRevenueNoncurrent"},
 		OptionalOperands: true,
 	},
 	{
