@@ -582,11 +582,28 @@ var FieldMappings = []FieldMapping{
 		},
 		XBRLTags: []string{"GainLossOnInvestments"},
 	},
-	// Revenues = _revenuesDirect + _investmentGains. For standard companies
-	// (with COGS), _investmentGains is gated off and Revenues = _revenuesDirect.
-	// For insurance/conglomerates, investment gains are included.
+	// Revenues: prefer the direct XBRL tag when available (preserves the
+	// exact resolution path used before the BRK/B revenue restructuring).
+	// For companies without a direct Revenues tag but with investment
+	// gains (insurance/conglomerates), the formula adds them.
 	{
 		FieldName: "Revenues", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{
+			"Revenues",
+			"RevenueFromContractWithCustomerExcludingAssessedTax",
+			"RevenueFromContractWithCustomerIncludingAssessedTax",
+			"RevenuesNetOfInterestExpense",
+			"SalesRevenueNet",
+			"SalesRevenueGoodsNet",
+			"SalesRevenueServicesNet",
+			"InterestAndDividendIncomeOperating",
+			"RegulatedAndUnregulatedOperatingRevenue",
+			"HealthCareOrganizationRevenue",
+			"RevenueMineralSales",
+			"OilAndGasRevenue",
+			"FinancialServicesRevenue",
+			"ElectricUtilityRevenue",
+		},
 		Op:               OpAdd,
 		Operands:         []string{"_revenuesDirect", "_investmentGains"},
 		OptionalOperands: true,
