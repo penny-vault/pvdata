@@ -618,13 +618,11 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 		// was already resolved, and none of its operands were de-cumulated,
 		// keep the existing value.
 		if len(m.FallbackTags) > 0 {
-			if _, exists := result[m.FieldName]; exists {
+			if existingVal, exists := result[m.FieldName]; exists {
 				operandChanged := false
 
 				for _, op := range m.Operands {
 					if _, changed := result[op]; changed {
-						// Check if this operand was actually de-cumulated
-						// (its value in result differs from current).
 						if origVal, hasCurr := current[op]; hasCurr {
 							if resultVal, hasResult := result[op]; hasResult && resultVal != origVal {
 								operandChanged = true
@@ -637,6 +635,31 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 
 				if !operandChanged {
 					continue
+				}
+
+				// When operands changed but the FallbackTag itself resolved
+				// to a single-quarter value (Pass 1 didn't de-cumulate it),
+				// preserve the FallbackTag value. This handles cases like
+				// BRK's D&A where DepreciationDepletionAndAmortization has
+				// single-quarter data but sub-component AmortizationOfIntangibleAssets
+				// is YTD-only. Only apply when:
+				// 1. The value wasn't modified by Pass 1 (still equals current)
+				// 2. The FallbackTag concept actually exists in CompanyFacts
+				//    (proving the value came from a real XBRL tag, not formula)
+				// 3. needsDecumulation says the tag doesn't need de-cumulation
+				if origVal, hasCurr := current[m.FieldName]; hasCurr && existingVal == origVal {
+					fallbackResolved := false
+					for _, tag := range m.FallbackTags {
+						if _, ok := cf.Facts[tag]; ok {
+							fallbackResolved = true
+
+							break
+						}
+					}
+
+					if fallbackResolved && !needsDecumulation(cf, m, periodEnd, formType) {
+						continue
+					}
 				}
 			}
 		}
