@@ -536,6 +536,200 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 	return total, true
 }
 
+// resolveClassSharesAsOf returns the Class A and Class B raw cover-page share
+// counts from the most recently filed 10-K or 10-Q on or before asOfDate.
+// Returns (filed, classA, classB, true) when a filing with BOTH class values
+// is available, or zero values with false otherwise.
+//
+// When a filing reports multiple source concepts (e.g. dei:
+// EntityCommonStockSharesOutstanding on the cover-page instant and
+// us-gaap:CommonStockSharesOutstanding on the period-end balance sheet),
+// EntityCommonStockSharesOutstanding is preferred because Sharadar's
+// shares_basic matches the cover-page sum, not the balance-sheet instant.
+//
+// Used by the market-ratio share_factor formula for multi-class filers:
+//
+//	share_factor = (A*A_price + B*B_price) / ((A+B) * our_price)
+//
+// where our_price is the price of the traded class being processed.
+func resolveClassSharesAsOf(cf *CompanyFacts, asOfDate time.Time) (filed time.Time, classA, classB float64, ok bool) {
+	type filingKey struct {
+		filed time.Time
+		form  string
+	}
+
+	// For each filing, prefer EntityCommonStockSharesOutstanding; fall back
+	// to CommonStockSharesOutstanding only if Entity data is absent for that
+	// class. Track per-class values separately with the preferred concept.
+	type classPair struct {
+		A, B        float64
+		AFromEntity bool
+		BFromEntity bool
+	}
+
+	pairs := make(map[filingKey]classPair)
+
+	for _, csf := range cf.ClassShares {
+		if csf.Form != "10-K" && csf.Form != "10-Q" {
+			continue
+		}
+
+		if csf.Filed.After(asOfDate) {
+			continue
+		}
+
+		k := filingKey{filed: csf.Filed, form: csf.Form}
+		p := pairs[k]
+
+		isEntity := csf.Concept == "EntityCommonStockSharesOutstanding"
+
+		switch csf.Class {
+		case "A":
+			if isEntity || !p.AFromEntity {
+				p.A = csf.Val
+				p.AFromEntity = isEntity
+			}
+		case "B":
+			if isEntity || !p.BFromEntity {
+				p.B = csf.Val
+				p.BFromEntity = isEntity
+			}
+		}
+
+		pairs[k] = p
+	}
+
+	for k, p := range pairs {
+		if p.A <= 0 || p.B <= 0 {
+			continue
+		}
+
+		if !ok || k.filed.After(filed) {
+			filed = k.filed
+			classA = p.A
+			classB = p.B
+			ok = true
+		}
+	}
+
+	return
+}
+
+// applyMRComparativeFilter zeroes out MR values for quarterly flow fields
+// where the XBRL concept has NO fact for the given periodEnd filed in a
+// subsequent-year filing. This matches Sharadar's "MR quarterly requires a
+// comparative in a later-year filing" semantics: if the concept is
+// discontinued (e.g. BRK stopped reporting PaymentsToAcquireBusinessesNet
+// OfCashAcquired in 2025 10-Qs), the older Q1-Q3 MR values go to 0 rather
+// than inheriting from the original 10-Q.
+//
+// The filter only fires when a subsequent-year filing EXISTS for the
+// company (any concept, filed more than 11 months after periodEnd). For
+// the most recent quarter where no Y+1 filing has been produced yet, the
+// original fact is still used — matching Sharadar's MR = AR behavior for
+// the freshest period.
+func applyMRComparativeFilter(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time) {
+	// Require at least one fact (any concept) filed more than 11 months
+	// after periodEnd. Below this threshold, no Y+1 filing has landed and
+	// the original fact is still authoritative.
+	cutoff := periodEnd.AddDate(0, 11, 0)
+	hasSubsequent := false
+
+	for _, facts := range cf.Facts {
+		for i := range facts {
+			if facts[i].Filed.After(cutoff) {
+				hasSubsequent = true
+
+				break
+			}
+		}
+
+		if hasSubsequent {
+			break
+		}
+	}
+
+	if !hasSubsequent {
+		return
+	}
+
+	// Build field-by-name lookup for operand resolution.
+	byName := make(map[string]*FieldMapping, len(FieldMappings))
+	for i := range FieldMappings {
+		byName[FieldMappings[i].FieldName] = &FieldMappings[i]
+	}
+
+	// collectLeafTags walks a derived field's operand tree and collects
+	// every underlying XBRL tag (its own XBRLTags/FallbackTags plus the
+	// operands' XBRLTags/FallbackTags, recursively). This lets the filter
+	// treat "SGA = G&A + S&M" as having comparatives whenever either
+	// G&A or S&M was re-reported in a subsequent filing, even if the
+	// company never reports the aggregate SellingGeneralAnd... tag itself.
+	var collectLeafTags func(fieldName string, visited map[string]bool) []string
+
+	collectLeafTags = func(fieldName string, visited map[string]bool) []string {
+		if visited[fieldName] {
+			return nil
+		}
+
+		visited[fieldName] = true
+
+		fm, ok := byName[fieldName]
+		if !ok {
+			return nil
+		}
+
+		tags := append([]string(nil), fm.XBRLTags...)
+		tags = append(tags, fm.FallbackTags...)
+
+		for _, op := range fm.Operands {
+			tags = append(tags, collectLeafTags(op, visited)...)
+		}
+
+		return tags
+	}
+
+	for _, m := range FieldMappings {
+		if m.StatementType != StmtFlow || m.ValueType != "int64" {
+			continue
+		}
+
+		if _, ok := fields[m.FieldName]; !ok {
+			continue
+		}
+
+		tags := collectLeafTags(m.FieldName, make(map[string]bool))
+		if len(tags) == 0 {
+			continue
+		}
+
+		hasComparative := false
+
+		for _, tag := range tags {
+			if tag == "" {
+				continue
+			}
+
+			for i := range cf.Facts[tag] {
+				f := &cf.Facts[tag][i]
+				if f.End.Equal(periodEnd) && f.Filed.After(cutoff) {
+					hasComparative = true
+
+					break
+				}
+			}
+
+			if hasComparative {
+				break
+			}
+		}
+
+		if !hasComparative {
+			fields[m.FieldName] = 0
+		}
+	}
+}
+
 // overrideNCFDebtResidual recomputes NetCashFlowDebt as the residual of
 // the financing section: debt = financing - common - dividend. This captures
 // items that are not separately tagged in XBRL but are included in the

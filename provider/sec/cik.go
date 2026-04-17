@@ -37,6 +37,12 @@ type AssetInfo struct {
 	Ticker        string
 	CompositeFigi string
 	CIK           int
+
+	// SiblingFigi is the composite FIGI of another share class sharing the
+	// same CIK (e.g. BRK.A for BRK.B, GOOG for GOOGL). Empty for single-class
+	// filers or when no dual-class sibling exists in the assets table. Used
+	// by the market-ratio share_factor formula in EnrichMarketData.
+	SiblingFigi string
 }
 
 // ParseCompanyTickers parses the SEC company_tickers.json format into a CIK->entry map.
@@ -92,28 +98,31 @@ func FetchCompanyTickers(ctx context.Context, client *resty.Client) (map[int]CIK
 	return entries, nil
 }
 
-// LoadCIKMapFromDB loads asset information from the database, returning two
-// maps: a CIK-keyed map (one representative entry per CIK) and a ticker-keyed
-// map (every asset with a CIK). Multiple tickers can share a single CIK (e.g.
-// JPM, AMJ, AMJB, VYLD all belong to CIK 19617). The CIK map picks one entry
-// arbitrarily; callers that need to look up a specific ticker should consult
-// the ticker map.
-func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInfo, map[string]AssetInfo, error) {
+// LoadCIKMapFromDB loads asset information from the database, returning three
+// maps: a CIK-keyed map (one representative entry per CIK), a ticker-keyed map
+// (every asset with a CIK), and a figi-keyed map of distinct sibling FIGIs
+// sharing the same CIK (dual-class filers like BRK.A/BRK.B). Multiple tickers
+// can share a single CIK (e.g. JPM, AMJ, AMJB, VYLD all belong to CIK 19617)
+// and many of them also share a FIGI (aliases); the sibling map only records
+// FIGIs that differ, which is the dual-class case that the market-ratio
+// share_factor formula needs.
+func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInfo, map[string]AssetInfo, map[string]string, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("acquiring connection: %w", err)
+		return nil, nil, nil, fmt.Errorf("acquiring connection: %w", err)
 	}
 	defer conn.Release()
 
 	rows, err := conn.Query(ctx,
 		`SELECT ticker, composite_figi, cik FROM assets WHERE cik IS NOT NULL AND cik != ''`)
 	if err != nil {
-		return nil, nil, fmt.Errorf("querying assets: %w", err)
+		return nil, nil, nil, fmt.Errorf("querying assets: %w", err)
 	}
 	defer rows.Close()
 
 	byCIK := make(map[int]AssetInfo)
 	byTicker := make(map[string]AssetInfo)
+	figiByCIK := make(map[int]map[string]struct{})
 
 	for rows.Next() {
 		var ticker, figi, cikStr string
@@ -135,7 +144,45 @@ func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInf
 
 		byCIK[cik] = info
 		byTicker[ticker] = info
+
+		if figi != "" {
+			if figiByCIK[cik] == nil {
+				figiByCIK[cik] = make(map[string]struct{})
+			}
+
+			figiByCIK[cik][figi] = struct{}{}
+		}
 	}
 
-	return byCIK, byTicker, rows.Err()
+	// Derive sibling FIGIs: for each CIK whose assets span more than one
+	// distinct FIGI, map each FIGI to the set of other FIGIs under the same
+	// CIK. Dual-class filers (BRK.A/BRK.B, GOOG/GOOGL, etc.) produce a 1:1
+	// pairing; single-class filers with multiple ticker aliases (JPM/AMJ/...
+	// on one FIGI) contribute nothing.
+	siblingFigi := make(map[string]string)
+
+	for _, figis := range figiByCIK {
+		if len(figis) < 2 {
+			continue
+		}
+
+		list := make([]string, 0, len(figis))
+		for f := range figis {
+			list = append(list, f)
+		}
+
+		for _, f := range list {
+			for _, other := range list {
+				if other == f {
+					continue
+				}
+
+				siblingFigi[f] = other
+
+				break
+			}
+		}
+	}
+
+	return byCIK, byTicker, siblingFigi, rows.Err()
 }

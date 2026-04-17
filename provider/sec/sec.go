@@ -115,7 +115,10 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	// Load CIK -> asset map from database (primary lookup path).
 	// dbTickerMap indexes every asset by ticker so we can resolve tickers
 	// that share a CIK (e.g. JPM, AMJ, AMJB, VYLD all map to CIK 19617).
-	dbCIKMap, dbTickerMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
+	// siblingFigiMap maps each FIGI of a dual-class filer (e.g. BRK.A/BRK.B)
+	// to the other class's FIGI; consumed by EnrichMarketData to fetch the
+	// sibling-class price for the market-ratio share_factor formula.
+	dbCIKMap, dbTickerMap, siblingFigiMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading CIK map from database")
 
@@ -138,6 +141,10 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 
 	cikMap := make(map[int]AssetInfo, len(dbCIKMap)+len(secTickers))
 	for cik, info := range dbCIKMap {
+		if sibling, ok := siblingFigiMap[info.CompositeFigi]; ok {
+			info.SiblingFigi = sibling
+		}
+
 		cikMap[cik] = info
 	}
 
@@ -189,6 +196,10 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		// covers all DB assets regardless of CIK collisions.
 		if len(filtered) == 0 && tickerFilter != "" {
 			if asset, ok := dbTickerMap[strings.ToUpper(tickerFilter)]; ok {
+				if sibling, ok := siblingFigiMap[asset.CompositeFigi]; ok {
+					asset.SiblingFigi = sibling
+				}
+
 				filtered[asset.CIK] = asset
 			}
 		}
@@ -649,6 +660,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 					}
 				}
 			}
+
 		}
 
 		// Track all quarters regardless of since so TTM windows are complete.
@@ -705,6 +717,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				q.arEmit = DecumulateYTD(cf, q.arFields, prev.arFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType, q.period.ARFiledDate)
 				q.mrEmit = DecumulateYTD(cf, q.mrFields, prev.mrFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType, q.period.MRFiledDate)
 
+				applyMRComparativeFilter(cf, q.mrEmit, q.period.PeriodEnd)
+
 				continue
 			}
 		}
@@ -714,6 +728,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// into the AR emit maps when AR and MR share the same reference.
 		q.arEmit = copyFieldMap(q.arFields)
 		q.mrEmit = copyFieldMap(q.mrFields)
+
+		applyMRComparativeFilter(cf, q.mrEmit, q.period.PeriodEnd)
 	}
 
 	// Synthesize Q4 entries from 10-K annual data and preceding quarters.
@@ -1294,9 +1310,57 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
+		// overrideFlowsAtFiscalYearEnd replaces TTM flow fields with the
+		// annual filing's value when the trailing 12-month window exactly
+		// coincides with the fiscal year. For MRT this matters whenever a
+		// later filing restated comparative quarterlies (e.g. BRK's Q1 2025
+		// 10-Q restated Q1 2024 SGA by +768M): the sum of restated MRQ
+		// values no longer matches the annual total from the 10-K, but
+		// Sharadar's MRT at the annual date_key equals MRY. Using the
+		// annual value directly avoids the mismatch. For ART this is
+		// algebraically a no-op (sum of original quarters equals annual)
+		// and guards against cumulative rounding drift.
+		//
+		// Derived flow fields (D&A, GrossProfit, OperatingExpenses, EBITDA,
+		// etc.) are copied from annualFields directly — we do NOT recompute
+		// them via their formulas because some formulas depend on helper
+		// operands (_depreciation, _amortizationOfIntangibles, ...) that
+		// may not be populated in annualFields for filers that only report
+		// a single aggregate D&A concept. Ratio fields (gross_margin,
+		// ebitda_margin, etc.) ARE recomputed since they depend on the
+		// overridden flow totals.
+		overrideFlowsAtFiscalYearEnd := func(ttm, annualFields map[string]float64) {
+			if annualFields == nil {
+				return
+			}
+
+			for _, m := range FieldMappings {
+				if m.StatementType != StmtFlow || m.ValueType != "int64" {
+					continue
+				}
+
+				if v, ok := annualFields[m.FieldName]; ok {
+					ttm[m.FieldName] = v
+				}
+			}
+
+			// Recompute StmtMetric derived fields (ratios like gross_margin,
+			// ebitda_margin) from the overridden flow totals.
+			for _, m := range FieldMappings {
+				if m.Type != MappingDerived || m.StatementType != StmtMetric {
+					continue
+				}
+
+				if val, ok := computeDerived(m, ttm); ok {
+					ttm[m.FieldName] = val
+				}
+			}
+		}
+
 		if ttm := ComputeTTM(arQSlice, false); ttm != nil {
 			overridePeriodAvg(ttm, matchingAR)
 			bankFixTTMNCI(ttm, matchingAR)
+			overrideFlowsAtFiscalYearEnd(ttm, matchingAR)
 
 			for k, v := range ComputeMultiQAverages(ttm, arQSlice) {
 				ttm[k] = v
@@ -1323,6 +1387,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if ttm := ComputeTTM(mrQSlice, true); ttm != nil {
 			overridePeriodAvg(ttm, matchingMR)
 			bankFixTTMNCI(ttm, matchingMR)
+			overrideFlowsAtFiscalYearEnd(ttm, matchingMR)
 
 			for k, v := range ComputeMultiQAverages(ttm, mrQSlice) {
 				ttm[k] = v
@@ -1352,7 +1417,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		EnrichMarketData(fundamentals, priceLookupFn)
+		var opts []EnrichOption
+		if asset.SiblingFigi != "" {
+			opts = append(opts, WithMultiClass(cf, asset.SiblingFigi))
+		}
+
+		EnrichMarketData(fundamentals, priceLookupFn, opts...)
 	}
 
 	// Clean up stale records for this ticker before sending new observations.

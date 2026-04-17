@@ -85,13 +85,36 @@ func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, qu
 	}
 
 	arResult := synthesizeFromPreceding(annualAR, annualPeriod.PeriodEnd, preceding,
-		func(q synthesizeInput) map[string]float64 { return q.arEmit },
-		func(q synthesizeInput) map[string]float64 { return q.arCumPerShare },
+		func(q synthesizeInput, _ string) map[string]float64 { return q.arEmit },
+		func(q synthesizeInput, _ string) map[string]float64 { return q.arCumPerShare },
 	)
 
+	// MR Q4 synthesis: when the 10-K annual for a field was NOT restated
+	// (annualAR == annualMR), use the AR preceding quarters. Sharadar's
+	// MR_Q4 = MR_annual - AR_Q1-Q3 in this case — the 10-K only has access
+	// to the original Q1-Q3 values at the time it's filed, so synthesizing
+	// Q4 from later-restated Q1-Q3 comparatives would produce the wrong Q4.
+	// When the 10-K itself was restated (annualMR != annualAR), the restated
+	// annual includes restatement effects and using MR preceding is correct.
 	mrResult := synthesizeFromPreceding(annualMR, annualPeriod.PeriodEnd, preceding,
-		func(q synthesizeInput) map[string]float64 { return q.mrEmit },
-		func(q synthesizeInput) map[string]float64 { return q.mrCumPerShare },
+		func(q synthesizeInput, field string) map[string]float64 {
+			if arVal, hasAR := annualAR[field]; hasAR {
+				if mrVal, hasMR := annualMR[field]; hasMR && arVal == mrVal {
+					return q.arEmit
+				}
+			}
+
+			return q.mrEmit
+		},
+		func(q synthesizeInput, field string) map[string]float64 {
+			if arVal, hasAR := annualAR[field]; hasAR {
+				if mrVal, hasMR := annualMR[field]; hasMR && arVal == mrVal {
+					return q.arCumPerShare
+				}
+			}
+
+			return q.mrCumPerShare
+		},
 	)
 
 	return arResult, mrResult
@@ -99,9 +122,11 @@ func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, qu
 
 // synthesizeFromPreceding builds a Q4 field map from an annual field map and
 // the 3 preceding de-cumulated quarters. emitFn selects either the AR or MR
-// emit map from each quarter. cumPSFn selects the YTD cumulative per-share map
-// for per-share flow fields.
-func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Time, preceding []synthesizeInput, emitFn func(synthesizeInput) map[string]float64, cumPSFn func(synthesizeInput) map[string]float64) map[string]float64 {
+// emit map from each quarter, per-field — see the MR Q4 logic in
+// SynthesizeQ4 for why the selection can vary across fields (AR when the 10-K
+// annual was not restated for that field, MR otherwise). cumPSFn follows the
+// same per-field convention for the YTD cumulative per-share map.
+func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Time, preceding []synthesizeInput, emitFn func(synthesizeInput, string) map[string]float64, cumPSFn func(synthesizeInput, string) map[string]float64) map[string]float64 {
 	result := make(map[string]float64, len(annual))
 
 	for _, m := range FieldMappings {
@@ -124,7 +149,7 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			// quarterly amount, not a YTD cumulative, and would give wrong
 			// results (Q4 = Annual - Q3_single instead of Annual - Q1Q2Q3_sum).
 			lastQ := preceding[0] // most recent quarter before the 10-K
-			if cumPS := cumPSFn(lastQ); cumPS != nil {
+			if cumPS := cumPSFn(lastQ, m.FieldName); cumPS != nil {
 				if cumVal, ok := cumPS[m.FieldName]; ok {
 					// Verify the value is actually cumulative by checking if
 					// it's larger than any single-quarter emit value.
@@ -132,7 +157,7 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 					// the average quarter. Use a simple heuristic: cumulative
 					// must differ from the single-quarter emit by > 10%.
 					singleQ := 0.0
-					if emit := emitFn(lastQ); emit != nil {
+					if emit := emitFn(lastQ, m.FieldName); emit != nil {
 						singleQ = emit[m.FieldName]
 					}
 
@@ -148,7 +173,7 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			allFound := true
 
 			for _, q := range preceding {
-				emit := emitFn(q)
+				emit := emitFn(q, m.FieldName)
 				if v, ok := emit[m.FieldName]; ok {
 					sum += v
 				} else {
@@ -179,7 +204,7 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 
 			// preceding[0] = Q3 (most recent before annual)
 			lastQ := preceding[0]
-			if cumPS := cumPSFn(lastQ); cumPS != nil {
+			if cumPS := cumPSFn(lastQ, m.FieldName); cumPS != nil {
 				if cumVal, ok := cumPS[m.FieldName]; ok {
 					q4Days := annualPeriodEnd.Sub(lastQ.periodEnd).Hours() / 24
 					d3 := preceding[0].periodEnd.Sub(preceding[1].periodEnd).Hours() / 24
@@ -206,7 +231,7 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			allFound := true
 
 			for _, q := range preceding {
-				emit := emitFn(q)
+				emit := emitFn(q, m.FieldName)
 				if v, ok := emit[m.FieldName]; ok {
 					sum += v
 				} else {

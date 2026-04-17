@@ -68,6 +68,20 @@ type Fact struct {
 	FY    int    // Fiscal year
 }
 
+// ClassSharesFact captures a Class A or Class B raw cover-page share count
+// from a specific filing. Used for the market-ratio share_factor formula in
+// multi-class filers: share_factor = (A*A_price + B*B_price) / ((A+B)*our_price).
+// Only raw CommonClassAMember / CommonClassBMember contexts are captured —
+// equivalent (B-unit) totals like EquivClassAMember are tracked elsewhere.
+type ClassSharesFact struct {
+	Filed   time.Time // Date the filing was submitted to SEC
+	End     time.Time // Cover-page instant date
+	Form    string    // 10-K or 10-Q
+	Concept string    // Source concept name (EntityCommonStockSharesOutstanding preferred over CommonStockSharesOutstanding)
+	Class   string    // "A" or "B"
+	Val     float64   // Raw share count (Class A: small; Class B: large)
+}
+
 // CompanyFacts holds parsed SEC EDGAR companyfacts data for a single entity.
 type CompanyFacts struct {
 	CIK        int               // Central Index Key
@@ -79,6 +93,13 @@ type CompanyFacts struct {
 	// foreign-currency denominations rather than consolidated USD totals.
 	// Dimensional synthesis can replace these with correct segment sums.
 	NonPreferredUnitConcepts map[string]bool
+
+	// ClassShares collects Class A and Class B cover-page share counts from
+	// dual-class filings. Populated during inline XBRL parsing whenever
+	// EntityCommonStockSharesOutstanding or CommonStockSharesOutstanding is
+	// reported on a context with a CommonClassAMember or CommonClassBMember.
+	// Used by resolveClassSharesAsOf for the market-ratio share_factor.
+	ClassShares []ClassSharesFact
 }
 
 // FilterByFilingDate removes all facts that were filed after the given cutoff
@@ -559,6 +580,33 @@ func hasFactForPeriodAndForm(cf *CompanyFacts, conceptName string, end time.Time
 	return false
 }
 
+// latestFiledForConceptPeriodForm returns the latest Filed date among existing
+// facts for the given concept, period end, and form type. Returns the zero
+// time and false when no such fact exists. Used to allow synthesis of
+// restated comparative values from later filings — the check is "did a newer
+// filing already process this period?" rather than "does ANY prior fact exist?".
+func latestFiledForConceptPeriodForm(cf *CompanyFacts, conceptName string, end time.Time, formType string) (time.Time, bool) {
+	facts, ok := cf.Facts[conceptName]
+	if !ok || len(facts) == 0 {
+		return time.Time{}, false
+	}
+
+	var latest time.Time
+
+	found := false
+
+	for i := range facts {
+		if facts[i].End.Equal(end) && facts[i].Form == formType {
+			if !found || facts[i].Filed.After(latest) {
+				latest = facts[i].Filed
+				found = true
+			}
+		}
+	}
+
+	return latest, found
+}
+
 // hasFactForPeriodStartAndForm returns true if CompanyFacts already contains a
 // fact matching the concept, period end, period start, and form type. Use this
 // instead of hasFactForPeriodAndForm when distinguishing between facts that
@@ -752,6 +800,42 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 				if !contextHasClassAMember(ctx) && !contextHasClassBMember(ctx) {
 					continue
 				}
+
+				// Capture raw per-class cover counts for the market-ratio
+				// share_factor formula. Only un-equivalized us-gaap:
+				// CommonClassA/BMember contexts carry raw counts — brka:
+				// EquivalentClassA/BMember variants are aggregated totals
+				// expressed in B-unit terms (A*1500+B) and must be skipped.
+				isEquivalent := false
+				classLabel := ""
+
+				for _, m := range ctx.dimMembers {
+					if strings.Contains(m, "Equivalent") {
+						isEquivalent = true
+
+						break
+					}
+
+					if classLabel == "" {
+						switch {
+						case strings.Contains(m, "ClassA"):
+							classLabel = "A"
+						case strings.Contains(m, "ClassB"):
+							classLabel = "B"
+						}
+					}
+				}
+
+				if !isEquivalent && classLabel != "" {
+					cf.ClassShares = append(cf.ClassShares, ClassSharesFact{
+						Filed:   filed,
+						End:     ctx.end,
+						Form:    formType,
+						Concept: rf.conceptName,
+						Class:   classLabel,
+						Val:     rf.value,
+					})
+				}
 			} else if !contextHasClassBMember(ctx) {
 				continue
 			}
@@ -928,13 +1012,22 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 		}
 
 		// For concepts with preferred USD units in the API, skip synthesis
-		// when the API already has data for this period+form — the API
-		// value is authoritative. For non-preferred-unit concepts (e.g.
-		// BRK's DebtAndCapitalLeaseObligations in EUR), always collect
-		// so synthesis can replace with correct segment sums.
+		// when the API already has data for this period+form that was
+		// filed on or after the current filing. The prior fact is still
+		// authoritative. When the CURRENT filing is NEWER than any existing
+		// fact, re-synthesize so comparative restatements are captured —
+		// e.g. BRK's Q1 2025 10-Q reclassifies Q1 2024 SGA by +768M into
+		// Insurance and Other. Without this, our MR resolution is stuck on
+		// the original 10-Q's value and Sharadar's MRQ (which picks up the
+		// restated comparative) doesn't match. For non-preferred-unit
+		// concepts (e.g. BRK's DebtAndCapitalLeaseObligations in EUR),
+		// always collect so synthesis can replace with correct segment
+		// sums.
 		if !cf.NonPreferredUnitConcepts[rf.conceptName] {
-			if hasFactForPeriodAndForm(cf, rf.conceptName, ctx.end, formType) {
-				continue
+			if latestFiled, ok := latestFiledForConceptPeriodForm(cf, rf.conceptName, ctx.end, formType); ok {
+				if !filed.After(latestFiled) {
+					continue
+				}
 			}
 		}
 
