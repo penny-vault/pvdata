@@ -859,10 +859,30 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		stripStaleAndRecompute(quarters[i].mrEmit, staleMRFields)
 	}
 
+	// Apply bank-specific post-processing (TotalDebt/InvestedCapital/NCFDebt
+	// overrides, SGA recompute, etc.) to quarter emit maps before annual
+	// balance-sheet averages are computed. Without this, the 4-quarter
+	// averages in ComputeMultiQAverages see the mapping-level values that
+	// precede the bank overrides, yielding a stale InvestedCapitalAverage
+	// for ARY/MRY on bank filers.
+	for i := range quarters {
+		overrideNCFDebtResidual(cf, quarters[i].arEmit, quarters[i].period.PeriodEnd, quarters[i].period.FormType)
+		overrideNCFDebtResidual(cf, quarters[i].mrEmit, quarters[i].period.PeriodEnd, quarters[i].period.FormType)
+	}
+
 	// For banks, override MR DPS with prior quarter's declared rate (= cash-
 	// paid). Must happen before annual emission so MRY can sum the corrected
-	// cash-paid quarterly values.
-	if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+	// cash-paid quarterly values. Skip when the filer reports
+	// PreferredStockDividendsIncomeStatementImpact: in that case the preferred
+	// deduction is already represented on the income statement, and Sharadar
+	// uses the declared per-share value directly (GS pattern) rather than the
+	// cash-paid prior-quarter shift (JPM pattern). This mirrors the NetIncome
+	// tag selection: the same marker distinguishes the two styles.
+	hasPreferredISImpact := conceptFiledQuarterly(cf, []string{
+		"PreferredStockDividendsIncomeStatementImpact",
+		"PreferredStockDividendsAndOtherAdjustments",
+	})
+	if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && !hasPreferredISImpact {
 		for i := 1; i < len(quarters); i++ {
 			prev := &quarters[i-1]
 			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
@@ -1089,8 +1109,11 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// For banks, use the prior quarter's declared DPS as the cash-paid
 		// DPS for MR dimensions only. Try arFields, then arEmit for
 		// synthesized Q4 quarters. Only affects MR dimensions — AR keeps
-		// the declared value.
-		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
+		// the declared value. Skipped when the filer reports
+		// PreferredStockDividendsIncomeStatementImpact (GS pattern): those
+		// filers have Sharadar using the declared per-share value directly
+		// rather than the cash-paid prior-quarter shift.
+		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && !hasPreferredISImpact {
 			prev := &quarters[i-1]
 			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
 

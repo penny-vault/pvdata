@@ -886,11 +886,16 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	// statement total, so add provision when the _gsBankProvision field was
 	// resolved (gated by the CustomerAndOtherPayables marker). Using the
 	// resolved field rather than re-reading from cf ensures the quarterly
-	// de-cumulated value flows into Q4 synthesis correctly.
+	// de-cumulated value flows into Q4 synthesis correctly. Set a sentinel so
+	// a second call to this function (sec.go now calls it on quarter maps
+	// before annual averages AND again before emission) does not double-add.
 	if isBank {
 		if provision, ok := fields["_gsBankProvision"]; ok {
-			if opex, hasOE := fields["OperatingExpenses"]; hasOE {
-				fields["OperatingExpenses"] = opex + provision
+			if _, alreadyApplied := fields["_gsBankProvisionApplied"]; !alreadyApplied {
+				if opex, hasOE := fields["OperatingExpenses"]; hasOE {
+					fields["OperatingExpenses"] = opex + provision
+					fields["_gsBankProvisionApplied"] = 1
+				}
 			}
 		}
 	}
@@ -1015,16 +1020,27 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}
 	}
 
-	// For banks, compute SGA = NoninterestExpense - OtherNoninterestExpense.
-	// Sharadar excludes "OtherNoninterestExpense" (a catch-all for misc items
-	// like FDIC assessments, regulatory fees, litigation) from SGA.
-	// Uses the mapped _bankOtherNoninterestExpense field which is properly
-	// de-cumulated (critical for Q4 synthesis where the raw tag isn't available).
+	// For banks, compute SGA. Commercial banks (JPM, BAC, WFC): SGA =
+	// NoninterestExpense - OtherNoninterestExpense (Sharadar excludes the
+	// catch-all "Other" bucket of FDIC assessments, regulatory fees,
+	// litigation). GS-style investment banks: SGA = NoninterestExpense -
+	// DepreciationAndAmortization - ProfessionalFees -- Sharadar classifies
+	// both D&A and professional fees outside SGA for these filers. For GS
+	// the OperatingExpenses field has Provision added in the step above, so
+	// subtract it back out to get raw NoninterestExpense before applying the
+	// GS-specific deductions.
 	if isBank {
 		nonintExp, hasNIE := fields["OperatingExpenses"] // resolved from NoninterestExpense FallbackTag
 		if hasNIE {
-			otherNIE := fields["_bankOtherNoninterestExpense"] // 0 when absent
-			fields["SellingGeneralAndAdministrativeExpense"] = nonintExp - otherNIE
+			if _, isGSStyle := cf.Facts["CustomerAndOtherPayables"]; isGSStyle {
+				rawNIE := nonintExp - fields["_gsBankProvision"] // undo provision addition
+				da := fields["DepreciationAmortizationAndAccretion"]
+				profFees := fields["_gsProfessionalFees"]
+				fields["SellingGeneralAndAdministrativeExpense"] = rawNIE - da - profFees
+			} else {
+				otherNIE := fields["_bankOtherNoninterestExpense"] // 0 when absent
+				fields["SellingGeneralAndAdministrativeExpense"] = nonintExp - otherNIE
+			}
 		}
 	}
 

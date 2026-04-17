@@ -1045,7 +1045,8 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"PaymentsToAcquireBusinessesNetOfCashAcquired",
 			"PaymentsToAcquireBusinessesGross",
-			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets", // MSFT extension
+			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets",   // MSFT extension
+			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",              // broker-dealers (GS) combining acquisitions and affiliate interests
 		},
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---
@@ -1230,6 +1231,14 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_gsDerivativeFinancing", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"PaymentsForProceedsFromDerivativeInstrumentFinancingActivities"},
+	},
+	// Professional fees. Sharadar's SGA for GS-style filers is
+	// NoninterestExpense - D&A - ProfessionalFees (rather than the
+	// NIE - OtherNoninterestExpense used for commercial banks).
+	{
+		FieldName: "_gsProfessionalFees", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"ProfessionalFees"},
 	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",

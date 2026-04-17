@@ -732,6 +732,7 @@ var _ = Describe("Dimensions", func() {
 				"_gsUnsecuredSTDebtNet":              true,
 				"_gsOtherSecuredSTDebtNet":           true,
 				"_gsDerivativeFinancing":             true,
+				"_gsProfessionalFees":                true,
 				"_capexGross":                        true,
 				"_proceedsPPESale":                   true,
 				"_equitySecuritiesFvNi":              true,
