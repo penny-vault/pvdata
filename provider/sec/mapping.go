@@ -534,11 +534,13 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	// Banks lack AssetsCurrent (no current/non-current classification) AND
 	// report Deposits (a bank-specific liability). Insurance conglomerates
 	// like BRK/B also lack AssetsCurrent but don't have Deposits.
-	isBank := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) &&
+	lacksAssetsCurrent := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"})
+	isBank := lacksAssetsCurrent &&
 		conceptFiledQuarterly(cf, []string{"Deposits", "DepositsDomestic", "DepositsTotal"})
+	isInsuranceConglomerate := lacksAssetsCurrent && !isBank
 	bundlesFinancing := conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"})
 
-	if !isBank && !bundlesFinancing {
+	if !isBank && !isInsuranceConglomerate && !bundlesFinancing {
 		return
 	}
 
@@ -605,13 +607,22 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}
 	}
 
-	// For banks, ensure NetCashFlowBusiness is present in the fields map
-	// (even as 0) so the strictFlow TTM check passes. Without this, quarters
-	// where no acquisitions occurred have the field absent, causing the
-	// MRT TTM to skip it entirely (found < 4 with strictFlow=true).
-	if isBank {
+	// Ensure NetCashFlowBusiness is present in the fields map (even as 0) so
+	// the strictFlow TTM check passes. Without this, quarters where no
+	// acquisitions occurred have the field absent, causing the MRT TTM to
+	// skip it entirely (found < 4 with strictFlow=true). For insurance
+	// conglomerates like BRK/B, also zero-fill NetCashFlowCommon: Q1 2025
+	// had no repurchases/issuances/tax-withholding, so all operands of the
+	// derived field were absent and the formula returned NULL.
+	if isBank || isInsuranceConglomerate {
 		if _, ok := fields["NetCashFlowBusiness"]; !ok {
 			fields["NetCashFlowBusiness"] = 0
+		}
+	}
+
+	if isInsuranceConglomerate {
+		if _, ok := fields["NetCashFlowCommon"]; !ok {
+			fields["NetCashFlowCommon"] = 0
 		}
 	}
 
@@ -731,9 +742,9 @@ func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 		return
 	}
 
-	sga := fields["SellingGeneralAndAdministrativeExpense"]  // 0 when absent
-	rnd := fields["RandDExpenses"]                           // 0 when absent
-	otherExp := fields["_otherExpenses"]                     // 0 when absent; Railroad segment for BRK
+	sga := fields["SellingGeneralAndAdministrativeExpense"] // 0 when absent
+	rnd := fields["RandDExpenses"]                          // 0 when absent
+	otherExp := fields["_otherExpenses"]                    // 0 when absent; Railroad segment for BRK
 
 	// Need at least SGA to derive the income statement.
 	if sga == 0 {
