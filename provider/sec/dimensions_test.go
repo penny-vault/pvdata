@@ -698,7 +698,7 @@ var _ = Describe("Dimensions", func() {
 				"_deferredRevenueCurrent":            true,
 				"_deferredRevenueNoncurrent":         true,
 				"_unearnedPremiums":                  true,
-				"_policyholderFunds":                 true,
+				"_aircraftDeferredRevenue":           true,
 				"_ppneRaw":                           true,
 				"_operatingLeaseROU":                 true,
 				"_propertyHeldForLease":              true,

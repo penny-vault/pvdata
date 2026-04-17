@@ -532,15 +532,18 @@ var FieldMappings = []FieldMapping{
 	// tag), OptionalOperands yields just the current value.
 	// Insurance deferred revenue sub-fields. ExcludeIfQuarterly on
 	// AccruedLiabilitiesCurrent prevents activation for NVDA-type companies.
+	// PolicyholderFunds (annuity/reserve balances) is intentionally NOT an
+	// operand: Sharadar's deferred_revenue excludes reserve liabilities
+	// for all life/annuity insurers (LNC, MET report 0).
 	{
 		FieldName: "_unearnedPremiums", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
 		XBRLTags:           []string{"UnearnedPremiums"},
 	},
 	{
-		FieldName: "_policyholderFunds", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "_aircraftDeferredRevenue", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
-		XBRLTags:           []string{"PolicyholderFunds"},
+		XBRLTags:           []string{"AircraftRepurchaseLiabilitiesAndDeferredRevenueLeasesNet"}, // BRK (brka:) NetJets extension
 	},
 	{
 		FieldName: "DeferredRevenue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
@@ -549,7 +552,7 @@ var FieldMappings = []FieldMapping{
 		Op:                 OpAdd,
 		Operands: []string{
 			"_deferredRevenueCurrent", "_deferredRevenueNoncurrent",
-			"_unearnedPremiums", "_policyholderFunds",
+			"_unearnedPremiums", "_aircraftDeferredRevenue",
 		},
 		OptionalOperands: true,
 	},

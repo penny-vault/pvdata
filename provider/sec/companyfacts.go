@@ -844,15 +844,15 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 // For example, conglomerates report SGA under Insurance while operating
 // subsidiaries classify overhead as railroad/utility operating expenses.
 var singleSegmentAllowed = map[string]bool{
-	"SellingGeneralAndAdministrativeExpense": true,
-	"IntangibleAssetsNetExcludingGoodwill":   true,
-	"PremiumsAndOtherReceivablesNet":         true,
-	"UnearnedPremiums":                       true,
-	"PolicyholderFunds":                      true,
-	"USTreasuryBills":                        true, // BRK extension: only reported under InsuranceAndOther segment
-	"OtherExpenses":                          true, // BRK: Railroad segment other expenses (above-the-line, non-SGA)
-	"ProceedsFromIssuanceOfLongTermDebt":     true, // BRK: only Railroad segment issues LT debt
-	"AccountsAndOtherReceivablesNet":         true, // BRK extension: Railroad/Utilities trade receivables
+	"SellingGeneralAndAdministrativeExpense":                   true,
+	"IntangibleAssetsNetExcludingGoodwill":                     true,
+	"PremiumsAndOtherReceivablesNet":                           true,
+	"UnearnedPremiums":                                         true,
+	"USTreasuryBills":                                          true, // BRK extension: only reported under InsuranceAndOther segment
+	"OtherExpenses":                                            true, // BRK: Railroad segment other expenses (above-the-line, non-SGA)
+	"ProceedsFromIssuanceOfLongTermDebt":                       true, // BRK: only Railroad segment issues LT debt
+	"AccountsAndOtherReceivablesNet":                           true, // BRK (brka:) extension: Railroad/Utilities trade receivables
+	"AircraftRepurchaseLiabilitiesAndDeferredRevenueLeasesNet": true, // BRK (brka:) NetJets deferred lease revenue
 }
 
 // extensionSynthesisConcepts lists extension (non-us-gaap) concept names that
@@ -860,8 +860,9 @@ var singleSegmentAllowed = map[string]bool{
 // Normally only us-gaap gap-fill concepts are processed; these extension
 // concepts are added because they exist only in dimensional contexts.
 var extensionSynthesisConcepts = map[string]bool{
-	"USTreasuryBills":                true,
-	"AccountsAndOtherReceivablesNet": true, // BRK (brka:) extension: Railroad/Utilities trade receivables
+	"USTreasuryBills":                                          true,
+	"AccountsAndOtherReceivablesNet":                           true, // BRK (brka:) extension: Railroad/Utilities trade receivables
+	"AircraftRepurchaseLiabilitiesAndDeferredRevenueLeasesNet": true, // BRK (brka:): NetJets deferred lease revenue
 }
 
 func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts map[string]contextPeriod, filed time.Time, formType string) {
