@@ -677,6 +677,17 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 		}
 	}
 
+	// Inputs collected during the matching loop to synthesize a
+	// WeightedAverageNumberOfDilutedSharesOutstanding fact for dual-class
+	// filers that file per-class Basic WAS but omit the Diluted tag.
+	type dilutedSynthInput struct {
+		end, start time.Time
+		class      string
+		val        float64
+	}
+
+	var dilutedSynthInputs []dilutedSynthInput
+
 	// Second step: match facts to contexts and build Fact objects.
 	for _, rf := range rawFacts {
 		ctx, ok := contexts[rf.contextRef]
@@ -696,12 +707,42 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 				continue
 			}
 
+			// Before filtering to Class B for per-share/WAS concepts, for
+			// WeightedAverageNumberOfSharesOutstandingBasic only, capture
+			// the Class A raw WAS fact into the diluted-synthesis bucket.
+			// Sharadar's weighted_average_shares_diluted for dual-class
+			// filers equals ClassA_raw_WAS + ClassB_equivalent_WAS (which
+			// itself already includes Class A converted to B-equivalents
+			// plus raw Class B). BRK does not file
+			// WeightedAverageNumberOfDilutedSharesOutstanding, so the
+			// fallback chain otherwise lands on the Class B basic value
+			// and underreports diluted by exactly ClassA_raw_WAS.
+			if rf.conceptName == "WeightedAverageNumberOfSharesOutstandingBasic" &&
+				contextHasClassAMember(ctx) {
+				dilutedSynthInputs = append(dilutedSynthInputs, dilutedSynthInput{
+					end:   ctx.end,
+					start: ctx.start,
+					class: "A",
+					val:   rf.value,
+				})
+			}
+
 			if multiClassShareCountConcepts[rf.conceptName] {
 				if !contextHasClassAMember(ctx) && !contextHasClassBMember(ctx) {
 					continue
 				}
 			} else if !contextHasClassBMember(ctx) {
 				continue
+			}
+
+			if rf.conceptName == "WeightedAverageNumberOfSharesOutstandingBasic" &&
+				contextHasClassBMember(ctx) {
+				dilutedSynthInputs = append(dilutedSynthInputs, dilutedSynthInput{
+					end:   ctx.end,
+					start: ctx.start,
+					class: "B",
+					val:   rf.value,
+				})
 			}
 		} else if rf.isGapFill {
 			// Standard us-gaap gap-fill: only from non-dimensional contexts,
@@ -730,6 +771,47 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 		}
 
 		cf.Facts[rf.conceptName] = append(cf.Facts[rf.conceptName], fact)
+	}
+
+	// Synthesize WeightedAverageNumberOfDilutedSharesOutstanding from the
+	// Class A + Class B per-class WeightedAverageNumberOfSharesOutstandingBasic
+	// facts collected above. Only runs when a dual-class filing supplied both
+	// class facts for a period and the companyfacts API has no non-dimensional
+	// Diluted fact for that period — so companies that report Diluted directly
+	// are never overridden.
+	if len(dilutedSynthInputs) > 0 {
+		type periodKey struct {
+			end, start time.Time
+		}
+
+		byPeriod := make(map[periodKey]map[string]float64)
+
+		for _, in := range dilutedSynthInputs {
+			pk := periodKey{end: in.end, start: in.start}
+			if byPeriod[pk] == nil {
+				byPeriod[pk] = make(map[string]float64)
+			}
+
+			byPeriod[pk][in.class] = in.val
+		}
+
+		for pk, classVals := range byPeriod {
+			a, hasA := classVals["A"]
+			b, hasB := classVals["B"]
+
+			if !hasA || !hasB {
+				continue
+			}
+
+			if hasFactForPeriodAndForm(cf, "WeightedAverageNumberOfDilutedSharesOutstanding", pk.end, formType) {
+				continue
+			}
+
+			cf.Facts["WeightedAverageNumberOfDilutedSharesOutstanding"] = append(
+				cf.Facts["WeightedAverageNumberOfDilutedSharesOutstanding"],
+				Fact{End: pk.end, Start: pk.start, Val: a + b, Filed: filed, Form: formType},
+			)
+		}
 	}
 
 	// Synthesize consolidated facts from dimensional data for concepts
