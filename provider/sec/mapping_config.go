@@ -291,7 +291,10 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_ppneRaw", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"PropertyPlantAndEquipmentNet"},
+		// ExcludeIfQuarterly on CustomerAndOtherPayables: GS-style investment
+		// banks bundle PP&E into "Other assets" (see _goodwill for rationale).
+		ExcludeIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"PropertyPlantAndEquipmentNet"},
 	},
 	// Operating lease ROU assets are included in PP&E when the company
 	// reports them as a separate balance sheet line (filed on 10-Q).
@@ -325,12 +328,21 @@ var FieldMappings = []FieldMapping{
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for Intangibles derivation ---
+	// ExcludeIfQuarterly on CustomerAndOtherPayables: investment banks that use
+	// the GS-style balance sheet (payables bundled into "customer and other
+	// payables") do not break out intangibles/goodwill as a separate balance
+	// sheet line item -- they're rolled into "Other assets". Sharadar reports
+	// Intangibles=0 for these filers to match the face-of-balance-sheet
+	// presentation, so skip resolution entirely when the GS-pattern marker is
+	// present.
 	{
 		FieldName: "_goodwill", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"Goodwill"},
+		ExcludeIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"Goodwill"},
 	},
 	{
 		FieldName: "_intangiblesExGoodwill", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags: []string{
 			"IntangibleAssetsNetExcludingGoodwill",
 			"FiniteLivedIntangibleAssetsNet",

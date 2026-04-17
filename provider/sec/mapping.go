@@ -892,6 +892,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 				"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
 			}},
 			{"Receivables", []string{"AccruedInterestAndAccountsReceivable"}},
+			// GS reports customer-and-other payables as the balance sheet
+			// payables line; us-gaap AccountsPayable* tags are absent.
+			{"Payables", []string{"CustomerAndOtherPayables"}},
 		}
 
 		for _, ext := range bankExtTags {
@@ -899,6 +902,7 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 				fields[ext.field] = v
 			}
 		}
+
 	}
 
 	// For banks, compute SGA = NoninterestExpense - OtherNoninterestExpense.
