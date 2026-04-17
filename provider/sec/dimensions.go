@@ -566,17 +566,40 @@ func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
 // the remaining YTD-only fields.
 //
 // current and prior are the original resolved field maps (prior may contain YTD
-// values). cf is the unfiltered CompanyFacts used to determine which fields are
-// YTD via needsDecumulation. The returned map is a copy; current and prior are
-// not modified.
+// values). cf is the unfiltered CompanyFacts; filedDate scopes the needsDecumulation
+// check to facts filed on or before filedDate so that a future amendment adding
+// a single-quarter fact does not mask the original filing's YTD-only reporting.
+// The returned map is a copy; current and prior are not modified.
 //
 // After de-cumulating direct fields, derived flow fields are recomputed from the
 // de-cumulated components. Metric-type derived fields (ratios) are then
 // recomputed from the updated flow/point-in-time values.
-func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPeriodEnd, periodEnd time.Time, formType string) map[string]float64 {
+func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPeriodEnd, periodEnd time.Time, formType string, filedDate time.Time) map[string]float64 {
 	result := make(map[string]float64, len(current))
 	for k, v := range current {
 		result[k] = v
+	}
+
+	// Build a filtered view of cf limited to facts filed on or before filedDate.
+	// needsDecumulation must see only the facts that existed when this filing
+	// was made; otherwise a later amendment that adds a single-quarter fact for
+	// the same period will flip the decumulation gate, leaving a YTD value
+	// untouched and causing Q4 synthesis to produce nonsensical (often negative)
+	// results.
+	filteredCF := &CompanyFacts{
+		CIK:        cf.CIK,
+		EntityName: cf.EntityName,
+		Facts:      make(map[string][]Fact, len(cf.Facts)),
+	}
+
+	for concept, facts := range cf.Facts {
+		idx := sort.Search(len(facts), func(i int) bool {
+			return facts[i].Filed.After(filedDate)
+		})
+
+		if idx > 0 {
+			filteredCF.Facts[concept] = facts[:idx]
+		}
 	}
 
 	// Pass 1: de-cumulate direct and fallback-resolved flow fields.
@@ -585,7 +608,7 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 			continue
 		}
 
-		if !needsDecumulation(cf, m, periodEnd, formType) {
+		if !needsDecumulation(filteredCF, m, periodEnd, formType) {
 			continue
 		}
 
@@ -657,28 +680,44 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 					continue
 				}
 
-				// When operands changed but the FallbackTag itself resolved
-				// to a single-quarter value (Pass 1 didn't de-cumulate it),
-				// preserve the FallbackTag value. This handles cases like
-				// BRK's D&A where DepreciationDepletionAndAmortization has
-				// single-quarter data but sub-component AmortizationOfIntangibleAssets
-				// is YTD-only. Only apply to non-internal fields (not "_"
-				// prefixed sub-fields like _proceedsInvest whose FallbackTags
-				// may have YTD data that needs recomputation from de-cumulated
+				// When operands changed but the FallbackTag resolved
+				// successfully, preserve the FallbackTag value. The fallback
+				// concept is the authoritative XBRL tag for this field;
+				// recomputing from sub-operands risks losing components the
+				// sub-operand mapping doesn't cover (e.g. BRK's D&A where
+				// DepreciationDepletionAndAmortization fully reports D&A but
+				// _amortizationOfIntangibles and _financeLeaseAmortization
+				// are absent). Two cases both preserve:
+				//   a) existingVal == origVal AND fallback is single-quarter
+				//      (Pass 1 didn't de-cumulate the fallback value)
+				//   b) existingVal != origVal (Pass 1 de-cumulated the
+				//      fallback's YTD value — the decumulated value is the
+				//      correct single-quarter fallback)
+				// Only apply to non-internal fields (not "_" prefixed
+				// sub-fields like _proceedsInvest whose FallbackTags may
+				// have YTD data that needs recomputation from de-cumulated
 				// sub-components).
 				if !strings.HasPrefix(m.FieldName, "_") {
-					if origVal, hasCurr := current[m.FieldName]; hasCurr && existingVal == origVal {
-						fallbackResolved := false
-						for _, tag := range m.FallbackTags {
-							if _, ok := cf.Facts[tag]; ok {
-								fallbackResolved = true
+					fallbackResolved := false
+					for _, tag := range m.FallbackTags {
+						if _, ok := cf.Facts[tag]; ok {
+							fallbackResolved = true
 
-								break
-							}
+							break
 						}
+					}
 
-						if fallbackResolved && !needsDecumulation(cf, m, periodEnd, formType) {
-							continue
+					if fallbackResolved {
+						if origVal, hasCurr := current[m.FieldName]; hasCurr {
+							if existingVal != origVal {
+								// Case (b): Pass 1 decumulated the fallback.
+								continue
+							}
+
+							// Case (a): fallback must already be single-quarter.
+							if !needsDecumulation(filteredCF, m, periodEnd, formType) {
+								continue
+							}
 						}
 					}
 				}
