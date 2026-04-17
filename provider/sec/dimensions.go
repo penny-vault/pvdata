@@ -413,6 +413,35 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 		}
 	}
 
+	// Second pass: for derived flow fields whose FallbackTags were gated
+	// off during the first pass (FallbackRequireIfQuarterly not met),
+	// compute the YTD cumulative from operands instead. This preserves
+	// cross-quarter adjustments captured by the operand's company-reported
+	// YTD value -- e.g. NetIncome for JPM where the formula path uses
+	// NetIncomeCommonStock, whose YTD cumulative (43,199M at Q3) differs
+	// slightly from the sum of individually rounded quarters (43,197M).
+	// Only fields with this gate-off pattern are recomputed; other derived
+	// fields (e.g. NetCashFlowCommon for AAPL) intentionally do not appear
+	// in the cumulative map so Q4 synthesis falls back to sum-of-quarters.
+	for _, m := range FieldMappings {
+		if m.Type != MappingDerived || m.StatementType != StmtFlow {
+			continue
+		}
+
+		if _, exists := result[m.FieldName]; exists {
+			continue
+		}
+
+		if len(m.FallbackRequireIfQuarterly) == 0 ||
+			conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly) {
+			continue
+		}
+
+		if val, ok := computeDerived(m, result); ok {
+			result[m.FieldName] = val
+		}
+	}
+
 	return result
 }
 

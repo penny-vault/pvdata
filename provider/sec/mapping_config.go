@@ -797,24 +797,33 @@ var FieldMappings = []FieldMapping{
 		},
 	},
 	{
-		FieldName: "NetIncome", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		// Prefer NetIncomeLossAvailableToCommonStockholdersBasic: Sharadar defines
-		// netinc as "net income loss to common shareholders" which deducts NCI and
-		// preferred dividends. Banks (JPM) file NetIncomeLoss as the consolidated
-		// figure (including NCI); the Available-to-Common variant gives the correct
-		// parent-only value. For companies without NCI (AAPL, MSFT), both are equal.
-		XBRLTags: []string{
-			"NetIncomeLossAvailableToCommonStockholdersBasic",
-			"NetIncomeLoss",
-			"ProfitLoss",
-		},
-	},
-	{
 		FieldName: "NetIncomeCommonStock", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"NetIncomeLossAvailableToCommonStockholdersBasic",
 			"NetIncomeLoss",
 		},
+	},
+	{
+		// Sharadar's `netinc` is "net income attributable to parent, after NCI,
+		// before preferred dividends". When the company reports
+		// PreferredStockDividendsIncomeStatementImpact as a separate line (GS),
+		// NetIncomeLoss already represents that before-preferred value -- use it
+		// directly. When the company does NOT report that tag (JPM), the preferred
+		// deduction can't be distinguished from NCI reliably, so Sharadar falls
+		// back to NetIncomeLossAvailableToCommonStockholdersBasic (= after both).
+		// The FallbackRequireIfQuarterly gate triggers on the preferred-impact tag.
+		FieldName: "NetIncome", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags: []string{
+			"NetIncomeLoss",
+			"ProfitLoss",
+		},
+		FallbackRequireIfQuarterly: []string{
+			"PreferredStockDividendsIncomeStatementImpact",
+			"PreferredStockDividendsAndOtherAdjustments",
+		},
+		Op:               OpAdd,
+		Operands:         []string{"NetIncomeCommonStock"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "ConsolidatedIncome", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -833,15 +842,18 @@ var FieldMappings = []FieldMapping{
 	},
 	// NetIncomeToNonControllingInterests: use the direct tag if available.
 	// Banks (JPM) don't report this tag; derive as ConsolidatedIncome -
-	// NetIncome - PreferredDividends. ConsolidatedIncome uses NetIncomeLoss
-	// (consolidated), while NetIncome uses the common-stockholder variant.
+	// NetIncomeCommonStock - PreferredDividends. NetIncomeCommonStock uses
+	// the "available to common" value (after preferred); the residual after
+	// subtracting preferred is the NCI portion. Uses NetIncomeCommonStock
+	// rather than NetIncome because NetIncome may resolve to a before-preferred
+	// value (GS pattern), which would break this identity.
 	{
 		FieldName: "NetIncomeToNonControllingInterests", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
 			"NetIncomeLossAttributableToNoncontrollingInterest",
 		},
 		Op:               OpLinearCombination,
-		Operands:         []string{"ConsolidatedIncome", "NetIncome", "PreferredDividendsIncomeStatementImpact"},
+		Operands:         []string{"ConsolidatedIncome", "NetIncomeCommonStock", "PreferredDividendsIncomeStatementImpact"},
 		Coefficients:     []float64{1, -1, -1},
 		OptionalOperands: true,
 	},
