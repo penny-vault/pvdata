@@ -339,6 +339,59 @@ func resolveCompareOptions(raw rawCompareFlags) (compareOptions, error) {
 	return opts, nil
 }
 
+// expandTickerAliases takes a list of user-supplied tickers and returns the
+// union of those tickers plus every other ticker in either fundamentals table
+// that shares a composite_figi with one of them. This bridges the SEC/Sharadar
+// ticker-format difference for dual-class securities (SEC "BRK.B" vs Sharadar
+// "BRK/B") so the downstream ticker filter returns rows on both sides.
+func expandTickerAliases(ctx context.Context, lib *library.Library, secTable, sharadarTable string, tickers []string) ([]string, error) {
+	if len(tickers) == 0 {
+		return tickers, nil
+	}
+
+	sql := fmt.Sprintf(
+		`WITH allrows AS (
+	SELECT ticker, composite_figi FROM %s WHERE composite_figi != ''
+	UNION
+	SELECT ticker, composite_figi FROM %s WHERE composite_figi != ''
+)
+SELECT DISTINCT ticker FROM allrows
+WHERE composite_figi IN (SELECT DISTINCT composite_figi FROM allrows WHERE ticker = ANY($1))
+   OR ticker = ANY($1)`,
+		secTable, sharadarTable,
+	)
+
+	rows, err := lib.Pool.Query(ctx, sql, tickers)
+	if err != nil {
+		return nil, fmt.Errorf("query ticker aliases: %w", err)
+	}
+	defer rows.Close()
+
+	seen := make(map[string]struct{}, len(tickers))
+	for _, t := range tickers {
+		seen[t] = struct{}{}
+	}
+
+	out := append([]string(nil), tickers...)
+
+	for rows.Next() {
+		var t string
+		if scanErr := rows.Scan(&t); scanErr != nil {
+			return nil, fmt.Errorf("scan ticker alias: %w", scanErr)
+		}
+
+		if _, ok := seen[t]; ok {
+			continue
+		}
+
+		seen[t] = struct{}{}
+
+		out = append(out, t)
+	}
+
+	return out, rows.Err()
+}
+
 // buildDateKeyQuery returns a SQL statement (and args) that yields the union
 // of distinct date_key values across the sec and sharadar tables, filtered by
 // tickers/dimensions/date range if configured.
@@ -1156,6 +1209,19 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 		} else {
 			opts.tickers = domesticTickers
 		}
+	}
+
+	// Expand requested tickers to include cross-provider aliases that share
+	// a composite_figi. SEC normalizes tickers with a dot (e.g. BRK.B) while
+	// Sharadar uses a slash (BRK/B); without this step, filtering on one
+	// form hides every row on the other side.
+	if len(opts.tickers) > 0 {
+		expanded, expErr := expandTickerAliases(ctx, myLibrary, secTable, sharadarTable, opts.tickers)
+		if expErr != nil {
+			log.Fatal().Err(expErr).Msg("could not expand ticker aliases")
+		}
+
+		opts.tickers = expanded
 	}
 
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
