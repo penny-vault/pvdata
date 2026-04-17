@@ -919,6 +919,17 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 			}
 		}
 
+		// GS-style receivables: the "Customer and other receivables" balance
+		// sheet line maps to us-gaap:OtherReceivables. The standard chain
+		// resolves to NotesReceivableNet (loans receivable), which is a
+		// different line for GS. Gate on CustomerAndOtherPayables to avoid
+		// affecting other banks that also file OtherReceivables but resolve
+		// correctly via the default path.
+		if _, ok := cf.Facts["CustomerAndOtherPayables"]; ok {
+			if v, rok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{"OtherReceivables"}}, periodEnd, formType); rok {
+				fields["Receivables"] = v
+			}
+		}
 	}
 
 	// For banks, compute SGA = NoninterestExpense - OtherNoninterestExpense.

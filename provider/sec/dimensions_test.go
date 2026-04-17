@@ -725,6 +725,8 @@ var _ = Describe("Dimensions", func() {
 				"_investmentGains":                   true,
 				"_bankOtherNoninterestExpense":       true,
 				"_gsBankProvision":                   true,
+				"_capexGross":                        true,
+				"_proceedsPPESale":                   true,
 				"_equitySecuritiesFvNi":              true,
 				"_equityMethodInvestments":           true,
 				"_debtSecurities":                    true,

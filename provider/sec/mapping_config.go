@@ -996,14 +996,33 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_depreciation", "_amortizationOfIntangibles", "_financeLeaseAmortization"},
 		OptionalOperands: true,
 	},
+	// --- Internal sub-fields for CapitalExpenditure derivation ---
 	{
-		FieldName: "CapitalExpenditure", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		Negate: true,
+		FieldName: "_capexGross", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"PaymentsToAcquirePropertyPlantAndEquipment",
 			"PaymentsToAcquireProductiveAssets",
 			"CapitalExpendituresIncurredButNotYetPaid",
 		},
+	},
+	// Proceeds from disposing of PP&E are netted against gross capex for
+	// companies that report both (e.g. GS sells real estate and back-leases
+	// it). Standard companies (AAPL, MSFT, NVDA) don't file this tag so
+	// CapitalExpenditure reduces to -_capexGross for them.
+	{
+		FieldName: "_proceedsPPESale", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"ProceedsFromSaleOfPropertyPlantAndEquipment"},
+	},
+	// CapitalExpenditure = -(gross capex - proceeds from PP&E sale). Net of
+	// proceeds so disposals reduce capex outflow. Sharadar matches this
+	// convention for filers that report proceeds (e.g. GS 2024: 2,091M gross,
+	// 1,613M proceeds → -478M net).
+	{
+		FieldName: "CapitalExpenditure", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		Op:               OpLinearCombination,
+		Operands:         []string{"_capexGross", "_proceedsPPESale"},
+		Coefficients:     []float64{-1, 1},
+		OptionalOperands: true,
 	},
 	// Sharadar reports 0 for share-based compensation for commercial banks
 	// (JPM, BAC, WFC): they include SBC in LaborAndRelatedExpense and Sharadar
