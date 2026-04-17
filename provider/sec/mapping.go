@@ -826,12 +826,12 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 				name string
 				sign float64
 			}{
-				{"_gsUnsecuredDebtProceeds", 1},
-				{"_gsUnsecuredDebtRepayments", -1},
-				{"_gsSecuredDebtProceeds", 1},
-				{"_gsSecuredDebtRepayments", -1},
-				{"_gsUnsecuredSTDebtNet", 1},
-				{"_gsOtherSecuredSTDebtNet", 1},
+				{"_bdUnsecuredDebtProceeds", 1},
+				{"_bdUnsecuredDebtRepayments", -1},
+				{"_bdSecuredDebtProceeds", 1},
+				{"_bdSecuredDebtRepayments", -1},
+				{"_bdUnsecuredSTDebtNet", 1},
+				{"_bdOtherSecuredSTDebtNet", 1},
 			}
 		} else {
 			bankDebtFields = []struct {
@@ -883,18 +883,18 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	// NoninterestExpense + ProvisionForLoanLeaseAndOtherLosses on the face of
 	// the income statement (unlike commercial banks which keep provision as a
 	// separate line). Sharadar's OperatingExpenses matches this face-of-the-
-	// statement total, so add provision when the _gsBankProvision field was
+	// statement total, so add provision when the _bdBankProvision field was
 	// resolved (gated by the CustomerAndOtherPayables marker). Using the
 	// resolved field rather than re-reading from cf ensures the quarterly
 	// de-cumulated value flows into Q4 synthesis correctly. Set a sentinel so
 	// a second call to this function (sec.go now calls it on quarter maps
 	// before annual averages AND again before emission) does not double-add.
 	if isBank {
-		if provision, ok := fields["_gsBankProvision"]; ok {
-			if _, alreadyApplied := fields["_gsBankProvisionApplied"]; !alreadyApplied {
+		if provision, ok := fields["_bdBankProvision"]; ok {
+			if _, alreadyApplied := fields["_bdBankProvisionApplied"]; !alreadyApplied {
 				if opex, hasOE := fields["OperatingExpenses"]; hasOE {
 					fields["OperatingExpenses"] = opex + provision
-					fields["_gsBankProvisionApplied"] = 1
+					fields["_bdBankProvisionApplied"] = 1
 				}
 			}
 		}
@@ -1033,9 +1033,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		nonintExp, hasNIE := fields["OperatingExpenses"] // resolved from NoninterestExpense FallbackTag
 		if hasNIE {
 			if _, isGSStyle := cf.Facts["CustomerAndOtherPayables"]; isGSStyle {
-				rawNIE := nonintExp - fields["_gsBankProvision"] // undo provision addition
+				rawNIE := nonintExp - fields["_bdBankProvision"] // undo provision addition
 				da := fields["DepreciationAmortizationAndAccretion"]
-				profFees := fields["_gsProfessionalFees"]
+				profFees := fields["_bdProfessionalFees"]
 				fields["SellingGeneralAndAdministrativeExpense"] = rawNIE - da - profFees
 			} else {
 				otherNIE := fields["_bankOtherNoninterestExpense"] // 0 when absent

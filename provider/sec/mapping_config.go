@@ -1177,7 +1177,7 @@ var FieldMappings = []FieldMapping{
 	// Sharadar does NOT bundle into OperatingExpenses. StmtFlow so YTD values
 	// are properly de-cumulated per quarter before Q4 synthesis.
 	{
-		FieldName: "_gsBankProvision", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdBankProvision", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"ProvisionForLoanLeaseAndOtherLosses"},
 	},
@@ -1188,22 +1188,22 @@ var FieldMappings = []FieldMapping{
 	// the standard ProceedsFromShortTermDebt. Each sub-field is gated by the
 	// CustomerAndOtherPayables marker; StmtFlow ensures quarterly de-cumulation.
 	{
-		FieldName: "_gsUnsecuredDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdUnsecuredDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"ProceedsFromIssuanceOfUnsecuredDebt"},
 	},
 	{
-		FieldName: "_gsUnsecuredDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdUnsecuredDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"RepaymentsOfUnsecuredDebt"},
 	},
 	{
-		FieldName: "_gsSecuredDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdSecuredDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"ProceedsFromIssuanceOfSecuredDebt"},
 	},
 	{
-		FieldName: "_gsSecuredDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdSecuredDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"RepaymentsOfSecuredDebt"},
 	},
@@ -1214,13 +1214,13 @@ var FieldMappings = []FieldMapping{
 	// the cash-flow direction: GS files val=3,243 sign="-" for a net borrowing
 	// inflow of +3,243.
 	{
-		FieldName: "_gsUnsecuredSTDebtNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdUnsecuredSTDebtNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		Negate:             true,
 		XBRLTags:           []string{"ProceedsFromRepaymentsOfUnsecuredShortTermDebt"},
 	},
 	{
-		FieldName: "_gsOtherSecuredSTDebtNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdOtherSecuredSTDebtNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		Negate:             true,
 		XBRLTags:           []string{"ProceedsFromRepaymentsOfOtherSecuredShortTermDebt"},
@@ -1228,7 +1228,7 @@ var FieldMappings = []FieldMapping{
 	// Derivative contracts with a financing element (net). GS classifies these
 	// within financing cash flow alongside debt issuances/repayments.
 	{
-		FieldName: "_gsDerivativeFinancing", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdDerivativeFinancing", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"PaymentsForProceedsFromDerivativeInstrumentFinancingActivities"},
 	},
@@ -1236,7 +1236,7 @@ var FieldMappings = []FieldMapping{
 	// NoninterestExpense - D&A - ProfessionalFees (rather than the
 	// NIE - OtherNoninterestExpense used for commercial banks).
 	{
-		FieldName: "_gsProfessionalFees", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_bdProfessionalFees", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"ProfessionalFees"},
 	},
