@@ -730,6 +730,8 @@ var _ = Describe("Dimensions", func() {
 				"_treasuryBills":                     true,
 				"_notesReceivable":                   true,
 				"_otherExpenses":                     true,
+				"_premiumsReceivables":               true,
+				"_railroadReceivables":               true,
 			}
 
 			var missing []string

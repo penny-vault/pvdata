@@ -852,6 +852,7 @@ var singleSegmentAllowed = map[string]bool{
 	"USTreasuryBills":                        true, // BRK extension: only reported under InsuranceAndOther segment
 	"OtherExpenses":                          true, // BRK: Railroad segment other expenses (above-the-line, non-SGA)
 	"ProceedsFromIssuanceOfLongTermDebt":     true, // BRK: only Railroad segment issues LT debt
+	"AccountsAndOtherReceivablesNet":         true, // BRK extension: Railroad/Utilities trade receivables
 }
 
 // extensionSynthesisConcepts lists extension (non-us-gaap) concept names that
@@ -859,7 +860,8 @@ var singleSegmentAllowed = map[string]bool{
 // Normally only us-gaap gap-fill concepts are processed; these extension
 // concepts are added because they exist only in dimensional contexts.
 var extensionSynthesisConcepts = map[string]bool{
-	"USTreasuryBills": true,
+	"USTreasuryBills":                true,
+	"AccountsAndOtherReceivablesNet": true, // BRK (brka:) extension: Railroad/Utilities trade receivables
 }
 
 func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts map[string]contextPeriod, filed time.Time, formType string) {

@@ -235,20 +235,46 @@ var FieldMappings = []FieldMapping{
 			"NontradeReceivablesCurrent",
 		},
 	},
+	// Insurance/conglomerate receivables sub-fields. FallbackRequireIfQuarterly
+	// on CoGS/Deposits on the parent Receivables gates the fallback path for
+	// standard filers only; conglomerates like BRK/B without quarterly CoGS
+	// fall through to the Operand formula which sums these sub-fields.
+	{
+		FieldName: "_premiumsReceivables", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"PremiumsAndOtherReceivablesNet"}, // BRK/B Insurance segment
+	},
+	{
+		FieldName: "_railroadReceivables", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"AccountsAndOtherReceivablesNet"}, // BRK/B Railroad/Utilities extension
+	},
 	// Receivables = TradeReceivables + NonTradeReceivables. Sharadar
 	// defines this as "trade and non-trade receivables." Apple tags these
 	// separately (AccountsReceivableNetCurrent + NontradeReceivablesCurrent).
 	// Banks (JPM) use a combined extension tag for accrued interest + A/R.
+	// Insurance conglomerates (BRK/B) sum Premiums + Railroad segment
+	// receivables via the _premiumsReceivables and _railroadReceivables
+	// sub-fields (single-segment synthesis provides the consolidated values).
 	{
 		FieldName: "Receivables", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		FallbackTags: []string{
 			"ReceivablesNetCurrent",
-			"PremiumsAndOtherReceivablesNet",       // Insurance companies (BRK/B) — premiums + trade receivables
 			"AccruedInterestAndAccountsReceivable", // JPM extension tag
-			"NotesReceivableNet",                   // Insurance/conglomerates with loan portfolios
+			"NotesReceivableNet",                   // Conglomerates with loan portfolios
 		},
-		Op:               OpAdd,
-		Operands:         []string{"TradeReceivables", "NonTradeReceivables"},
+		FallbackRequireIfQuarterly: []string{
+			"CostOfGoodsAndServicesSold",
+			"CostOfRevenue",
+			"CostOfGoodsSold",
+			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+			"Deposits",
+			"DepositsDomestic",
+			"DepositsTotal",
+		},
+		Op: OpAdd,
+		Operands: []string{
+			"TradeReceivables", "NonTradeReceivables",
+			"_premiumsReceivables", "_railroadReceivables",
+		},
 		OptionalOperands: true,
 	},
 	{
