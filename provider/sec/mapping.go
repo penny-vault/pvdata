@@ -940,6 +940,40 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 				fields["Receivables"] = v
 			}
 		}
+
+		// GS-style total debt: Sharadar sums the interest-bearing wholesale
+		// liabilities visible on the balance sheet — unsecured borrowings
+		// (short + long), collateralized financings (repo + securities loaned
+		// + other secured), and trading liabilities. Deposits are tracked in
+		// the separate `deposits` field. The default bank formula
+		// (ShortTermBorrowings + LongTermDebt + FedFundsPurchased) doesn't
+		// cover GS because GS reports UnsecuredLongTermDebt/UnsecuredDebtCurrent
+		// rather than LongTermDebt, and its repo/sec-loaned/trading-liab lines
+		// are separate. Gate on CustomerAndOtherPayables so JPM/BAC (which
+		// match via the default formula) aren't disturbed.
+		if _, ok := cf.Facts["CustomerAndOtherPayables"]; ok {
+			gsDebtTags := []string{
+				"DebtLongtermAndShorttermCombinedAmount",
+				"SecuritiesSoldUnderAgreementsToRepurchase",
+				"SecuritiesLoaned",
+				"OtherSecuredFinancings",
+				"TradingLiabilities",
+			}
+
+			total := 0.0
+			found := false
+
+			for _, tag := range gsDebtTags {
+				if v, tok := ResolveDirect(cf, FieldMapping{XBRLTags: []string{tag}}, periodEnd, formType); tok {
+					total += v
+					found = true
+				}
+			}
+
+			if found {
+				fields["TotalDebt"] = total
+			}
+		}
 	}
 
 	// For banks, compute SGA = NoninterestExpense - OtherNoninterestExpense.
