@@ -464,18 +464,25 @@ func OverrideDPSFromCash(fields map[string]float64) {
 //
 // It checks two sources in order:
 //  1. EntityCommonStockSharesOutstanding (DEI cover-page count)
-//  2. CommonStockSharesOutstanding (us-gaap, captured from Class B
-//     dimensional contexts for multi-class filers like BRK/B)
+//  2. CommonStockSharesOutstanding (us-gaap, captured from Class A and
+//     Class B dimensional contexts for multi-class filers like BRK/B)
 //
-// The most recently filed value across both sources is used. Stale values
-// (filed more than 2 years before asOfDate) are ignored so that old DEI
-// entries from companies that stopped reporting the tag don't persist.
+// The most recently filed value across both sources is used. For multi-class
+// filers, the selected filing may contain one fact per share class; all
+// facts from that same concept and filing date are summed so the returned
+// value is the total raw share count. Stale values (filed more than 2 years
+// before asOfDate) are ignored so that old DEI entries from companies that
+// stopped reporting the tag don't persist.
 //
 // Returns (0, false) when no suitable fact is found.
 func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool) {
 	staleThreshold := asOfDate.AddDate(-2, 0, 0)
 
-	var best *Fact
+	var (
+		bestConcept string
+		bestFiled   time.Time
+		found       bool
+	)
 
 	for _, conceptName := range []string{
 		"EntityCommonStockSharesOutstanding",
@@ -497,23 +504,36 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 				continue
 			}
 
-			// Skip stale entries (e.g. BRK/B stopped reporting DEI
-			// EntityCommonStockSharesOutstanding after 2011).
 			if f.Filed.Before(staleThreshold) {
 				continue
 			}
 
-			if best == nil || f.Filed.After(best.Filed) {
-				best = f
+			if !found || f.Filed.After(bestFiled) {
+				bestConcept = conceptName
+				bestFiled = f.Filed
+				found = true
 			}
 		}
 	}
 
-	if best == nil {
+	if !found {
 		return 0, false
 	}
 
-	return best.Val, true
+	// Sum all facts from the same concept with the same filing date. For a
+	// single-class filer this is a single fact; for a multi-class filer the
+	// filing reports one fact per class (Class A + Class B), and Sharadar's
+	// shares_basic matches the sum of raw counts across classes.
+	total := 0.0
+
+	for i := range cf.Facts[bestConcept] {
+		f := &cf.Facts[bestConcept][i]
+		if f.Filed.Equal(bestFiled) && (f.Form == "10-K" || f.Form == "10-Q") {
+			total += f.Val
+		}
+	}
+
+	return total, true
 }
 
 // overrideNCFDebtResidual recomputes NetCashFlowDebt as the residual of

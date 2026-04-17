@@ -489,6 +489,31 @@ func contextHasClassBMember(ctx contextPeriod) bool {
 	return false
 }
 
+// contextHasClassAMember returns true if any dimension member in the context
+// contains "ClassA" (matching us-gaap:CommonClassAMember and company
+// extensions). Used alongside contextHasClassBMember for share count concepts
+// where both class totals must be captured and summed (e.g. BRK/B's
+// EntityCommonStockSharesOutstanding is filed per-class in raw share units).
+func contextHasClassAMember(ctx contextPeriod) bool {
+	for _, m := range ctx.dimMembers {
+		if strings.Contains(m, "ClassA") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// multiClassShareCountConcepts lists share-count concepts whose per-class
+// values are raw share counts that must be summed across classes to match
+// Sharadar's shares_basic. Per-share (EPS) and weighted-average-shares
+// concepts are NOT in this set: Sharadar reports those in Class B
+// (equivalent) units, so only the Class B dimensional value is captured.
+var multiClassShareCountConcepts = map[string]bool{
+	"CommonStockSharesOutstanding":       true,
+	"EntityCommonStockSharesOutstanding": true,
+}
+
 // rawFact holds a parsed XBRL fact from the inline XBRL instance document.
 type rawFact struct {
 	conceptName    string
@@ -660,9 +685,22 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 		}
 
 		if rf.isShareConcept {
-			// Share/EPS concepts: only capture from Class B dimensional
-			// contexts. Non-dimensional values are already in companyfacts.
-			if !ctx.hasDim || !contextHasClassBMember(ctx) {
+			// Share/EPS concepts: capture from dimensional contexts only
+			// (non-dimensional values are already in companyfacts).
+			// For per-share and weighted-average concepts, only Class B
+			// (equivalent) values are meaningful — Class A values are in a
+			// different unit scale. For share COUNT concepts, both Class A
+			// and Class B raw counts must be captured so they can be summed
+			// downstream (resolveSharesBasicAsOf).
+			if !ctx.hasDim {
+				continue
+			}
+
+			if multiClassShareCountConcepts[rf.conceptName] {
+				if !contextHasClassAMember(ctx) && !contextHasClassBMember(ctx) {
+					continue
+				}
+			} else if !contextHasClassBMember(ctx) {
 				continue
 			}
 		} else if rf.isGapFill {
