@@ -1005,13 +1005,16 @@ var FieldMappings = []FieldMapping{
 			"CapitalExpendituresIncurredButNotYetPaid",
 		},
 	},
-	// Sharadar reports 0 for share-based compensation for banks. Banks
-	// include SBC in their compensation expense (LaborAndRelatedExpense)
-	// and Sharadar does not separate it. Gate on AssetsCurrent to exclude
-	// banks (which don't classify assets as current/non-current).
+	// Sharadar reports 0 for share-based compensation for commercial banks
+	// (JPM, BAC, WFC): they include SBC in LaborAndRelatedExpense and Sharadar
+	// does not separate it. Investment banks (GS, MS) DO report SBC separately
+	// and Sharadar captures it. Gate on AssetsCurrent OR the CustomerAndOther
+	// Payables extension (GS-style investment bank marker) -- the OR semantics
+	// allow resolution for standard companies AND investment banks without
+	// affecting commercial banks.
 	{
 		FieldName: "ShareBasedCompensation", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		RequireIfQuarterly: []string{"AssetsCurrent"},
+		RequireIfQuarterly: []string{"AssetsCurrent", "CustomerAndOtherPayables"},
 		XBRLTags: []string{
 			"ShareBasedCompensation",
 			"AllocatedShareBasedCompensationExpense",
@@ -1146,6 +1149,17 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_bankOtherNoninterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		ExcludeIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags:           []string{"OtherNoninterestExpense"},
+	},
+	// Provision for credit losses as a separate line item, captured ONLY for
+	// GS-style investment banks (identified by the CustomerAndOtherPayables
+	// extension) where Sharadar folds it into "Total operating expenses".
+	// Commercial banks (JPM, BAC) keep provision as a separate line that
+	// Sharadar does NOT bundle into OperatingExpenses. StmtFlow so YTD values
+	// are properly de-cumulated per quarter before Q4 synthesis.
+	{
+		FieldName: "_gsBankProvision", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"ProvisionForLoanLeaseAndOtherLosses"},
 	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",

@@ -840,6 +840,22 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}
 	}
 
+	// GS-style investment banks present "Total operating expenses" as
+	// NoninterestExpense + ProvisionForLoanLeaseAndOtherLosses on the face of
+	// the income statement (unlike commercial banks which keep provision as a
+	// separate line). Sharadar's OperatingExpenses matches this face-of-the-
+	// statement total, so add provision when the _gsBankProvision field was
+	// resolved (gated by the CustomerAndOtherPayables marker). Using the
+	// resolved field rather than re-reading from cf ensures the quarterly
+	// de-cumulated value flows into Q4 synthesis correctly.
+	if isBank {
+		if provision, ok := fields["_gsBankProvision"]; ok {
+			if opex, hasOE := fields["OperatingExpenses"]; hasOE {
+				fields["OperatingExpenses"] = opex + provision
+			}
+		}
+	}
+
 	// For banks, derive OperatingIncome = GrossProfit - OperatingExpenses
 	// when OperatingIncomeLoss isn't available. OperatingExpenses resolves
 	// from NoninterestExpense FallbackTag, and GrossProfit = Revenues.
