@@ -781,10 +781,20 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 			fields["EBIT"] = ni + tax + intExp
 			fields["EBITDA"] = ni + tax + intExp + da
 
-			// Recompute NCI from corrected values
+			// Recompute NCI from corrected values. Use NetIncomeCommonStock
+			// (after preferred) rather than NetIncome: for companies that
+			// report PreferredStockDividendsIncomeStatementImpact (GS), NetIncome
+			// resolves to NetIncomeLoss (before preferred) and would make the
+			// identity ConsolidatedIncome - NetIncome - Preferred double-count
+			// the preferred deduction.
 			if consolidated, hasCons := fields["ConsolidatedIncome"]; hasCons {
+				niCommon, hasNIC := fields["NetIncomeCommonStock"]
+				if !hasNIC {
+					niCommon = ni
+				}
+
 				pref := fields["PreferredDividendsIncomeStatementImpact"]
-				fields["NetIncomeToNonControllingInterests"] = consolidated - ni - pref
+				fields["NetIncomeToNonControllingInterests"] = consolidated - niCommon - pref
 			}
 		}
 	}
