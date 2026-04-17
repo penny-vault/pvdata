@@ -1180,6 +1180,57 @@ var FieldMappings = []FieldMapping{
 		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags:           []string{"ProvisionForLoanLeaseAndOtherLosses"},
 	},
+	// GS-style financing cash flow components. The generic _bankLTDebtProceeds
+	// /Repayments use ProceedsFromIssuanceOfLongTermDebt (JPM) but GS files
+	// both secured and unsecured tranches as separate tags. GS also reports
+	// short-term debt changes as net-proceeds extension concepts rather than
+	// the standard ProceedsFromShortTermDebt. Each sub-field is gated by the
+	// CustomerAndOtherPayables marker; StmtFlow ensures quarterly de-cumulation.
+	{
+		FieldName: "_gsUnsecuredDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"ProceedsFromIssuanceOfUnsecuredDebt"},
+	},
+	{
+		FieldName: "_gsUnsecuredDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"RepaymentsOfUnsecuredDebt"},
+	},
+	{
+		FieldName: "_gsSecuredDebtProceeds", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"ProceedsFromIssuanceOfSecuredDebt"},
+	},
+	{
+		FieldName: "_gsSecuredDebtRepayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"RepaymentsOfSecuredDebt"},
+	},
+	// GS extension concepts for short-term borrowings changes (net). Captured
+	// by parseXBRLInstanceExtensions from the inline XBRL filings. Negate
+	// because these concepts are defined with a debit balance orientation
+	// (repayments-positive) in GS's taxonomy, so the stored value is opposite
+	// the cash-flow direction: GS files val=3,243 sign="-" for a net borrowing
+	// inflow of +3,243.
+	{
+		FieldName: "_gsUnsecuredSTDebtNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		Negate:             true,
+		XBRLTags:           []string{"ProceedsFromRepaymentsOfUnsecuredShortTermDebt"},
+	},
+	{
+		FieldName: "_gsOtherSecuredSTDebtNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		Negate:             true,
+		XBRLTags:           []string{"ProceedsFromRepaymentsOfOtherSecuredShortTermDebt"},
+	},
+	// Derivative contracts with a financing element (net). GS classifies these
+	// within financing cash flow alongside debt issuances/repayments.
+	{
+		FieldName: "_gsDerivativeFinancing", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"PaymentsForProceedsFromDerivativeInstrumentFinancingActivities"},
+	},
 	{
 		FieldName: "NetCashFlowDividend", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		Negate: true,

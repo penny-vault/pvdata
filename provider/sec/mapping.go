@@ -806,14 +806,43 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	// mapped as StmtFlow in FieldMappings so YTD cumulative values are
 	// properly de-cumulated before reaching this point.
 	if isBank {
-		bankDebtFields := []struct {
+		// GS-style banks file their financing cash flows as separate unsecured/
+		// secured tranches plus extension short-term-net concepts, rather than
+		// the standard ProceedsFromIssuanceOfLongTermDebt + FedFundsChange tags
+		// that commercial banks (JPM) use. Detect via CustomerAndOtherPayables.
+		_, isGSStyle := cf.Facts["CustomerAndOtherPayables"]
+
+		var bankDebtFields []struct {
 			name string
 			sign float64
-		}{
-			{"_bankFedFundsChange", 1},
-			{"_bankLTDebtProceeds", 1},
-			{"_bankLTDebtRepayments", -1},
-			{"_bankSTDebtProceeds", 1},
+		}
+
+		if isGSStyle {
+			// NB: PaymentsForProceedsFromDerivativeInstrumentFinancingActivities
+			// is presented in GS's financing section but Sharadar classifies
+			// it as "other financing" rather than debt, so it is NOT added
+			// here.
+			bankDebtFields = []struct {
+				name string
+				sign float64
+			}{
+				{"_gsUnsecuredDebtProceeds", 1},
+				{"_gsUnsecuredDebtRepayments", -1},
+				{"_gsSecuredDebtProceeds", 1},
+				{"_gsSecuredDebtRepayments", -1},
+				{"_gsUnsecuredSTDebtNet", 1},
+				{"_gsOtherSecuredSTDebtNet", 1},
+			}
+		} else {
+			bankDebtFields = []struct {
+				name string
+				sign float64
+			}{
+				{"_bankFedFundsChange", 1},
+				{"_bankLTDebtProceeds", 1},
+				{"_bankLTDebtRepayments", -1},
+				{"_bankSTDebtProceeds", 1},
+			}
 		}
 
 		ncfDebt := 0.0
@@ -972,6 +1001,16 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 
 			if found {
 				fields["TotalDebt"] = total
+
+				// Recompute fields that depend on TotalDebt:
+				// InvestedCapital = TotalDebt + TotalAssets - Intangibles - Cash - CurrentLiabilities
+				// (banks have CurrentLiabilities = 0).
+				if ta, hasTA := fields["TotalAssets"]; hasTA {
+					intang := fields["Intangibles"]
+					cash := fields["CashAndEquivalents"]
+					curLiab := fields["CurrentLiabilities"]
+					fields["InvestedCapital"] = total + ta - intang - cash - curLiab
+				}
 			}
 		}
 	}

@@ -690,7 +690,7 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 			// fact covers the same period.
 			isGapFill := isStdNS && !isShareConcept
 
-			var contextRef, unitRef string
+			var contextRef, unitRef, signAttr string
 
 			for _, attr := range se.Attr {
 				switch attr.Name.Local {
@@ -698,6 +698,8 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 					contextRef = attr.Value
 				case "unitRef":
 					unitRef = attr.Value
+				case "sign":
+					signAttr = attr.Value
 				}
 			}
 
@@ -733,6 +735,14 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 			val, err := strconv.ParseFloat(content, 64)
 			if err != nil {
 				continue
+			}
+
+			// Inline XBRL sign="-" means the displayed value is the negation
+			// of the reported amount (e.g. GS tags a repayment as sign="-"
+			// on a credit-balance concept so the presented figure matches
+			// the cash outflow direction on the statement).
+			if signAttr == "-" {
+				val = -val
 			}
 
 			rawFacts = append(rawFacts, rawFact{
