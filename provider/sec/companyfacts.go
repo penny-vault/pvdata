@@ -559,6 +559,27 @@ func hasFactForPeriodAndForm(cf *CompanyFacts, conceptName string, end time.Time
 	return false
 }
 
+// hasFactForPeriodStartAndForm returns true if CompanyFacts already contains a
+// fact matching the concept, period end, period start, and form type. Use this
+// instead of hasFactForPeriodAndForm when distinguishing between facts that
+// share the same end date but differ in duration (e.g. the Q3 10-Q reports
+// both a single-quarter 90-day WAS fact and a 273-day YTD WAS fact — both end
+// 2024-09-30 but have different starts).
+func hasFactForPeriodStartAndForm(cf *CompanyFacts, conceptName string, end, start time.Time, formType string) bool {
+	facts, ok := cf.Facts[conceptName]
+	if !ok || len(facts) == 0 {
+		return false
+	}
+
+	for i := range facts {
+		if facts[i].End.Equal(end) && facts[i].Start.Equal(start) && facts[i].Form == formType {
+			return true
+		}
+	}
+
+	return false
+}
+
 // parseXBRLInstanceExtensions parses an XBRL instance XML document and
 // extracts extension facts (concepts not in us-gaap or dei namespaces).
 // It also captures us-gaap share/EPS concepts from dimensional contexts
@@ -803,7 +824,13 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 				continue
 			}
 
-			if hasFactForPeriodAndForm(cf, "WeightedAverageNumberOfDilutedSharesOutstanding", pk.end, formType) {
+			// Guard on (end, start, form) not just (end, form). BRK's Q3 10-Q
+			// reports both a single-quarter (90-day) and a YTD (273-day)
+			// WAS_basic per-class; we synthesize two distinct Diluted facts
+			// for the same end date but different durations. The longer YTD
+			// cumulative is required by Q4 period-average synthesis for
+			// day-weighted math; dropping it causes Q4 to diverge by ~0.19%.
+			if hasFactForPeriodStartAndForm(cf, "WeightedAverageNumberOfDilutedSharesOutstanding", pk.end, pk.start, formType) {
 				continue
 			}
 
