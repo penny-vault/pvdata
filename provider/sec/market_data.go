@@ -211,8 +211,20 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 				f.PE1 = math.Round(f.Price/f.EPS*1000) / 1000
 			}
 
+			// PS1 = Price / SalesPerShare. For single-class filers this uses
+			// the weighted-average share count. For dual-class filers (BRK/B),
+			// WeightedAverageShares was overridden to SharesBasic (the raw
+			// per-class count) earlier, while Price is the traded-class
+			// price; the naive Price × WAS / Revenues then underreports by
+			// share_factor. Scale by ShareFactor so PS1 matches Sharadar's
+			// (which uses WAS × share_factor = B-equivalent WAS implicitly).
 			if f.Revenues != 0 && f.WeightedAverageShares != 0 {
-				f.PS1 = math.Round(f.Price/(float64(f.Revenues)/float64(f.WeightedAverageShares))*1000) / 1000
+				scaledWAS := float64(f.WeightedAverageShares)
+				if f.ShareFactor > 1.1 {
+					scaledWAS *= f.ShareFactor
+				}
+
+				f.PS1 = math.Round(f.Price/(float64(f.Revenues)/scaledWAS)*1000) / 1000
 			} else if f.SalesPerShare != 0 {
 				f.PS1 = math.Round(f.Price/f.SalesPerShare*1000) / 1000
 			}
