@@ -793,4 +793,11 @@ func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 	fields["CostOfRevenue"] = costOfRevenue
 	fields["GrossProfit"] = grossProfit
 	fields["OperatingExpenses"] = opEx
+
+	// Recompute GrossMargin from the corrected GrossProfit/Revenues.
+	// ResolveAllFields computed it earlier using GrossProfit=Revenues
+	// (CostOfRevenue defaulted to 0 via OptionalOperands), yielding 1.0.
+	if revenue != 0 {
+		fields["GrossMargin"] = math.Round(grossProfit/revenue*1000) / 1000
+	}
 }
