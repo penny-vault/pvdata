@@ -966,6 +966,16 @@ var _ = Describe("Mapping Engine", func() {
 	})
 
 	Describe("OverrideDPSFromCash", func() {
+		// Synthetic CompanyFacts that includes PaymentsOfDividendsCommonStock
+		// (MSFT-style cash-dividend reporter) so the override always runs.
+		msftCashCF := &CompanyFacts{
+			Facts: map[string][]Fact{
+				"PaymentsOfDividendsCommonStock": {
+					{Form: "10-Q", End: time.Now().AddDate(0, -3, 0), Val: 5_574_000_000},
+				},
+			},
+		}
+
 		It("computes DPS from cash-paid dividends / shares (MSFT Q1 FY2025)", func() {
 			// MSFT Q1 FY2025: PaymentsOfDividendsCommonStock=5,574M, WA shares=7,433M
 			// Cash-paid DPS = 5574/7433 = 0.7497... → rounds to 0.75
@@ -974,7 +984,7 @@ var _ = Describe("Mapping Engine", func() {
 				"WeightedAverageShares":        7_433_000_000,
 				"DividendsPerBasicCommonShare": 0.83, // declared tag (wrong for cash-paid)
 			}
-			OverrideDPSFromCash(fields)
+			OverrideDPSFromCash(msftCashCF, fields, false, time.Time{})
 			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.75))
 		})
 
@@ -985,7 +995,7 @@ var _ = Describe("Mapping Engine", func() {
 				"WeightedAverageShares":        15_081_724_000,
 				"DividendsPerBasicCommonShare": 0.25,
 			}
-			OverrideDPSFromCash(fields)
+			OverrideDPSFromCash(&CompanyFacts{}, fields, false, time.Time{})
 			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.25))
 		})
 
@@ -995,7 +1005,7 @@ var _ = Describe("Mapping Engine", func() {
 				"WeightedAverageShares":        0,
 				"DividendsPerBasicCommonShare": 0.83,
 			}
-			OverrideDPSFromCash(fields)
+			OverrideDPSFromCash(msftCashCF, fields, false, time.Time{})
 			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.83))
 		})
 	})

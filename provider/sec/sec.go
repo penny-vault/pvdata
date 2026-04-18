@@ -823,8 +823,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// synthesized Q4). This must happen after de-cumulation and Q4 synthesis
 	// so _absDividendsPaid is the correct single-quarter cash amount.
 	for i := range quarters {
-		OverrideDPSFromCash(quarters[i].arEmit)
-		OverrideDPSFromCash(quarters[i].mrEmit)
+		OverrideDPSFromCash(cf, quarters[i].arEmit, false, quarters[i].period.PeriodEnd)
+		OverrideDPSFromCash(cf, quarters[i].mrEmit, true, quarters[i].period.PeriodEnd)
 	}
 
 	// Override SharesBasic in mrEmit for MR dimensions. Sharadar's MR
@@ -958,9 +958,12 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		a.arEmit = copyFieldMap(a.arFields)
 		a.mrEmit = copyFieldMap(a.mrFields)
 
-		// Override DPS with cash-paid methodology for annual data.
-		OverrideDPSFromCash(a.arEmit)
-		OverrideDPSFromCash(a.mrEmit)
+		// Override DPS with cash-paid methodology for annual data. The annual
+		// period ends on the fiscal year-end date (Q4); LLY-style filers
+		// disclose the FY declared total only on the 10-K (no 10-Q fact at
+		// that date), so AR keeps the declared value while MR uses cash-paid.
+		OverrideDPSFromCash(cf, a.arEmit, false, a.period.PeriodEnd)
+		OverrideDPSFromCash(cf, a.mrEmit, true, a.period.PeriodEnd)
 
 		// Strip stale fields from MR annual and recompute derived fields.
 		// This matches Sharadar's MR semantics: if a company stops reporting
@@ -1407,7 +1410,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			mrQSlice[j] = quarters[i-3+j].mrEmit
 		}
 
-		if ttm := ComputeTTM(mrQSlice, true); ttm != nil {
+		if ttm := ComputeTTM(mrQSlice, false); ttm != nil {
 			overridePeriodAvg(ttm, matchingMR)
 			bankFixTTMNCI(ttm, matchingMR)
 			overrideFlowsAtFiscalYearEnd(ttm, matchingMR)

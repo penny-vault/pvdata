@@ -256,6 +256,75 @@ func needsDecumulation(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 	return false
 }
 
+// hasNonQuarterlyDPSDeclarationCadence returns true when the company tags
+// CommonStockDividendsPerShareDeclared with non-quarterly cadence — i.e., a
+// non-Q1 10-Q period where the single-period fact equals the YTD fact. LLY
+// declares dividends semi-annually but pays quarterly, so the Q2 single-period
+// declared value (start=Apr-1, val=$3.00) duplicates the YTD H1 value
+// (start=Jan-1, val=$3.00) instead of representing a real Q2-only $1.50
+// declaration. Such filers need cash-paid DPS for Sharadar parity; quarterly
+// declarers (AAPL, MSFT) keep the declared per-share value.
+func hasNonQuarterlyDPSDeclarationCadence(cf *CompanyFacts) bool {
+	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
+	if !ok {
+		return false
+	}
+
+	type periodKey struct {
+		end time.Time
+	}
+
+	type periodFacts struct {
+		single float64
+		ytd    float64
+		hasS   bool
+		hasY   bool
+	}
+
+	groups := make(map[periodKey]*periodFacts)
+
+	for i := range facts {
+		f := &facts[i]
+		if f.Form != "10-Q" || f.End.IsZero() || f.Start.IsZero() {
+			continue
+		}
+
+		// Only consider recent facts (last 3 years) to avoid old anomalies
+		// — e.g. JPM had a single Q2 2018 with single==YTD that doesn't
+		// reflect their current quarterly cadence.
+		if time.Since(f.End) > 3*365*24*time.Hour {
+			continue
+		}
+
+		days := f.End.Sub(f.Start).Hours() / 24
+		key := periodKey{end: f.End}
+
+		pf, ok := groups[key]
+		if !ok {
+			pf = &periodFacts{}
+			groups[key] = pf
+		}
+
+		// Single quarter ≈ 90 days; YTD H1+ ≥ 150 days.
+		switch {
+		case days <= 100:
+			pf.single = f.Val
+			pf.hasS = true
+		case days >= 150:
+			pf.ytd = f.Val
+			pf.hasY = true
+		}
+	}
+
+	for _, pf := range groups {
+		if pf.hasS && pf.hasY && pf.single == pf.ytd && pf.single > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
 // conceptFiledQuarterly returns true if any of the given XBRL concept names
 // has at least one fact filed on a 10-Q form in cf within the last 3 years.
 // This distinguishes balance sheet line items (filed quarterly) from
@@ -444,19 +513,70 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 // OverrideDPSFromCash computes DividendsPerBasicCommonShare from the cash-paid
 // methodology when _absDividendsPaid is present. This matches Sharadar's DPS
 // computation: total cash dividends paid / weighted-average shares, rounded to
-// 2 decimal places. When _absDividendsPaid is absent (e.g. AAPL which uses the
-// broader PaymentsOfDividends tag), the existing declared per-share value is
-// preserved.
-func OverrideDPSFromCash(fields map[string]float64) {
+// 2 decimal places.
+//
+// _absDividendsPaid resolves from PaymentsOfDividendsCommonStock when filed
+// (MSFT, BRK/B, JPM, GS), in which case the override always runs on both AR
+// and MR. When it resolves from the broader PaymentsOfDividends fallback, the
+// override is restricted for non-quarterly declarers (LLY-style):
+//   - MR: always overrides (Sharadar's MR DPS for LLY is cash-paid).
+//   - AR: overrides only for periods where the company filed a 10-Q
+//     CommonStockDividendsPerShareDeclared fact at periodEnd. Sharadar uses
+//     declared values for periods covered by the original 10-K (Q4 fiscal
+//     year-end) and cash-paid for in-fiscal-year quarterly periods where the
+//     XBRL-declared per-share value is unreliable (LLY's Q2 2025 single fact
+//     is tagged equal to the H1 YTD value of $3.00 instead of the actual
+//     $1.50 quarterly payment).
+//   - AAPL (quarterly declarer): override is skipped entirely because
+//     PaymentsOfDividends includes dividend equivalents on RSUs that inflate
+//     cash-paid relative to the declared per-share value Sharadar uses.
+func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool, periodEnd time.Time) {
 	cashPaid, hasCash := fields["_absDividendsPaid"]
 	shares, hasShares := fields["WeightedAverageShares"]
 
-	if hasCash && hasShares && shares > 0 {
-		dps := cashPaid / shares
-		// Round to 2 decimal places.
-		dps = math.Round(dps*100) / 100
-		fields["DividendsPerBasicCommonShare"] = dps
+	if !hasCash || !hasShares || shares <= 0 {
+		return
 	}
+
+	// When the cash-paid value comes from PaymentsOfDividends (no
+	// PaymentsOfDividendsCommonStock filed), gate the override on filer
+	// cadence and dimension/period.
+	if !conceptFiledQuarterly(cf, []string{"PaymentsOfDividendsCommonStock"}) {
+		if !hasNonQuarterlyDPSDeclarationCadence(cf) {
+			return
+		}
+
+		if !isMR && !hasQuarterlyDPSDeclarationAt(cf, periodEnd) {
+			return
+		}
+	}
+
+	dps := cashPaid / shares
+	// Round to 2 decimal places.
+	dps = math.Round(dps*100) / 100
+	fields["DividendsPerBasicCommonShare"] = dps
+}
+
+// hasQuarterlyDPSDeclarationAt returns true when the company filed a 10-Q
+// CommonStockDividendsPerShareDeclared fact (any duration) at the given
+// periodEnd. For LLY this distinguishes Q1/Q2/Q3 dates (covered by 10-Q
+// filings) from Q4 fiscal year-end (covered only by the 10-K). Sharadar uses
+// XBRL-declared values for fiscal year-end and cash-paid for in-year quarters
+// when the company declares dividends on a non-quarterly cadence.
+func hasQuarterlyDPSDeclarationAt(cf *CompanyFacts, periodEnd time.Time) bool {
+	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
+	if !ok {
+		return false
+	}
+
+	for i := range facts {
+		f := &facts[i]
+		if f.Form == "10-Q" && f.End.Equal(periodEnd) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // resolveSharesBasicAsOf returns the shares outstanding value from the most

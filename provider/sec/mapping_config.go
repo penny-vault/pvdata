@@ -991,12 +991,19 @@ var FieldMappings = []FieldMapping{
 	},
 	// Internal: absolute cash dividends paid to common stockholders. Used to
 	// compute cash-paid DPS (= _absDividendsPaid / WeightedAverageShares) post
-	// de-cumulation, overriding the declared per-share tag. Only the specific
-	// common-stock tag is used; AAPL uses the broader PaymentsOfDividends which
-	// gives a different per-share figure, so it falls back to the declared tag.
+	// de-cumulation. The PaymentsOfDividends fallback covers filers (AAPL, LLY)
+	// that don't file the common-only variant. AAPL's PaymentsOfDividends
+	// includes dividend equivalents on RSUs (cash-paid runs slightly above
+	// declared per share); the cash-paid override is gated in
+	// OverrideDPSFromCash on the company exhibiting non-quarterly declaration
+	// cadence so AAPL keeps the declared value while LLY (which declares
+	// semi-annually) drops to the cash-paid value.
 	{
 		FieldName: "_absDividendsPaid", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"PaymentsOfDividendsCommonStock"},
+		XBRLTags: []string{
+			"PaymentsOfDividendsCommonStock",
+			"PaymentsOfDividends",
+		},
 	},
 
 	// ==================== SHARE COUNTS ====================
