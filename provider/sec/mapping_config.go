@@ -1290,7 +1290,6 @@ var FieldMappings = []FieldMapping{
 		RequireIfQuarterly: []string{"AssetsCurrent", "CustomerAndOtherPayables"},
 		XBRLTags: []string{
 			"ShareBasedCompensation",
-			"AllocatedShareBasedCompensationExpense",
 		},
 	},
 	{
