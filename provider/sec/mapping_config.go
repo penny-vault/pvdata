@@ -194,8 +194,17 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_equityMethodInvestments", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent"},
-		XBRLTags:           []string{"EquityMethodInvestments"},
+		// Also exclude when InvestmentsInAffiliatesSubsidiariesAssociatesAndJointVentures
+		// is filed (CALM): the two tags represent overlapping equity-method /
+		// JV holdings and the latter is already summed into InvestmentsNonCurrent
+		// above. Counting both double-counts at the annual/Q4 row where
+		// EquityMethodInvestments (annual-only for CALM) appears.
+		ExcludeIfQuarterly: []string{
+			"ShortTermInvestments",
+			"MarketableSecuritiesCurrent",
+			"InvestmentsInAffiliatesSubsidiariesAssociatesAndJointVentures",
+		},
+		XBRLTags: []string{"EquityMethodInvestments"},
 	},
 	{
 		FieldName: "_debtSecurities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
