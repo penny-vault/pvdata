@@ -161,10 +161,24 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "InvestmentsNonCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		// Banks (Deposits) and investment banks / broker-dealers
+		// (CustomerAndOtherPayables) report investment portfolios under
+		// broker-dealer-specific tags that Sharadar does not classify as
+		// non-current investments (investments_non_current = 0 for these
+		// filers). Gating here avoids pulling e.g. GS's
+		// InvestmentsInAffiliatesSubsidiariesAssociatesAndJointVentures
+		// (~140B) into investments_non_current.
+		ExcludeIfQuarterly: []string{
+			"Deposits", "DepositsDomestic", "DepositsTotal",
+			"CustomerAndOtherPayables",
+		},
 		XBRLTags: []string{
 			"LongTermInvestments",
 			"MarketableSecuritiesNoncurrent",
 			"AvailableForSaleSecuritiesDebtSecuritiesNoncurrent",
+			// CALM reports non-current investments under this tag (joint-
+			// venture/affiliate holdings) rather than the LongTerm* tags.
+			"InvestmentsInAffiliatesSubsidiariesAssociatesAndJointVentures",
 		},
 	},
 	// Insurance/conglomerate investment sub-fields. These companies (BRK/B)
@@ -185,7 +199,11 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_debtSecurities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent"},
+		// Also exclude when AvailableForSaleSecuritiesDebtSecuritiesCurrent is
+		// filed (CALM pattern): the generic tag and its -Current sibling report
+		// the same value (no non-current AFS debt), so counting both once via
+		// InvestmentsCurrent and again via _debtSecurities doubles the total.
+		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent"},
 		XBRLTags:           []string{"AvailableForSaleSecuritiesDebtSecurities"},
 	},
 	{
