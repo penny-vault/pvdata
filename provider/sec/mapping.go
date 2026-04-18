@@ -84,13 +84,15 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 				if formType == "10-K" && days < 300 {
 					continue // Skip quarterly data in an annual filing
 				}
-			} else if m.StatementType == StmtFlow && formType == "10-K" {
-				// Skip instant-style facts (zero start) for flow concepts on
-				// a 10-K. UNH tags CommonStockDividendsPerShareCashPaid at the
-				// dividend declaration date (e.g. end=2024-12-17, start=zero,
-				// val=$2.10 for the quarterly payment), which normalizes to
-				// 2024-12-31 and would be preferred over the valid full-year
-				// duration fact (val=$8.18).
+			} else if m.StatementType == StmtFlow {
+				// Instant-style facts (zero Start) aren't meaningful for flow
+				// concepts. UNH tags PaymentsOfDividendsCommonStock and
+				// CommonStockDividendsPerShareCashPaid with the dividend
+				// declaration date as End and no Start (e.g. end=2025-06-24
+				// val=2,000,000,000 for the Q2 2025 dividend payment, or
+				// end=2024-12-17 val=$2.10 per share). These normalize to the
+				// quarter end and would compete with — and sometimes beat —
+				// the valid YTD/single-quarter duration facts.
 				continue
 			}
 
@@ -428,16 +430,13 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		}
 	}
 
-	// Health insurers (UNH) report claims reserves under
-	// LiabilityForClaimsAndClaimsAdjustmentExpense. Sharadar includes this in
-	// payables alongside the standard accounts-payable line. Detect via
-	// PolicyholderBenefitsAndClaimsIncurredNet (the matching income-statement
-	// concept); BRK-style insurance conglomerates don't file this pair and
-	// aren't affected. CoR is handled via _insuranceBenefitsIncurred in the
-	// CostOfRevenue Derived mapping; Payables is patched here because the
-	// baseline Payables Direct resolution depends on an unrelated mechanism
-	// (dimensional segment synthesis) that currently produces the expected
-	// value for BRK, and converting Payables to Derived would break that.
+	// Health insurers (UNH, detected via PolicyholderBenefitsAndClaimsIncurredNet):
+	//   - Payables gets LiabilityForClaimsAndClaimsAdjustmentExpense added
+	//     (medical claims reserve — Sharadar rolls this into payables).
+	//   - Inventory is zeroed out (UNH files $3.8B for OptumRx pharmacy
+	//     inventory but Sharadar reports 0 for managed-care filers).
+	// BRK-style insurance conglomerates don't file PolicyholderBenefitsAndClaimsIncurredNet
+	// so this gate leaves them alone.
 	if conceptFiledQuarterly(cf, []string{"PolicyholderBenefitsAndClaimsIncurredNet"}) {
 		if v, ok := ResolveDirect(cf, FieldMapping{
 			XBRLTags:      []string{"LiabilityForClaimsAndClaimsAdjustmentExpense"},
@@ -445,6 +444,8 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		}, periodEnd, formType); ok {
 			resolved["Payables"] += v
 		}
+
+		delete(resolved, "Inventory")
 	}
 
 	return resolved
