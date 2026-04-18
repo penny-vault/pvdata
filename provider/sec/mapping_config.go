@@ -1102,7 +1102,7 @@ var FieldMappings = []FieldMapping{
 	// CapitalExpenditure reduces to -_capexGross for them.
 	{
 		FieldName: "_proceedsPPESale", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"ProceedsFromSaleOfPropertyPlantAndEquipment"},
+		XBRLTags: []string{"ProceedsFromSaleOfPropertyPlantAndEquipment"},
 	},
 	// CapitalExpenditure = -(gross capex - proceeds from PP&E sale). Net of
 	// proceeds so disposals reduce capex outflow. Sharadar matches this
@@ -1136,9 +1136,9 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"PaymentsToAcquireBusinessesNetOfCashAcquired",
 			"PaymentsToAcquireBusinessesGross",
-			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets",   // MSFT extension
-			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",              // broker-dealers (GS) combining acquisitions and affiliate interests
-			"OtherPaymentsToAcquireBusinesses",                                      // LLY uses this tag for their primary acquisition spend
+			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets", // MSFT extension
+			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",            // broker-dealers (GS) combining acquisitions and affiliate interests
+			"OtherPaymentsToAcquireBusinesses",                                    // LLY uses this tag for their primary acquisition spend
 		},
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---
