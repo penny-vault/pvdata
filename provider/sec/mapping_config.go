@@ -1573,6 +1573,9 @@ var FieldMappings = []FieldMapping{
 			// BRK/B extension: combined T-bill + AFS debt sales
 			"ProceedsFromSaleOfUSTreasuryBillsAndAvailableForSaleSecuritiesDebt",
 			"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
+			// CALM combines sales + maturities of AFS securities into a
+			// single tag rather than splitting them.
+			"ProceedsFromSaleAndMaturityOfAvailableForSaleSecurities",
 		},
 	},
 	// MSFT extension: additional investment proceeds not captured by
