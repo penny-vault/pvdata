@@ -350,6 +350,13 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_intangiblesExGoodwill", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		// RequireQuarterly: ensure the company breaks out non-goodwill
+		// intangibles as its own balance-sheet line (filed on 10-Q). AMZN
+		// discloses intangibles only in 10-K footnotes — the number is not
+		// on the face of the balance sheet, so Sharadar excludes it from
+		// intangibles. Filers that report it on 10-Q (MSFT, NVDA, LLY)
+		// continue to include it.
+		RequireQuarterly:   true,
 		ExcludeIfQuarterly: []string{"CustomerAndOtherPayables"},
 		XBRLTags: []string{
 			"IntangibleAssetsNetExcludingGoodwill",
@@ -491,10 +498,20 @@ var FieldMappings = []FieldMapping{
 		RequireIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags:           []string{"OperatingLeaseLiabilityNoncurrent"},
 	},
+	// Finance lease liabilities: Sharadar includes non-current finance lease
+	// liabilities in debt_non_current for filers (AMZN) that break them out
+	// as a separate balance sheet line. MSFT doesn't file this tag so
+	// OptionalOperands leaves it at 0 there.
+	{
+		FieldName: "_financeLeaseLiabilityNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"AssetsCurrent"},
+		XBRLTags:           []string{"FinanceLeaseLiabilityNoncurrent"},
+	},
 	{
 		FieldName: "DebtNonCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		Op:               OpAdd,
-		Operands:         []string{"_longTermDebtNoncurrent", "_operatingLeaseLiabilityNoncurrent"},
+		Operands:         []string{"_longTermDebtNoncurrent", "_operatingLeaseLiabilityNoncurrent", "_financeLeaseLiabilityNoncurrent"},
 		OptionalOperands: true,
 	},
 	// --- Bank-specific debt sub-fields ---
@@ -1236,6 +1253,11 @@ var FieldMappings = []FieldMapping{
 		FieldName: "NetCashFlowBusiness", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		Negate: true,
 		XBRLTags: []string{
+			// AMZN only files the combined businesses + nonmarketable
+			// securities extension on the 10-K. Put it first so the FY
+			// value wins; 10-Qs (which don't file it) fall through to the
+			// standard us-gaap tag.
+			"PaymentsToAcquireBusinessesNetOfCashAcquiredAndPaymentsToAcquireNonmarketableSecuritiesAndOther",
 			"PaymentsToAcquireBusinessesNetOfCashAcquired",
 			"PaymentsToAcquireBusinessesGross",
 			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets", // MSFT extension
