@@ -807,15 +807,11 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 			}
 
 			if multiClassShareCountConcepts[rf.conceptName] {
-				if !contextHasClassAMember(ctx) && !contextHasClassBMember(ctx) {
-					continue
-				}
-
-				// Capture raw per-class cover counts for the market-ratio
-				// share_factor formula. Only un-equivalized us-gaap:
-				// CommonClassA/BMember contexts carry raw counts — brka:
-				// EquivalentClassA/BMember variants are aggregated totals
-				// expressed in B-unit terms (A*1500+B) and must be skipped.
+				// Detect equivalent (aggregated) contexts vs. raw per-class
+				// contexts. Equivalent members (e.g. brka:EquivalentClassA/
+				// BMember) are aggregated totals expressed in one class's
+				// unit scale (A*1500+B for BRK); skip them so we never sum
+				// aggregated+raw per-class values for the same filing.
 				isEquivalent := false
 				classLabel := ""
 
@@ -836,7 +832,17 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 					}
 				}
 
-				if !isEquivalent && classLabel != "" {
+				if isEquivalent {
+					continue
+				}
+
+				// Capture ClassA/ClassB raw per-class counts for the
+				// market-ratio share_factor formula. Non-A/B dimensional
+				// contexts (e.g. CALM's regular CommonStockMember alongside
+				// a minor CommonClassAMember) still fall through to the
+				// cf.Facts append below so resolveSharesBasicAsOf sums all
+				// per-class raw counts from the same filing.
+				if classLabel != "" {
 					cf.ClassShares = append(cf.ClassShares, ClassSharesFact{
 						Filed:   filed,
 						End:     ctx.end,
