@@ -831,6 +831,8 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"SellingAndMarketingExpense",
 			"SellingExpense",
+			// AMZN files sales-and-marketing under the bare MarketingExpense tag.
+			"MarketingExpense",
 		},
 	},
 	// SGA = GeneralAndAdministrativeExpense + SellingAndMarketingExpense.
@@ -849,9 +851,13 @@ var FieldMappings = []FieldMapping{
 		// LLY (and other pharma) report ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
 		// to break out acquired in-process R&D charges as a separate income-statement line.
 		// Sharadar's r_and_d_expenses uses the ex-IPRD value for these filers.
+		// AMZN reports its technology spend under the amzn:TechnologyAndInfrastructureExpense
+		// extension tag rather than a us-gaap R&D concept; Sharadar maps it into
+		// r_and_d_expenses.
 		XBRLTags: []string{
 			"ResearchAndDevelopmentExpense",
 			"ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+			"TechnologyAndInfrastructureExpense",
 		},
 	},
 	// CostsAndExpenses is total income statement costs. Used to derive
@@ -1312,15 +1318,53 @@ var FieldMappings = []FieldMapping{
 			"ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess",
 		},
 	},
+	// Gross short-term debt proceeds/repayments: AMZN reports ST debt as
+	// separate inflow and outflow tags rather than the net tag captured by
+	// _netShortTermDebt. Both are optional operands of NetCashFlowDebt so
+	// filers using either presentation resolve correctly.
+	{
+		FieldName: "_proceedsShortTermDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromShortTermDebt"},
+	},
+	{
+		FieldName: "_repaymentsShortTermDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"RepaymentsOfShortTermDebt"},
+	},
+	// Finance lease principal payments: Sharadar treats these as debt
+	// repayments in NCFDEBT for filers (AMZN) that report them as a
+	// separate cash-flow line item. MSFT also files this tag but Sharadar
+	// excludes it from their NCFDEBT (MSFT reports it as a supplemental
+	// disclosure rather than a financing-activities line). Gate on
+	// ProceedsFromShortTermDebt: AMZN files gross ST debt proceeds on the
+	// financing section alongside the finance lease payment; MSFT does not
+	// file ProceedsFromShortTermDebt.
+	{
+		FieldName: "_financeLeasePrincipalPayments", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"ProceedsFromShortTermDebt"},
+		XBRLTags:           []string{"FinanceLeasePrincipalPayments"},
+	},
+	// Financing obligation repayments: AMZN files an extension tag for
+	// repayments on long-term financing obligations (sale-leaseback style).
+	// Sharadar includes these in NCFDEBT.
+	{
+		FieldName: "_repaymentsFinancingObligations", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"RepaymentsOfLongTermFinancingObligations"},
+	},
 	// NetCashFlowDebt = proceeds - repayments - financedAssets + netShortTermDebt
+	// + proceedsShortTermDebt - repaymentsShortTermDebt - financeLeasePrincipal
+	// - repaymentsFinancingObligations
 	// (Sharadar NCFDEBT: "net cash inflow (outflow) from issuance (repayment) of
 	// debt securities"). The financedAssets component captures extension-tag
 	// payments on financed PP&E (e.g. NVDA).
 	{
 		FieldName: "NetCashFlowDebt", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:               OpLinearCombination,
-		Operands:         []string{"_proceedsDebt", "_repaymentsDebt", "_repaymentsFinancedAssets", "_netShortTermDebt"},
-		Coefficients:     []float64{1, -1, -1, 1},
+		Op: OpLinearCombination,
+		Operands: []string{
+			"_proceedsDebt", "_repaymentsDebt", "_repaymentsFinancedAssets", "_netShortTermDebt",
+			"_proceedsShortTermDebt", "_repaymentsShortTermDebt",
+			"_financeLeasePrincipalPayments", "_repaymentsFinancingObligations",
+		},
+		Coefficients:     []float64{1, -1, -1, 1, 1, -1, -1, -1},
 		OptionalOperands: true,
 	},
 	// --- Bank-specific NCFDEBT sub-fields ---
@@ -1444,6 +1488,11 @@ var FieldMappings = []FieldMapping{
 			// BRK/B extension: bundles T-bill + AFS debt purchases. Must come
 			// before the standard AFS-only tag so the combined value is used.
 			"PaymentsToAcquireUSTreasuryBillsAndAvailableForSaleSecuritiesDebt",
+			// AMZN files both MarketableSecurities (comprehensive) and the
+			// AFS-debt-only tag; the comprehensive MarketableSecurities value
+			// must win so AMZN's full purchases flow into NCFINV. AAPL files
+			// only the AFS-debt tag, which still resolves via the next entry.
+			"PaymentsToAcquireMarketableSecurities",
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
 		},
 	},
