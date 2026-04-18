@@ -1610,6 +1610,11 @@ var FieldMappings = []FieldMapping{
 		FieldName: "NetCashFlow", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
+			// Excluding-FX variant used by domestic-only filers (e.g. CALM)
+			// that never report an exchange-rate effect. When both exist, the
+			// Including variant above wins by list order, so FX-exposed filers
+			// are unaffected.
+			"CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseExcludingExchangeRateEffect",
 			"CashAndCashEquivalentsPeriodIncreaseDecrease",
 			"CashPeriodIncreaseDecrease",
 		},
