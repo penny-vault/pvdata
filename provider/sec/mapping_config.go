@@ -605,12 +605,30 @@ var FieldMappings = []FieldMapping{
 		Op:           OpSubtract,
 		Operands:     []string{"TotalLiabilities", "CurrentLiabilities"},
 	},
+	// MinorityInterest: NCI portion of stockholders' equity. Used as a subtrahend
+	// when only the including-NCI equity tag is filed (UNH files
+	// StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest but
+	// not StockholdersEquity; Sharadar's equity is the parent-only portion).
 	{
-		FieldName: "Equity", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{
-			"StockholdersEquity",
-			"StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-		},
+		FieldName: "_minorityInterest", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"MinorityInterest"},
+	},
+	// _equityIncludingNCI: the full stockholders' equity including NCI. Used
+	// as the fallback operand when the bare StockholdersEquity tag is absent.
+	{
+		FieldName: "_equityIncludingNCI", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"},
+	},
+	// Equity: prefer the parent-only StockholdersEquity tag. Otherwise derive
+	// as StockholdersEquityIncludingNCI − MinorityInterest so that filers like
+	// UNH which only file the including-NCI variant still match Sharadar's
+	// parent-only equity.
+	{
+		FieldName: "Equity", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{"StockholdersEquity"},
+		Op:           OpLinearCombination,
+		Operands:     []string{"_equityIncludingNCI", "_minorityInterest"},
+		Coefficients: []float64{1, -1},
 	},
 	{
 		FieldName: "AccumulatedOtherComprehensiveIncome", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -716,14 +734,38 @@ var FieldMappings = []FieldMapping{
 		},
 		XBRLTags: []string{"OtherExpenses"},
 	},
+	// _cogsRaw: standard cost-of-goods-sold path. Direct, so ResolveDirect picks
+	// the first matching XBRL tag.
 	{
-		FieldName: "CostOfRevenue", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_cogsRaw", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"CostOfGoodsAndServicesSold",
 			"CostOfGoodsSold",
 			"CostOfRevenue",
 			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
 		},
+	},
+	// _insuranceBenefitsIncurred: health insurers (UNH) report medical costs
+	// under PolicyholderBenefitsAndClaimsIncurredNet. Sharadar includes this
+	// in cost_of_revenue alongside any separately-tagged CoGS. BRK-style
+	// insurance conglomerates don't file this tag (their insurance costs are
+	// rolled into CostsAndExpenses).
+	{
+		FieldName: "_insuranceBenefitsIncurred", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"PolicyholderBenefitsAndClaimsIncurredNet",
+		},
+	},
+	// CostOfRevenue: sum of CoGS + insurance benefits incurred. For standard
+	// filers only _cogsRaw resolves. Because CostOfRevenue is now Derived with
+	// an empty FallbackTags, the synthesis Q4 path will use the formula sum of
+	// (already de-cumulated) operands rather than a YTD cumulative value from
+	// a single XBRL tag that misses the insurance component.
+	{
+		FieldName: "CostOfRevenue", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		Op:               OpAdd,
+		Operands:         []string{"_cogsRaw", "_insuranceBenefitsIncurred"},
+		OptionalOperands: true,
 	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or

@@ -84,6 +84,14 @@ func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formTy
 				if formType == "10-K" && days < 300 {
 					continue // Skip quarterly data in an annual filing
 				}
+			} else if m.StatementType == StmtFlow && formType == "10-K" {
+				// Skip instant-style facts (zero start) for flow concepts on
+				// a 10-K. UNH tags CommonStockDividendsPerShareCashPaid at the
+				// dividend declaration date (e.g. end=2024-12-17, start=zero,
+				// val=$2.10 for the quarterly payment), which normalizes to
+				// 2024-12-31 and would be preferred over the valid full-year
+				// duration fact (val=$8.18).
+				continue
 			}
 
 			// Prefer single-quarter facts over YTD cumulative regardless of
@@ -417,6 +425,25 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 			if val, ok := computeDerived(m, resolved); ok {
 				resolved[m.FieldName] = val
 			}
+		}
+	}
+
+	// Health insurers (UNH) report claims reserves under
+	// LiabilityForClaimsAndClaimsAdjustmentExpense. Sharadar includes this in
+	// payables alongside the standard accounts-payable line. Detect via
+	// PolicyholderBenefitsAndClaimsIncurredNet (the matching income-statement
+	// concept); BRK-style insurance conglomerates don't file this pair and
+	// aren't affected. CoR is handled via _insuranceBenefitsIncurred in the
+	// CostOfRevenue Derived mapping; Payables is patched here because the
+	// baseline Payables Direct resolution depends on an unrelated mechanism
+	// (dimensional segment synthesis) that currently produces the expected
+	// value for BRK, and converting Payables to Derived would break that.
+	if conceptFiledQuarterly(cf, []string{"PolicyholderBenefitsAndClaimsIncurredNet"}) {
+		if v, ok := ResolveDirect(cf, FieldMapping{
+			XBRLTags:      []string{"LiabilityForClaimsAndClaimsAdjustmentExpense"},
+			StatementType: StmtPointInTime,
+		}, periodEnd, formType); ok {
+			resolved["Payables"] += v
 		}
 	}
 
