@@ -723,6 +723,7 @@ var _ = Describe("Dimensions", func() {
 				"_repaymentsShortTermDebt":             true,
 				"_financeLeasePrincipalPayments":       true,
 				"_repaymentsFinancingObligations":      true,
+				"_financeLeaseLiabilityNoncurrent":     true,
 				"_interestExpenseNonoperatingFallback": true,
 				"_operatingIncomeFromFormula":          true,
 				"_operatingIncomeEbtFallback":          true,

@@ -479,13 +479,53 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 		}
 	}
 
+	// byName: field name → mapping, used to walk operand trees for derived fields.
+	byName := make(map[string]*FieldMapping, len(FieldMappings))
+	for i := range FieldMappings {
+		byName[FieldMappings[i].FieldName] = &FieldMappings[i]
+	}
+
+	// collectLeafTags walks a derived field's operand tree and collects every
+	// underlying us-gaap/extension XBRL tag (its own XBRLTags/FallbackTags plus
+	// the operands' tags recursively). This lets staleness check derived
+	// fields against the full operand taxonomy, not just the field's own
+	// FallbackTags. For example, DeferredRevenue's FallbackTag
+	// "DeferredRevenue" may be stale, but the formula still resolves via
+	// ContractWithCustomerLiabilityCurrent (an operand's tag) which remains
+	// active — so the field is NOT stale.
+	var collectLeafTags func(name string, visited map[string]bool) []string
+
+	collectLeafTags = func(name string, visited map[string]bool) []string {
+		if visited[name] {
+			return nil
+		}
+
+		visited[name] = true
+
+		fm, ok := byName[name]
+		if !ok {
+			return nil
+		}
+
+		tags := append([]string(nil), fm.XBRLTags...)
+		tags = append(tags, fm.FallbackTags...)
+
+		for _, op := range fm.Operands {
+			tags = append(tags, collectLeafTags(op, visited)...)
+		}
+
+		return tags
+	}
+
 	// Map stale concepts (existed before but not in latest 10-K) to field names.
 	staleFields := make(map[string]bool)
 
 	for _, m := range FieldMappings {
-		tags := m.XBRLTags
+		var tags []string
 		if m.Type == MappingDerived {
-			tags = m.FallbackTags
+			tags = collectLeafTags(m.FieldName, map[string]bool{})
+		} else {
+			tags = m.XBRLTags
 		}
 
 		allTagsStale := true

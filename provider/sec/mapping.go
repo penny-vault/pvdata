@@ -455,7 +455,88 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		}
 	}
 
+	applyAmazonPattern(cf, resolved, periodEnd, formType)
+
 	return resolved
+}
+
+// applyAmazonPattern rewrites DebtCurrent, DeferredRevenue, and TotalDebt
+// when the filer presents current debt embedded in accrued expenses rather
+// than as a separate balance-sheet line. Sharadar detects this presentation
+// via the balance-sheet identity:
+//
+//	AccountsPayable + AccruedLiabilitiesCurrent + ContractWithCustomerLiabilityCurrent ≈ LiabilitiesCurrent
+//
+// When the identity holds (AMZN), Sharadar reports debt_current = 0, total_debt
+// = debt_non_current, and deferred_revenue = ContractWithCustomerLiabilityCurrent
+// (treating the current contract liability as its own balance-sheet line rather
+// than a sub-component of accrued). When the identity does NOT hold (NVDA
+// presents current debt separately and rolls contract liability into accrued),
+// leave the resolved values alone.
+func applyAmazonPattern(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
+	// Both sentinel concepts must be filed quarterly; otherwise this is not
+	// a filer whose balance sheet has accrued-liabilities AND contract
+	// liability lines.
+	if !conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"}) ||
+		!conceptFiledQuarterly(cf, []string{"ContractWithCustomerLiabilityCurrent"}) {
+		return
+	}
+
+	liabCurrent, ok := resolveInstantValue(cf, "LiabilitiesCurrent", periodEnd, formType)
+	if !ok || liabCurrent == 0 {
+		return
+	}
+
+	ap, _ := resolveInstantValue(cf, "AccountsPayableCurrent", periodEnd, formType)
+	accrued, _ := resolveInstantValue(cf, "AccruedLiabilitiesCurrent", periodEnd, formType)
+	contract, hasContract := resolveInstantValue(cf, "ContractWithCustomerLiabilityCurrent", periodEnd, formType)
+
+	if !hasContract || contract == 0 {
+		return
+	}
+
+	// Balance-sheet identity check: the three lines must sum to essentially
+	// all of LiabilitiesCurrent (within 0.1%). When the identity holds, any
+	// current debt (ShortTermBorrowings, LongTermDebtCurrent) is embedded
+	// inside AccruedLiabilitiesCurrent rather than presented separately.
+	// AMZN matches at 0%; NVDA sits around 1% because contract liability is
+	// inside accrued (and current debt is the separate line), so a tight
+	// tolerance keeps them distinct.
+	sumExplicit := ap + accrued + contract
+	if math.Abs(sumExplicit-liabCurrent)/liabCurrent > 0.001 {
+		return
+	}
+
+	// Zero out current debt; total_debt collapses to debt_non_current.
+	// InvestedCapital uses TotalDebt as an operand so recompute it.
+	oldTotalDebt := resolved["TotalDebt"]
+
+	if _, ok := resolved["DebtCurrent"]; ok {
+		resolved["DebtCurrent"] = 0
+	}
+
+	if dnc, ok := resolved["DebtNonCurrent"]; ok {
+		resolved["TotalDebt"] = dnc
+	}
+
+	if ic, ok := resolved["InvestedCapital"]; ok {
+		resolved["InvestedCapital"] = ic + (resolved["TotalDebt"] - oldTotalDebt)
+	}
+
+	// DeferredRevenue: the current contract liability is a separate line, so
+	// Sharadar reports it even though AccruedLiabilitiesCurrent is also filed.
+	// Non-current contract liability is rolled into OtherLiabilitiesNoncurrent
+	// and excluded — current only.
+	resolved["DeferredRevenue"] = contract
+}
+
+// resolveInstantValue returns the best-matching instant (balance-sheet) value
+// for a us-gaap concept at the given period end and form type.
+func resolveInstantValue(cf *CompanyFacts, concept string, periodEnd time.Time, formType string) (float64, bool) {
+	return ResolveDirect(cf, FieldMapping{
+		XBRLTags:      []string{concept},
+		StatementType: StmtPointInTime,
+	}, periodEnd, formType)
 }
 
 // computeDerived evaluates a derived field's formula using already-resolved values.
