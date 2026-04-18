@@ -430,11 +430,9 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		}
 	}
 
-	// Health insurers (UNH, detected via PolicyholderBenefitsAndClaimsIncurredNet):
-	//   - Payables gets LiabilityForClaimsAndClaimsAdjustmentExpense added
-	//     (medical claims reserve — Sharadar rolls this into payables).
-	//   - Inventory is zeroed out (UNH files $3.8B for OptumRx pharmacy
-	//     inventory but Sharadar reports 0 for managed-care filers).
+	// Health insurers (UNH, detected via PolicyholderBenefitsAndClaimsIncurredNet)
+	// report medical claims reserves under LiabilityForClaimsAndClaimsAdjustmentExpense,
+	// which Sharadar includes in payables alongside standard accounts payable.
 	// BRK-style insurance conglomerates don't file PolicyholderBenefitsAndClaimsIncurredNet
 	// so this gate leaves them alone.
 	if conceptFiledQuarterly(cf, []string{"PolicyholderBenefitsAndClaimsIncurredNet"}) {
@@ -444,8 +442,6 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		}, periodEnd, formType); ok {
 			resolved["Payables"] += v
 		}
-
-		delete(resolved, "Inventory")
 	}
 
 	return resolved
