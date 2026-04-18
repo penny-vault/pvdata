@@ -233,6 +233,7 @@ var FieldMappings = []FieldMapping{
 		FieldName: "NonTradeReceivables", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"NontradeReceivablesCurrent",
+			"OtherReceivablesNetCurrent", // LLY-style (separate "other receivables" line)
 		},
 	},
 	// Insurance/conglomerate receivables sub-fields. FallbackRequireIfQuarterly
@@ -365,25 +366,32 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},
 		OptionalOperands: true,
 	},
-	// TaxAssets: try prepaid/receivable taxes first (FallbackTags on the
-	// derived wrapper). If none resolve, fall through to _deferredTaxAssets
-	// which is gated by RequireQuarterly — only companies that present
-	// deferred tax assets on 10-Q (NVDA) get the value; companies that
-	// only disclose in 10-K notes (AAPL) keep TaxAssets=0.
+	// TaxAssets: prefer DeferredIncomeTaxAssetsNet (Sharadar's "deferred tax
+	// assets") when filed quarterly. _deferredTaxAssets uses RequireQuarterly
+	// so AAPL — which only discloses deferred tax assets in 10-K notes — keeps
+	// TaxAssets=0 for MR/AR dimensions instead of leaking the annual value
+	// across quarters. _prepaidTaxAssets is the secondary path for filers that
+	// disclose income-tax receivables/prepayments instead of deferred tax
+	// assets; ExcludeIfQuarterly on DeferredIncomeTaxAssetsNet keeps these
+	// from double-counting for filers (LLY) that report both.
 	{
 		FieldName: "_deferredTaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		RequireQuarterly: true,
 		XBRLTags:         []string{"DeferredIncomeTaxAssetsNet"},
 	},
 	{
-		FieldName: "TaxAssets", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags: []string{
+		FieldName: "_prepaidTaxAssets", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"DeferredIncomeTaxAssetsNet"},
+		XBRLTags: []string{
 			"IncomeTaxesReceivable",
 			"IncomeTaxReceivable",
 			"PrepaidTaxes",
 		},
+	},
+	{
+		FieldName: "TaxAssets", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		Op:               OpAdd,
-		Operands:         []string{"_deferredTaxAssets"},
+		Operands:         []string{"_deferredTaxAssets", "_prepaidTaxAssets"},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for TaxLiabilities derivation ---
@@ -569,12 +577,24 @@ var FieldMappings = []FieldMapping{
 		OptionalOperands: true,
 	},
 	{
-		FieldName: "TotalLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"Liabilities"},
-	},
-	{
 		FieldName: "CurrentLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{"LiabilitiesCurrent"},
+	},
+	// _liabilitiesNoncurrentRaw is the direct LiabilitiesNoncurrent tag. Used both
+	// for TotalLiabilities synthesis (when the company doesn't file the consolidated
+	// Liabilities tag, e.g. LLY) and as the fallback for LiabilitiesNonCurrent.
+	{
+		FieldName: "_liabilitiesNoncurrentRaw", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"LiabilitiesNoncurrent"},
+	},
+	// TotalLiabilities: prefer the consolidated Liabilities tag; otherwise sum
+	// CurrentLiabilities + LiabilitiesNoncurrent. LLY-style filers report only the
+	// current/noncurrent components without the consolidated total.
+	{
+		FieldName: "TotalLiabilities", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags: []string{"Liabilities"},
+		Op:           OpAdd,
+		Operands:     []string{"CurrentLiabilities", "_liabilitiesNoncurrentRaw"},
 	},
 	{
 		FieldName: "LiabilitiesNonCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
@@ -740,7 +760,13 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "RandDExpenses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"ResearchAndDevelopmentExpense"},
+		// LLY (and other pharma) report ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
+		// to break out acquired in-process R&D charges as a separate income-statement line.
+		// Sharadar's r_and_d_expenses uses the ex-IPRD value for these filers.
+		XBRLTags: []string{
+			"ResearchAndDevelopmentExpense",
+			"ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+		},
 	},
 	// CostsAndExpenses is total income statement costs. Used to derive
 	// OperatingIncome for companies without an explicit OperatingIncomeLoss
@@ -749,17 +775,28 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_costsAndExpenses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"CostsAndExpenses"},
 	},
+	// _interestExpenseNonoperatingFallback: only used when the company files
+	// OperatingIncomeLoss. Sharadar's interestexp is the operating-line interest
+	// component; for filers that don't have an OperatingIncomeLoss subtotal
+	// (LLY, AAPL post-FY2023), interest is wholly nonoperating and Sharadar
+	// reports 0. MSFT files OperatingIncomeLoss and switched to publishing only
+	// InterestExpenseNonoperating starting FY2025 — this fallback keeps the
+	// MSFT 10-Q value resolving while LLY/AAPL drop to 0.
+	{
+		FieldName: "_interestExpenseNonoperatingFallback", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"Deposits"},
+		RequireIfQuarterly: []string{"OperatingIncomeLoss"},
+		XBRLTags:           []string{"InterestExpenseNonoperating"},
+	},
 	// InterestExpense: must come before OperatingIncome since the derived
 	// OperatingIncome formula uses it as an operand.
 	{
-		FieldName: "InterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "InterestExpense", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		// Do NOT add InterestIncomeExpenseNet here: it is a signed net value
 		// (positive when net expense, negative when net income) and feeds
 		// directly into EBIT = NetIncome + IncomeTaxExpense + InterestExpense.
 		// For cash-rich companies with interest income > expense, using the
 		// net value would incorrectly subtract from EBIT.
-		// InterestExpenseNonoperating is used by MSFT on 10-Q filings where
-		// the generic InterestExpense tag is only filed on 10-K.
 		//
 		// ExcludeIfQuarterly on Deposits: banks (JPM) file the generic
 		// InterestExpense tag for some quarters but not others, and for banks
@@ -768,24 +805,72 @@ var FieldMappings = []FieldMapping{
 		// but one quarter has 24B). Gating on Deposits (a bank-specific
 		// liability) excludes real banks while allowing insurance
 		// conglomerates like BRK/B that also lack AssetsCurrent.
+		//
+		// RequireIfQuarterly on OperatingIncomeLoss / CostsAndExpenses:
+		// pharma-style filers (LLY) present an income statement without an
+		// operating-income subtotal AND without a CostsAndExpenses aggregate.
+		// Sharadar reports interestexp = 0 for such filers (interest is wholly
+		// nonoperating). Gating here prevents stray InterestExpense facts (e.g.
+		// LLY filed it once for Q1 2024) from leaking into ART/MRT windows.
+		//
+		// FallbackTags resolve directly when the company files InterestExpense
+		// or InterestExpenseDebt. Otherwise the formula adds the Nonoperating
+		// sub-field, which is itself gated on OperatingIncomeLoss so that
+		// pharma-style filers without an operating-income line (LLY) don't
+		// pull a phantom interest_expense that Sharadar treats as 0.
 		ExcludeIfQuarterly: []string{"Deposits"},
-		XBRLTags: []string{
+		RequireIfQuarterly: []string{"OperatingIncomeLoss", "CostsAndExpenses"},
+		FallbackTags: []string{
 			"InterestExpense",
 			"InterestExpenseDebt",
-			"InterestExpenseNonoperating",
 		},
+		Op:               OpAdd,
+		Operands:         []string{"_interestExpenseNonoperatingFallback"},
+		OptionalOperands: true,
 	},
-	// OperatingIncome: use the direct OperatingIncomeLoss tag when available.
-	// For companies without it (non-standard income statements), derive as
-	// Revenues - CostsAndExpenses + InterestExpense. This gives income from
-	// all operations (including investment gains for insurance companies)
-	// before interest and taxes — matching Sharadar's operating income definition.
+	// _operatingIncomeFromFormula: BRK-style insurance/conglomerate path.
+	// Computes Revenues - CostsAndExpenses + InterestExpense to capture
+	// investment gains in the operating-income line. Only resolves when
+	// CostsAndExpenses is filed (gated implicitly by OpLinearCombination
+	// requiring all operands; the gate on CostsAndExpenses also keeps this
+	// from competing with the EBT fallback below).
 	{
-		FieldName: "OperatingIncome", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		FallbackTags: []string{"OperatingIncomeLoss"},
+		FieldName: "_operatingIncomeFromFormula", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:           OpLinearCombination,
 		Operands:     []string{"Revenues", "_costsAndExpenses", "InterestExpense"},
 		Coefficients: []float64{1, -1, 1},
+	},
+	// _operatingIncomeEbtFallback: pharma-style filers (LLY) that do not
+	// publish an OperatingIncomeLoss subtotal AND do not file CostsAndExpenses.
+	// Their income statement runs straight from Revenue through individual
+	// expense lines to "Income before income taxes". Sharadar uses that EBT
+	// value as opinc since for these filers interest expense is treated as 0
+	// (see _interestExpenseNonoperatingFallback) and other-net is netted in.
+	// ExcludeIfQuarterly gates ensure this only fires when neither
+	// OperatingIncomeLoss nor CostsAndExpenses is available — and not for
+	// banks (which use the GrossProfit - OperatingExpenses recompute path
+	// in overrideNCFDebtResidual after this resolver runs).
+	{
+		FieldName: "_operatingIncomeEbtFallback", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"CostsAndExpenses", "OperatingIncomeLoss",
+			"Deposits", "DepositsDomestic", "DepositsTotal",
+			"CustomerAndOtherPayables", // broker-dealers (GS)
+		},
+		XBRLTags: []string{
+			"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+			"IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+		},
+	},
+	// OperatingIncome: use the direct OperatingIncomeLoss tag when available.
+	// Otherwise sum the two mutually-exclusive sub-fields above — only one
+	// will resolve per company depending on income-statement structure.
+	{
+		FieldName: "OperatingIncome", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		FallbackTags:     []string{"OperatingIncomeLoss"},
+		Op:               OpAdd,
+		Operands:         []string{"_operatingIncomeFromFormula", "_operatingIncomeEbtFallback"},
+		OptionalOperands: true,
 	},
 	// OperatingExpenses: use the direct tag if available; otherwise derive
 	// from GrossProfit − OperatingIncome. Sharadar defines OpEx as SGA +
@@ -1003,6 +1088,9 @@ var FieldMappings = []FieldMapping{
 			"PaymentsToAcquirePropertyPlantAndEquipment",
 			"PaymentsToAcquireProductiveAssets",
 			"CapitalExpendituresIncurredButNotYetPaid",
+			// LLY tags PP&E capex as PaymentsToAcquireOtherPropertyPlantAndEquipment
+			// (with Other in the name even though it is the company's primary capex line).
+			"PaymentsToAcquireOtherPropertyPlantAndEquipment",
 		},
 	},
 	// Proceeds from disposing of PP&E are netted against gross capex for
@@ -1047,6 +1135,7 @@ var FieldMappings = []FieldMapping{
 			"PaymentsToAcquireBusinessesGross",
 			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets",   // MSFT extension
 			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",              // broker-dealers (GS) combining acquisitions and affiliate interests
+			"OtherPaymentsToAcquireBusinesses",                                      // LLY uses this tag for their primary acquisition spend
 		},
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---
@@ -1259,6 +1348,16 @@ var FieldMappings = []FieldMapping{
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
 		},
 	},
+	// LLY-style filers separate investment purchases by horizon: short-term
+	// + other (long-term). Both contribute to NetCashFlowInvest.
+	{
+		FieldName: "_paymentsInvestShortTerm", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsToAcquireShortTermInvestments"},
+	},
+	{
+		FieldName: "_paymentsInvestOther", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsToAcquireOtherInvestments"},
+	},
 	// NVDA reports equity security purchases/sales separately from debt
 	// securities. Sharadar includes both in NetCashFlowInvest.
 	{
@@ -1296,6 +1395,15 @@ var FieldMappings = []FieldMapping{
 			"ProceedsFromInvestments",
 		},
 	},
+	// LLY-style filers report combined sale+maturity per investment horizon.
+	{
+		FieldName: "_proceedsInvestShortTerm", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromSaleOfShortTermInvestments"},
+	},
+	{
+		FieldName: "_proceedsInvestSaleAndMaturityOther", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromSaleAndMaturityOfOtherInvestments"},
+	},
 	{
 		FieldName: "_proceedsInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
@@ -1309,9 +1417,14 @@ var FieldMappings = []FieldMapping{
 	// "net cash inflow (outflow) associated with acquisition & disposal of investments")
 	{
 		FieldName: "NetCashFlowInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:               OpLinearCombination,
-		Operands:         []string{"_paymentsInvest", "_proceedsInvest", "_paymentsInvestEquity", "_proceedsInvestEquity"},
-		Coefficients:     []float64{-1, 1, -1, 1},
+		Op: OpLinearCombination,
+		Operands: []string{
+			"_paymentsInvest", "_proceedsInvest",
+			"_paymentsInvestEquity", "_proceedsInvestEquity",
+			"_paymentsInvestShortTerm", "_proceedsInvestShortTerm",
+			"_paymentsInvestOther", "_proceedsInvestSaleAndMaturityOther",
+		},
+		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	{
