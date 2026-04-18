@@ -725,6 +725,7 @@ var _ = Describe("Dimensions", func() {
 				"_repaymentsFinancingObligations":      true,
 				"_financeLeaseLiabilityNoncurrent":     true,
 				"_interestExpenseNonoperatingFallback": true,
+				"_interestIncomeExpenseNetFallback":    true,
 				"_operatingIncomeFromFormula":          true,
 				"_operatingIncomeEbtFallback":          true,
 				"_cogsRaw":                             true,

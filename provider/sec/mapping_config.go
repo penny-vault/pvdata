@@ -915,6 +915,28 @@ var FieldMappings = []FieldMapping{
 		RequireIfQuarterly: []string{"OperatingIncomeLoss"},
 		XBRLTags:           []string{"InterestExpenseNonoperating"},
 	},
+	// _interestIncomeExpenseNetFallback: CALM-style filers that report only
+	// InterestIncomeExpenseNet (positive = net expense, negative = net income)
+	// and never file InterestExpense/InterestExpenseNonoperating. Sharadar
+	// treats the signed net value as interest_expense for such filers (a
+	// cash-rich filer with interest income > expense shows negative
+	// interest_expense, which subtracts from EBIT correctly since the net
+	// income already includes that interest income).
+	//
+	// Gated to avoid interfering with filers that have dedicated InterestExpense
+	// facts: ExcludeIfQuarterly on InterestExpense/InterestExpenseNonoperating
+	// so only filers lacking both tags use this net fallback.
+	{
+		FieldName: "_interestIncomeExpenseNetFallback", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"Deposits",
+			"InterestExpense",
+			"InterestExpenseDebt",
+			"InterestExpenseNonoperating",
+		},
+		RequireIfQuarterly: []string{"OperatingIncomeLoss"},
+		XBRLTags:           []string{"InterestIncomeExpenseNet"},
+	},
 	// InterestExpense: must come before OperatingIncome since the derived
 	// OperatingIncome formula uses it as an operand.
 	{
@@ -951,8 +973,12 @@ var FieldMappings = []FieldMapping{
 			"InterestExpense",
 			"InterestExpenseDebt",
 		},
-		Op:               OpAdd,
-		Operands:         []string{"_interestExpenseNonoperatingFallback"},
+		Op: OpLinearCombination,
+		Operands: []string{
+			"_interestExpenseNonoperatingFallback",
+			"_interestIncomeExpenseNetFallback",
+		},
+		Coefficients:     []float64{1, -1},
 		OptionalOperands: true,
 	},
 	// _operatingIncomeFromFormula: BRK-style insurance/conglomerate path.
