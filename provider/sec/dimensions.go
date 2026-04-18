@@ -208,8 +208,17 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 
 			if annual, hasAnnual := dedupedPeriods[annualKey]; hasAnnual {
 				// Case 1: raw PeriodEnd far from the normalized quarter end.
+				// Only applies when the 10-K's raw PeriodEnd is itself close
+				// to the normalized date (December-fiscal-year filers). For
+				// non-December filers (e.g. CALM, May FYE), the 10-K's raw
+				// PeriodEnd sits far from its normalized year-end, and a
+				// 10-Q at the same normalized date with raw end far from
+				// normalized is a legitimate fiscal Q2/Q3 — not a spurious
+				// transaction-date collision.
 				dist := absDuration(p.PeriodEnd.Sub(normalEnd))
-				if dist.Hours()/24 > 10 {
+				annualRawDist := absDuration(annual.PeriodEnd.Sub(normalEnd))
+
+				if dist.Hours()/24 > 10 && annualRawDist.Hours()/24 <= 10 {
 					continue
 				}
 
