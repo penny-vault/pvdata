@@ -295,7 +295,14 @@ var FieldMappings = []FieldMapping{
 		// ExcludeIfQuarterly on CustomerAndOtherPayables: GS-style investment
 		// banks bundle PP&E into "Other assets" (see _goodwill for rationale).
 		ExcludeIfQuarterly: []string{"CustomerAndOtherPayables"},
-		XBRLTags:           []string{"PropertyPlantAndEquipmentNet"},
+		XBRLTags: []string{
+			"PropertyPlantAndEquipmentNet",
+			// AMZN files a combined PP&E + finance-lease ROU tag on 10-Q instead
+			// of the base PropertyPlantAndEquipmentNet. OperatingLeaseRightOfUseAsset
+			// is resolved separately and summed in by the PropertyPlantAndEquipmentNet
+			// derivation.
+			"PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+		},
 	},
 	// Operating lease ROU assets are included in PP&E when the company
 	// reports them as a separate balance sheet line (filed on 10-Q).
@@ -583,12 +590,46 @@ var FieldMappings = []FieldMapping{
 		FieldName: "CurrentLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{"LiabilitiesCurrent"},
 	},
-	// _liabilitiesNoncurrentRaw is the direct LiabilitiesNoncurrent tag. Used both
-	// for TotalLiabilities synthesis (when the company doesn't file the consolidated
-	// Liabilities tag, e.g. LLY) and as the fallback for LiabilitiesNonCurrent.
+	// --- Internal sub-fields for _liabilitiesNoncurrentRaw sum fallback ---
+	// AMZN-pattern filers report the individual non-current liability components
+	// on the face of the balance sheet (long-term debt, operating lease liability,
+	// finance lease liability, other liabilities) without filing either the
+	// consolidated us-gaap:Liabilities or us-gaap:LiabilitiesNoncurrent roll-up
+	// tags. These sub-fields feed the fallback sum formula on
+	// _liabilitiesNoncurrentRaw below.
 	{
-		FieldName: "_liabilitiesNoncurrentRaw", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"LiabilitiesNoncurrent"},
+		FieldName: "_ltDebtNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"LongTermDebtNoncurrent"},
+	},
+	{
+		FieldName: "_opLeaseNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"OperatingLeaseLiabilityNoncurrent"},
+	},
+	{
+		FieldName: "_finLeaseNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"FinanceLeaseLiabilityNoncurrent"},
+	},
+	{
+		FieldName: "_otherLiabilitiesNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"OtherLiabilitiesNoncurrent"},
+	},
+	// _liabilitiesNoncurrentRaw resolves from the direct LiabilitiesNoncurrent
+	// tag when available; otherwise falls back to summing the individual
+	// non-current line items. Used both for TotalLiabilities synthesis
+	// (when the company doesn't file the consolidated Liabilities tag, e.g.
+	// LLY, AMZN) and as the fallback for LiabilitiesNonCurrent. Filers that
+	// file the consolidated us-gaap:Liabilities tag (MSFT, AAPL) resolve
+	// TotalLiabilities via that tag and never consult this field's sum.
+	// ContractWithCustomerLiabilityNoncurrent/DeferredRevenueNoncurrent are
+	// intentionally NOT operands here: AMZN-style filers roll the non-current
+	// contract liability into OtherLiabilitiesNoncurrent, so adding it would
+	// double-count.
+	{
+		FieldName: "_liabilitiesNoncurrentRaw", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:     []string{"LiabilitiesNoncurrent"},
+		Op:               OpAdd,
+		Operands:         []string{"_ltDebtNoncurrentForLiab", "_opLeaseNoncurrentForLiab", "_finLeaseNoncurrentForLiab", "_otherLiabilitiesNoncurrentForLiab"},
+		OptionalOperands: true,
 	},
 	// TotalLiabilities: prefer the consolidated Liabilities tag; otherwise sum
 	// CurrentLiabilities + LiabilitiesNoncurrent. LLY-style filers report only the
@@ -1151,7 +1192,13 @@ var FieldMappings = []FieldMapping{
 	// CapitalExpenditure reduces to -_capexGross for them.
 	{
 		FieldName: "_proceedsPPESale", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"ProceedsFromSaleOfPropertyPlantAndEquipment"},
+		XBRLTags: []string{
+			"ProceedsFromSaleOfPropertyPlantAndEquipment",
+			// AMZN files a combined extension covering PP&E sale proceeds
+			// plus vendor incentive reimbursements that reduce capex.
+			// Sharadar nets this against gross capex in the same way.
+			"ProceedsFromPropertyPlantAndEquipmentSalesAndIncentives",
+		},
 	},
 	// CapitalExpenditure = -(gross capex - proceeds from PP&E sale). Net of
 	// proceeds so disposals reduce capex outflow. Sharadar matches this
