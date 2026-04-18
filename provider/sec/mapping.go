@@ -455,25 +455,26 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		}
 	}
 
-	applyAmazonPattern(cf, resolved, periodEnd, formType)
+	overrideForEmbeddedCurrentDebt(cf, resolved, periodEnd, formType)
 
 	return resolved
 }
 
-// applyAmazonPattern rewrites DebtCurrent, DeferredRevenue, and TotalDebt
-// when the filer presents current debt embedded in accrued expenses rather
-// than as a separate balance-sheet line. Sharadar detects this presentation
-// via the balance-sheet identity:
+// overrideForEmbeddedCurrentDebt rewrites DebtCurrent, DeferredRevenue, and
+// TotalDebt when the filer presents current debt embedded in accrued expenses
+// rather than as a separate balance-sheet line. Sharadar detects this
+// presentation via the balance-sheet identity:
 //
 //	AccountsPayable + AccruedLiabilitiesCurrent + ContractWithCustomerLiabilityCurrent ≈ LiabilitiesCurrent
 //
-// When the identity holds (AMZN), Sharadar reports debt_current = 0, total_debt
-// = debt_non_current, and deferred_revenue = ContractWithCustomerLiabilityCurrent
-// (treating the current contract liability as its own balance-sheet line rather
-// than a sub-component of accrued). When the identity does NOT hold (NVDA
-// presents current debt separately and rolls contract liability into accrued),
-// leave the resolved values alone.
-func applyAmazonPattern(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
+// When the identity holds (AMZN pattern), Sharadar reports debt_current = 0,
+// total_debt = debt_non_current, and deferred_revenue =
+// ContractWithCustomerLiabilityCurrent (treating the current contract
+// liability as its own balance-sheet line rather than a sub-component of
+// accrued). When the identity does NOT hold (NVDA pattern: current debt is the
+// separate line and contract liability is rolled into accrued), leave the
+// resolved values alone.
+func overrideForEmbeddedCurrentDebt(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
 	// Both sentinel concepts must be filed quarterly; otherwise this is not
 	// a filer whose balance sheet has accrued-liabilities AND contract
 	// liability lines.
