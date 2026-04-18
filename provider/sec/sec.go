@@ -689,6 +689,81 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		if p.FormType == "10-K" {
+			// Pull StmtPointInTime values that only appear on later 10-Q
+			// comparatives (LLY tags TaxesPayableCurrent at end=2024-12-31
+			// only on Q1/Q2/Q3 2025 10-Q comparative balance sheets, never
+			// on the original 10-K). Merge into mrFields so the synthesized
+			// Q4 quarter's MR view picks up the comparative balance. Filter
+			// to the latest filing date across ALL form types so that 10-Q
+			// comparatives filed after the 10-K are visible (the period's
+			// MRFiledDate is restricted to 10-K filings).
+			latestFiledForPeriod := p.MRFiledDate
+
+			for _, facts := range cf.Facts {
+				for i := range facts {
+					if facts[i].End.Equal(p.PeriodEnd) && facts[i].Filed.After(latestFiledForPeriod) {
+						latestFiledForPeriod = facts[i].Filed
+					}
+				}
+			}
+
+			mrFromQuarterly := ResolveFieldsForFiling(cf, p.PeriodEnd, "10-Q", latestFiledForPeriod)
+			derivedRecompute := false
+
+			for _, m := range FieldMappings {
+				if m.StatementType != StmtPointInTime {
+					continue
+				}
+
+				if _, has := mrFields[m.FieldName]; has {
+					continue
+				}
+
+				v, ok := mrFromQuarterly[m.FieldName]
+				if !ok {
+					continue
+				}
+
+				// Detach from arFields before mutating (mrFields may share the
+				// arFields map when no restatements were observed in the 10-K).
+				if !derivedRecompute {
+					mrFieldsCopy := copyFieldMap(mrFields)
+					mrFields = mrFieldsCopy
+				}
+
+				mrFields[m.FieldName] = v
+				derivedRecompute = true
+			}
+
+			if derivedRecompute {
+				// Only recompute StmtPointInTime Derived fields — the only
+				// kind whose operands can change from the StmtPointInTime
+				// values just merged in. Recomputing StmtFlow Derived (e.g.
+				// D&A) here would overwrite values resolved via FallbackTag
+				// in the original 10-K resolution with operand-sum values.
+				for _, m := range FieldMappings {
+					if m.Type != MappingDerived || m.StatementType != StmtPointInTime {
+						continue
+					}
+
+					// For fields with FallbackTags, only recompute when the
+					// FallbackTag chain did not actually resolve a value
+					// (i.e., the existing value came from the formula too).
+					if len(m.FallbackTags) > 0 {
+						if _, hasInQuarterly := mrFromQuarterly[m.FieldName]; hasInQuarterly {
+							qFormula, qOk := computeDerived(m, mrFromQuarterly)
+							if !qOk || mrFromQuarterly[m.FieldName] != qFormula {
+								continue
+							}
+						}
+					}
+
+					if val, ok := computeDerived(m, mrFields); ok {
+						mrFields[m.FieldName] = val
+					}
+				}
+			}
+
 			annuals = append(annuals, quarterData{period: p, arFields: arFields, mrFields: mrFields})
 		}
 	}
