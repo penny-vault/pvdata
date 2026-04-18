@@ -175,24 +175,20 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			// for Q2/Q3 cumulatives but not Q1 because no acquisitions were
 			// closed in Q1). The annual filing still has the full-year total,
 			// so Q4 = annual - sum(preceding present) yields the correct
-			// remainder. anyFound guards against synthesizing when none of
-			// the preceding quarters reported the field — in that case the
-			// annual would be assigned wholesale to Q4, which would double-
-			// count if the annual covers the whole year of activity.
+			// remainder. When no preceding quarter reported the field at all
+			// (e.g. CALM files ShareBasedCompensation only on its 10-K), the
+			// full annual value is attributed to Q4 — Sharadar treats this
+			// as Q1–Q3 = 0 with the lumpy annual landing in Q4.
 			sum := 0.0
-			anyFound := false
 
 			for _, q := range preceding {
 				emit := emitFn(q, m.FieldName)
 				if v, ok := emit[m.FieldName]; ok {
 					sum += v
-					anyFound = true
 				}
 			}
 
-			if anyFound {
-				result[m.FieldName] = annualVal - sum
-			}
+			result[m.FieldName] = annualVal - sum
 
 		case m.StatementType == StmtPointInTime:
 			if v, ok := annual[m.FieldName]; ok {
