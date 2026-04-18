@@ -170,9 +170,20 @@ func ResolveLongestDuration(cf *CompanyFacts, m FieldMapping, periodEnd time.Tim
 				continue
 			}
 
+			days := f.End.Sub(f.Start).Hours() / 24
 			if formType == "10-K" {
-				days := f.End.Sub(f.Start).Hours() / 24
 				if days < 300 {
+					continue
+				}
+			} else {
+				// 10-Q cumulative values span the fiscal YTD (<= ~274 days at
+				// Q3 for a calendar fiscal year). AMZN files a trailing
+				// 12-month (365-day) fact at Q3 alongside the 3-month and
+				// YTD facts — that TTM value would be picked as "longest"
+				// and then used as the "cumulative Q3" for Q4 synthesis,
+				// producing wildly wrong Q4 values. Cap at 300 days to
+				// exclude TTM while still accepting YTD durations.
+				if days > 300 {
 					continue
 				}
 			}
