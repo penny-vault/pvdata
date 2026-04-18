@@ -409,7 +409,10 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "_accruedIncomeTaxesCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		RequireQuarterly: true,
-		XBRLTags:         []string{"AccruedIncomeTaxesCurrent"},
+		XBRLTags: []string{
+			"AccruedIncomeTaxesCurrent",
+			"TaxesPayableCurrent", // LLY-style "Income taxes payable" line
+		},
 	},
 	{
 		FieldName: "_accruedIncomeTaxesNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
