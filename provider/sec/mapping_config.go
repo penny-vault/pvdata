@@ -1292,9 +1292,9 @@ var FieldMappings = []FieldMapping{
 			"ShareBasedCompensation",
 		},
 	},
+	// --- Internal sub-fields for NetCashFlowBusiness derivation ---
 	{
-		FieldName: "NetCashFlowBusiness", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		Negate: true,
+		FieldName: "_paymentsBusinessAcquire", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			// AMZN only files the combined businesses + nonmarketable
 			// securities extension on the 10-K. Put it first so the FY
@@ -1307,6 +1307,35 @@ var FieldMappings = []FieldMapping{
 			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",            // broker-dealers (GS) combining acquisitions and affiliate interests
 			"OtherPaymentsToAcquireBusinesses",                                    // LLY uses this tag for their primary acquisition spend
 		},
+	},
+	// CALM-style joint-venture / equity-method investments included by Sharadar
+	// in NCF_business. _paymentsJVAcquire is a cash outflow (like acquisitions);
+	// _proceedsJVDivest and _proceedsEquityMethodReturn are inflows.
+	{
+		FieldName: "_paymentsJVAcquire", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"PaymentsToAcquireInterestInJointVenture"},
+	},
+	{
+		FieldName: "_proceedsJVDivest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"ProceedsFromDivestitureOfInterestInJointVenture"},
+	},
+	{
+		FieldName: "_proceedsEquityMethodReturn", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"ProceedsFromEquityMethodInvestmentDividendsOrDistributionsReturnOfCapital"},
+	},
+	// NetCashFlowBusiness = -acquisitions - jv_payments + divestitures + equity_method_returns.
+	// Inflows (divestitures, returns) are positive; outflows are negative.
+	{
+		FieldName: "NetCashFlowBusiness", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
+		Op:       OpLinearCombination,
+		Operands: []string{
+			"_paymentsBusinessAcquire",
+			"_paymentsJVAcquire",
+			"_proceedsJVDivest",
+			"_proceedsEquityMethodReturn",
+		},
+		Coefficients:     []float64{-1, -1, 1, 1},
+		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---
 	{
