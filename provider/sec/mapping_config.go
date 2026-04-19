@@ -485,6 +485,14 @@ var FieldMappings = []FieldMapping{
 		RequireQuarterly: true,
 		XBRLTags:         []string{"AccruedIncomeTaxesNoncurrent"},
 	},
+	// MCD separates sales, property, and other non-income taxes as a standalone
+	// current-liabilities line (~$224-247M for 2024-2025). Sharadar rolls that
+	// into tax_liabilities alongside income and deferred tax balances.
+	{
+		FieldName: "_otherTaxesPayableCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		XBRLTags:         []string{"AccrualForTaxesOtherThanIncomeTaxesCurrent"},
+	},
 	{
 		FieldName: "TaxLiabilities", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		// When AccruedLiabilitiesCurrent is filed on 10-Q, the company bundles
@@ -496,7 +504,7 @@ var FieldMappings = []FieldMapping{
 		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
 		FallbackTags:       []string{"IncomeTaxesPrincipallyDeferred"},
 		Op:                 OpAdd,
-		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent"},
+		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent", "_otherTaxesPayableCurrent"},
 		OptionalOperands:   true,
 	},
 	// Debt sub-components are gated on AssetsCurrent: companies that classify

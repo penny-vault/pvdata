@@ -706,6 +706,7 @@ var _ = Describe("Dimensions", func() {
 				"_deferredTaxLiabilities":              true,
 				"_accruedIncomeTaxesCurrent":           true,
 				"_accruedIncomeTaxesNoncurrent":        true,
+				"_otherTaxesPayableCurrent":            true,
 				"_longTermDebtNoncurrent":              true,
 				"_operatingLeaseLiabilityNoncurrent":   true,
 				"_operatingLeaseLiabilityCurrent":      true,
