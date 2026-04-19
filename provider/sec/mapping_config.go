@@ -1256,12 +1256,19 @@ var FieldMappings = []FieldMapping{
 	// DepreciationDepletionAndAmortization); otherwise sum components.
 	// MSFT reports Depreciation, AmortizationOfIntangibleAssets, and
 	// FinanceLeaseRightOfUseAssetAmortization separately.
+	//
+	// DepreciationAndAmortization is tried first because some filers (MCD)
+	// file DepreciationDepletionAndAmortization as a partial sub-measure
+	// while DepreciationAndAmortization holds the full cash-flow-statement
+	// total. Filers that only file DepreciationDepletionAndAmortization
+	// (AAPL, AMZN, NVDA, LLY, BRK/B) still resolve correctly via the
+	// fallthrough because DepreciationAndAmortization is absent for them.
 	{
 		FieldName: "DepreciationAmortizationAndAccretion", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
+			"DepreciationAndAmortization",
 			"DepreciationDepletionAndAmortization",
 			"DepreciationAmortizationAndAccretionNet",
-			"DepreciationAndAmortization",
 			"DepreciationAmortizationAndOther", // MSFT extension tag for cash flow D&A line
 		},
 		Op:               OpAdd,
