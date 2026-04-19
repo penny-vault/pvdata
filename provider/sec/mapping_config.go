@@ -1448,7 +1448,39 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsEquityMethodReturn", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"ProceedsFromEquityMethodInvestmentDividendsOrDistributionsReturnOfCapital"},
 	},
-	// NetCashFlowBusiness = -acquisitions - jv_payments + divestitures + equity_method_returns.
+	// MCD-style filers that don't tag PaymentsToAcquireBusinesses* at all
+	// report their franchisee / real-estate acquisitions under the
+	// "other productive assets" pair instead. Sharadar folds that pair into
+	// NCF_business for those filers (FY2024: 311 - 669 = -358M). Gate with
+	// ExcludeIfQuarterly on the standard business-acquisition tags so
+	// filers that report both (e.g. LLY, which tags
+	// PaymentsToAcquireBusinesses*) don't pick these up and double-count.
+	{
+		FieldName: "_paymentsOtherProductiveAssets", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsToAcquireOtherProductiveAssets"},
+		ExcludeIfQuarterly: []string{
+			"PaymentsToAcquireBusinessesNetOfCashAcquiredAndPaymentsToAcquireNonmarketableSecuritiesAndOther",
+			"PaymentsToAcquireBusinessesNetOfCashAcquired",
+			"PaymentsToAcquireBusinessesGross",
+			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets",
+			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",
+			"OtherPaymentsToAcquireBusinesses",
+		},
+	},
+	{
+		FieldName: "_proceedsOtherProductiveAssets", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromSaleOfOtherProductiveAssets"},
+		ExcludeIfQuarterly: []string{
+			"PaymentsToAcquireBusinessesNetOfCashAcquiredAndPaymentsToAcquireNonmarketableSecuritiesAndOther",
+			"PaymentsToAcquireBusinessesNetOfCashAcquired",
+			"PaymentsToAcquireBusinessesGross",
+			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets",
+			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",
+			"OtherPaymentsToAcquireBusinesses",
+		},
+	},
+	// NetCashFlowBusiness = -acquisitions - jv_payments + divestitures + equity_method_returns
+	// + (-other_productive_asset_payments + other_productive_asset_proceeds) for MCD-style filers.
 	// Inflows (divestitures, returns) are positive; outflows are negative.
 	{
 		FieldName: "NetCashFlowBusiness", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
@@ -1458,8 +1490,10 @@ var FieldMappings = []FieldMapping{
 			"_paymentsJVAcquire",
 			"_proceedsJVDivest",
 			"_proceedsEquityMethodReturn",
+			"_paymentsOtherProductiveAssets",
+			"_proceedsOtherProductiveAssets",
 		},
-		Coefficients:     []float64{-1, -1, 1, 1},
+		Coefficients:     []float64{-1, -1, 1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---

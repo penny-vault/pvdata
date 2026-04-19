@@ -735,6 +735,8 @@ var _ = Describe("Dimensions", func() {
 				"_paymentsJVAcquire":                       true,
 				"_proceedsJVDivest":                        true,
 				"_proceedsEquityMethodReturn":              true,
+				"_paymentsOtherProductiveAssets":           true,
+				"_proceedsOtherProductiveAssets":           true,
 				"_operatingIncomeFromFormula":              true,
 				"_operatingIncomeEbtFallback":              true,
 				"_cogsRaw":                                 true,
