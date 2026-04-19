@@ -1917,6 +1917,13 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsInvestEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"ProceedsFromSaleOfEquityMethodInvestments"},
 	},
+	// Lease receivables: restaurant/franchise filers that sub-lease real estate
+	// (e.g. TXRH selling subleases) report the proceeds under this tag.
+	// Sharadar classifies it under investing cash flow.
+	{
+		FieldName: "_proceedsInvestLeaseReceivables", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromSaleOfLeaseReceivables"},
+	},
 	{
 		FieldName: "_proceedsInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
@@ -1937,8 +1944,9 @@ var FieldMappings = []FieldMapping{
 			"_paymentsInvestShortTerm", "_proceedsInvestShortTerm",
 			"_paymentsInvestOther", "_proceedsInvestSaleAndMaturityOther",
 			"_paymentsInvestEquityMethod", "_proceedsInvestEquityMethod",
+			"_proceedsInvestLeaseReceivables",
 		},
-		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1},
+		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1, 1},
 		OptionalOperands: true,
 	},
 	{
