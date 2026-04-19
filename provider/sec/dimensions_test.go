@@ -737,6 +737,8 @@ var _ = Describe("Dimensions", func() {
 				"_proceedsEquityMethodReturn":              true,
 				"_paymentsOtherProductiveAssets":           true,
 				"_proceedsOtherProductiveAssets":           true,
+				"_paymentsInvestEquityMethod":              true,
+				"_proceedsInvestEquityMethod":              true,
 				"_operatingIncomeFromFormula":              true,
 				"_operatingIncomeEbtFallback":              true,
 				"_cogsRaw":                                 true,

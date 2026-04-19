@@ -1824,6 +1824,19 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsInvestSaleAndMaturityOther", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"ProceedsFromSaleAndMaturityOfOtherInvestments"},
 	},
+	// Equity-method investments: payments to acquire and proceeds from sale
+	// of interests accounted for under the equity method. MCD's FY2024
+	// includes a $1.837B equity-method acquisition (PaymentsToAcquire
+	// InterestInJointVenture is already folded into NCF_business, but
+	// equity-method investments proper live in NCF_invest per Sharadar).
+	{
+		FieldName: "_paymentsInvestEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsToAcquireEquityMethodInvestments"},
+	},
+	{
+		FieldName: "_proceedsInvestEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromSaleOfEquityMethodInvestments"},
+	},
 	{
 		FieldName: "_proceedsInvest", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
@@ -1843,8 +1856,9 @@ var FieldMappings = []FieldMapping{
 			"_paymentsInvestEquity", "_proceedsInvestEquity",
 			"_paymentsInvestShortTerm", "_proceedsInvestShortTerm",
 			"_paymentsInvestOther", "_proceedsInvestSaleAndMaturityOther",
+			"_paymentsInvestEquityMethod", "_proceedsInvestEquityMethod",
 		},
-		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1},
+		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	{
