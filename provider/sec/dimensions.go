@@ -479,6 +479,38 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 			continue
 		}
 
+		// FallbackExcludeIfQuarterly: when the gate sentinel is filed
+		// quarterly, the field's FallbackTags are disabled in
+		// ResolveAllFields and the formula wins. Skip the YTD cumulative
+		// lookup here for the same reason (the FallbackTag's YTD would
+		// disagree with the formula's annual; see WMT InterestExpense).
+		if m.Type == MappingDerived && len(m.FallbackExcludeIfQuarterly) > 0 &&
+			conceptFiledQuarterly(cf, m.FallbackExcludeIfQuarterly) {
+			continue
+		}
+
+		// Gate direct-mapped operands the same way ResolveAllFields does
+		// so cumulative YTD values don't contradict the point-in-time
+		// resolution. Without this, _interestIncomeExpenseNetFallback
+		// would resolve here (its ExcludeIfQuarterly is only checked in
+		// ResolveAllFields), then double-count when InterestExpense is
+		// recomputed via its formula in the second pass below.
+		if m.RequireQuarterly && !conceptFiledQuarterly(cf, m.XBRLTags) {
+			continue
+		}
+
+		if len(m.ExcludeIfQuarterly) > 0 && conceptFiledQuarterly(cf, m.ExcludeIfQuarterly) {
+			continue
+		}
+
+		if len(m.ExcludeIfAnnual) > 0 && conceptFiledAnnually(cf, m.ExcludeIfAnnual) {
+			continue
+		}
+
+		if len(m.RequireIfQuarterly) > 0 && !conceptFiledQuarterly(cf, m.RequireIfQuarterly) {
+			continue
+		}
+
 		// Require the winning fact to span more than one quarter. Otherwise
 		// we'd return the single-quarter value dressed up as "cumulative",
 		// which synthesize_q4 would subtract from the annual to produce a
@@ -513,8 +545,12 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 			continue
 		}
 
-		if len(m.FallbackRequireIfQuarterly) == 0 ||
-			conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly) {
+		requireGateSkipped := len(m.FallbackRequireIfQuarterly) > 0 &&
+			!conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly)
+		excludeGateSkipped := len(m.FallbackExcludeIfQuarterly) > 0 &&
+			conceptFiledQuarterly(cf, m.FallbackExcludeIfQuarterly)
+
+		if !requireGateSkipped && !excludeGateSkipped {
 			continue
 		}
 

@@ -480,6 +480,10 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 				useFallback = conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly)
 			}
 
+			if useFallback && len(m.FallbackExcludeIfQuarterly) > 0 && conceptFiledQuarterly(cf, m.FallbackExcludeIfQuarterly) {
+				useFallback = false
+			}
+
 			if useFallback {
 				if val, ok := ResolveDirect(cf, m, periodEnd, formType); ok {
 					if m.Negate {

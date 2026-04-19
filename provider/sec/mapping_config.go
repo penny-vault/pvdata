@@ -79,6 +79,15 @@ type FieldMapping struct {
 	// that need investment gains added to revenue).
 	FallbackRequireIfQuarterly []string
 
+	// FallbackExcludeIfQuarterly is the inverse of FallbackRequireIfQuarterly:
+	// the FallbackTags are SKIPPED when ANY of the listed concepts appear on
+	// a recent 10-Q filing, forcing the formula path. Use this when a filer
+	// reports a dedicated direct tag (e.g. InterestExpenseDebt) but Sharadar
+	// computes the value via an alternate formula path driven by different
+	// concepts (e.g. WMT: Sharadar uses the net non-operating interest line
+	// plus investment interest income, not InterestExpenseDebt directly).
+	FallbackExcludeIfQuarterly []string
+
 	// OptionalOperands makes OpAdd treat missing operands as 0 and resolve
 	// when at least one operand is present, instead of requiring all.
 	OptionalOperands bool
@@ -384,6 +393,21 @@ var FieldMappings = []FieldMapping{
 		AllowCrossFormFallback: true,
 		XBRLTags:               []string{"OperatingLeaseRightOfUseAsset"},
 	},
+	// Finance lease ROU assets are included in PP&E when the company reports
+	// them as a separate quarterly balance sheet line (WMT). Filers that
+	// disclose finance leases only in 10-K notes (AAPL, TXRH) do not meet
+	// RequireQuarterly and stay out of PP&E — matching Sharadar's treatment.
+	// Exclude filers that file the combined PP&E+FinLeaseROU tag (AMZN) to
+	// avoid double-counting. Exclude banks via deposit sentinels.
+	{
+		FieldName: "_financeLeaseROU", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		ExcludeIfQuarterly: []string{
+			"Deposits", "DepositsDomestic", "DepositsTotal",
+			"PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+		},
+		XBRLTags: []string{"FinanceLeaseRightOfUseAsset"},
+	},
 	// Property subject to operating leases (lessor-side assets like railcars,
 	// utility equipment) is included in PP&E for conglomerates like BRK/B.
 	// Exclude banks: they report PropertySubjectToOrAvailableForOperatingLeaseNet
@@ -402,7 +426,7 @@ var FieldMappings = []FieldMapping{
 			"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization", // JPM extension
 		},
 		Op:               OpAdd,
-		Operands:         []string{"_ppneRaw", "_operatingLeaseROU", "_propertyHeldForLease"},
+		Operands:         []string{"_ppneRaw", "_operatingLeaseROU", "_financeLeaseROU", "_propertyHeldForLease"},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for Intangibles derivation ---
@@ -579,6 +603,25 @@ var FieldMappings = []FieldMapping{
 		RequireIfQuarterly: []string{"PreOpeningCosts"},
 		XBRLTags:           []string{"OperatingLeaseLiabilityCurrent"},
 	},
+	// WMT-style retailer variant: filers that report FinanceLeaseRightOfUseAsset
+	// as a separate quarterly balance-sheet line (WMT) have Sharadar rolling
+	// BOTH current operating-lease and finance-lease liabilities into
+	// debt_current. The RequireIfQuarterly gate distinguishes this pattern
+	// from AMZN (files a combined PP&E+FinLease tag, no standalone FinLeaseROU
+	// line) and AAPL (FinLeaseROU only in 10-K notes), where Sharadar
+	// classifies these leases outside debt_current.
+	{
+		FieldName: "_operatingLeaseLiabilityCurrentRetailer", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"FinanceLeaseRightOfUseAsset"},
+		XBRLTags:           []string{"OperatingLeaseLiabilityCurrent"},
+	},
+	{
+		FieldName: "_financeLeaseLiabilityCurrentRetailer", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"FinanceLeaseRightOfUseAsset"},
+		XBRLTags:           []string{"FinanceLeaseLiabilityCurrent"},
+	},
 	// DebtCurrent = ShortTermDebt + LongTermDebtCurrentMaturities +
 	// CommercialPaperDebt + current operating lease liability. Sharadar
 	// includes all forms of current debt (bonds, commercial paper, notes
@@ -594,6 +637,7 @@ var FieldMappings = []FieldMapping{
 		Operands: []string{
 			"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt",
 			"_operatingLeaseLiabilityCurrent", "_operatingLeaseLiabilityCurrentRestaurant",
+			"_operatingLeaseLiabilityCurrentRetailer", "_financeLeaseLiabilityCurrentRetailer",
 		},
 		OptionalOperands:              true,
 		PreferFormulaWhenFallbackZero: true,
@@ -791,6 +835,24 @@ var FieldMappings = []FieldMapping{
 			"DeferredIncomeTaxLiabilitiesNet",
 		},
 	},
+	// WMT and other retailers file a single combined line
+	// "Deferred income taxes and other" on the non-current liabilities section
+	// instead of separate deferred-tax and other-liabilities lines. When the
+	// combined tag is the sole quarterly source, feed it into the
+	// liabilities-noncurrent sum. ExcludeIfQuarterly suppresses this operand
+	// for filers that break out the components individually (avoiding
+	// double-count).
+	{
+		FieldName: "_deferredTaxAndOtherNoncurrentCombined", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		ExcludeIfAnnual:  []string{"Liabilities", "LiabilitiesNoncurrent"},
+		ExcludeIfQuarterly: []string{
+			"OtherLiabilitiesNoncurrent",
+			"DeferredTaxLiabilitiesNoncurrent",
+			"DeferredIncomeTaxLiabilitiesNet",
+		},
+		XBRLTags: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+	},
 	// _liabilitiesNoncurrentRaw resolves from the direct LiabilitiesNoncurrent
 	// tag when available; otherwise falls back to summing the individual
 	// non-current line items. Used both for TotalLiabilities synthesis
@@ -813,6 +875,7 @@ var FieldMappings = []FieldMapping{
 			"_deferredRevenueNoncurrentForLiab",
 			"_accruedIncomeTaxesNoncurrentForLiab",
 			"_deferredTaxLiabilitiesNoncurrentForLiab",
+			"_deferredTaxAndOtherNoncurrentCombined",
 		},
 		OptionalOperands: true,
 	},
@@ -1158,6 +1221,34 @@ var FieldMappings = []FieldMapping{
 			"InterestIncomeExpenseNonoperatingNet",
 		},
 	},
+	// Retailer-style filers (WMT) report InterestExpenseDebt and
+	// FinanceLeaseInterestExpense separately on the income statement, along
+	// with InterestIncomeExpenseNonoperatingNet (net expense minus income)
+	// and InvestmentIncomeInterest (interest income). Sharadar's
+	// interest_expense for this pattern equals the gross interest expense:
+	// -InterestIncomeExpenseNonoperatingNet + InvestmentIncomeInterest.
+	// This yields the same quarterly values as InterestExpenseDebt + FinLease
+	// interest for Q1-Q3 but diverges in Q4 synthesis — Sharadar's annual
+	// sums Q1-Q4 of the net-plus-income formula rather than the raw XBRL
+	// annual of InterestExpenseDebt + FinLease. Gate on InterestExpenseDebt
+	// filed quarterly so only WMT-style filers pick up these operands.
+	{
+		FieldName: "_retailerInterestNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"InterestExpenseDebt"},
+		Negate:             true, // flip signed net to positive gross expense
+		// WMT rebadged its original InterestIncomeExpenseNet to the newer
+		// InterestIncomeExpenseNonoperatingNet starting Q2 FY25; fall through
+		// to the legacy tag so the AR window for Q1 FY25 still resolves.
+		XBRLTags: []string{
+			"InterestIncomeExpenseNonoperatingNet",
+			"InterestIncomeExpenseNet",
+		},
+	},
+	{
+		FieldName: "_retailerInvestmentIncomeInterest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"InterestExpenseDebt"},
+		XBRLTags:           []string{"InvestmentIncomeInterest"},
+	},
 	// InterestExpense: must come before OperatingIncome since the derived
 	// OperatingIncome formula uses it as an operand.
 	{
@@ -1194,12 +1285,19 @@ var FieldMappings = []FieldMapping{
 			"InterestExpense",
 			"InterestExpenseDebt",
 		},
-		Op: OpLinearCombination,
+		// WMT-style filers report InterestExpenseDebt but Sharadar computes
+		// interest_expense via the net non-operating formula instead (adding
+		// back interest income). Skip the FallbackTags path when
+		// InterestExpenseDebt is filed quarterly so the retailer operands win.
+		FallbackExcludeIfQuarterly: []string{"InterestExpenseDebt"},
+		Op:                         OpLinearCombination,
 		Operands: []string{
 			"_interestExpenseNonoperatingFallback",
 			"_interestIncomeExpenseNetFallback",
+			"_retailerInterestNet",
+			"_retailerInvestmentIncomeInterest",
 		},
-		Coefficients:     []float64{1, -1},
+		Coefficients:     []float64{1, -1, 1, 1},
 		OptionalOperands: true,
 	},
 	// _operatingIncomeFromFormula: BRK-style insurance/conglomerate path.
