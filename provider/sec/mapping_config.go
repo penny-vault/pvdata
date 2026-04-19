@@ -901,9 +901,17 @@ var FieldMappings = []FieldMapping{
 	// Companies like Apple report a combined SellingGeneralAndAdministrativeExpense;
 	// companies like Microsoft report the two components separately. Sharadar
 	// always reports the combined total.
+	//
+	// OtherSellingGeneralAndAdministrativeExpense is tried first for filers
+	// (MCD) that split SG&A into a broader bucket plus an income-statement
+	// "Other SG&A" line — Sharadar reports the line-item value (OtherSGA),
+	// not the broader bucket. Filers that don't file OtherSGA fall through.
 	{
 		FieldName: "SellingGeneralAndAdministrativeExpense", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		FallbackTags:     []string{"SellingGeneralAndAdministrativeExpense"},
+		FallbackTags: []string{
+			"OtherSellingGeneralAndAdministrativeExpense",
+			"SellingGeneralAndAdministrativeExpense",
+		},
 		Op:               OpAdd,
 		Operands:         []string{"_generalAndAdministrativeExpense", "_sellingAndMarketingExpense"},
 		OptionalOperands: true,
