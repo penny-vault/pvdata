@@ -226,6 +226,11 @@ var FieldMappings = []FieldMapping{
 	// to avoid double-counting with InvestmentsCurrent/InvestmentsNonCurrent.
 	{
 		FieldName: "_equitySecuritiesFvNi", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		// RequireQuarterly keeps WMT's 10-K-only EquitySecuritiesFvNi
+		// disclosure (footnote-scale marketable equity holdings, ~$3B) out
+		// of Investments. BRK/B files the concept every 10-Q (its primary
+		// equity portfolio, ~$260B) so the gate still activates there.
+		RequireQuarterly:   true,
 		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent"},
 		XBRLTags:           []string{"EquitySecuritiesFvNi"},
 	},
@@ -548,6 +553,21 @@ var FieldMappings = []FieldMapping{
 		Op:                 OpAdd,
 		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent", "_otherTaxesPayableCurrent"},
 		OptionalOperands:   true,
+	},
+	// Retailer variant: WMT-style filers (which file AccruedLiabilitiesCurrent
+	// and thus trigger the standard TaxLiabilities ExcludeIfQuarterly gate)
+	// still report a distinct quarterly "Deferred income taxes and other"
+	// non-current line. Sharadar treats that combined value as tax_liabilities
+	// for these filers. RequireIfQuarterly on the combined tag keeps the rule
+	// tight: filers that break the components out separately (MSFT, NVDA) do
+	// not match and keep the standard entry's result. This mapping appears
+	// after the standard TaxLiabilities entry; when both are gated off the
+	// field stays unset, and when the retailer entry resolves it overwrites
+	// any zero from the standard path.
+	{
+		FieldName: "TaxLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireIfQuarterly: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+		XBRLTags:           []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
 	},
 	// Debt sub-components are gated on AssetsCurrent: companies that classify
 	// assets as current/non-current (non-banks) also classify debt that way.
