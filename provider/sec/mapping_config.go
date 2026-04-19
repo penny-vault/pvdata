@@ -892,6 +892,20 @@ var FieldMappings = []FieldMapping{
 		},
 		XBRLTags: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
 	},
+	// Redeemable NCI sits in the "mezzanine equity" section between
+	// liabilities and equity on the balance sheet. Sharadar rolls the
+	// carrying amount into total_liabilities (and thus liabilities_non_current)
+	// for filers that report it alongside other non-current lines but DO NOT
+	// file the consolidated Liabilities / LiabilitiesNoncurrent roll-up tags
+	// (WMT). For filers that DO file Liabilities (UNH), our TotalLiabilities
+	// resolves via the FallbackTag path and this operand is never summed in,
+	// so the treatment matches Sharadar's exclusion there.
+	{
+		FieldName: "_redeemableNCI", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		ExcludeIfAnnual:  []string{"Liabilities", "LiabilitiesNoncurrent"},
+		XBRLTags:         []string{"RedeemableNoncontrollingInterestEquityCarryingAmount"},
+	},
 	// _liabilitiesNoncurrentRaw resolves from the direct LiabilitiesNoncurrent
 	// tag when available; otherwise falls back to summing the individual
 	// non-current line items. Used both for TotalLiabilities synthesis
@@ -915,6 +929,7 @@ var FieldMappings = []FieldMapping{
 			"_accruedIncomeTaxesNoncurrentForLiab",
 			"_deferredTaxLiabilitiesNoncurrentForLiab",
 			"_deferredTaxAndOtherNoncurrentCombined",
+			"_redeemableNCI",
 		},
 		OptionalOperands: true,
 	},
