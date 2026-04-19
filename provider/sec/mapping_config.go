@@ -969,6 +969,28 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_cogsRaw", "_insuranceBenefitsIncurred"},
 		OptionalOperands: true,
 	},
+	// Sub-fields for deriveCostOfRevenueForSegmentFiler. MCD tags
+	// CostOfGoodsAndServicesSold only for the franchised-occupancy slice
+	// (~620M Q1 2025) while the company-operated restaurant expenses are
+	// disclosed on the income statement without a consolidating us-gaap
+	// tag. Sharadar reconstructs cost_of_revenue as
+	// CostsAndExpenses - SG&A - SegmentReportingOtherItemAmount, using the
+	// broader SellingGeneralAndAdministrativeExpense (not OtherSG&A) and
+	// the SegmentReportingOtherItemAmount corporate-segment disclosure.
+	// Only MCD-style restaurant filers use this pattern; no regression
+	// ticker files SegmentReportingOtherItemAmount.
+	{
+		FieldName: "_costsAndExpensesRaw", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"CostsAndExpenses"},
+	},
+	{
+		FieldName: "_segmentReportingOtherItem", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"SegmentReportingOtherItemAmount"},
+	},
+	{
+		FieldName: "_sgaBroad", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"SellingGeneralAndAdministrativeExpense"},
+	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
 	// CostOfRevenue; with CostOfRevenue absent (treated as 0), the derived

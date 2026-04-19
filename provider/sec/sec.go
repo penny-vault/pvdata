@@ -1113,6 +1113,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if !conceptFiledQuarterly(cf, []string{"Deposits", "DepositsDomestic", "DepositsTotal"}) {
 			deriveCostOfRevenueBottomUp(a.arEmit)
 			deriveCostOfRevenueBottomUp(a.mrEmit)
+			deriveCostOfRevenueForSegmentFiler(cf, a.arEmit)
+			deriveCostOfRevenueForSegmentFiler(cf, a.mrEmit)
 		}
 
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
@@ -1239,6 +1241,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		if !conceptFiledQuarterly(cf, []string{"Deposits", "DepositsDomestic", "DepositsTotal"}) {
 			deriveCostOfRevenueBottomUp(q.arEmit)
 			deriveCostOfRevenueBottomUp(q.mrEmit)
+			deriveCostOfRevenueForSegmentFiler(cf, q.arEmit)
+			deriveCostOfRevenueForSegmentFiler(cf, q.mrEmit)
 		}
 
 		// ARQ

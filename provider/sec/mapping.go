@@ -1433,3 +1433,45 @@ func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 		fields["GrossMargin"] = math.Round(grossProfit/revenue*1000) / 1000
 	}
 }
+
+// deriveCostOfRevenueForSegmentFiler handles MCD-style restaurant filers
+// where CostOfGoodsAndServicesSold carries only the franchised-occupancy
+// slice of cost-of-revenue while the company-operated restaurant expenses
+// are disclosed on the income statement without a consolidating us-gaap
+// tag. Sharadar splits CostsAndExpenses as:
+//
+//	cost_of_revenue     = CostsAndExpenses - SG&A - SegmentReportingOtherItemAmount
+//	operating_expenses  = SG&A + SegmentReportingOtherItemAmount
+//
+// using the broader SellingGeneralAndAdministrativeExpense (not Other-SG&A)
+// and the corporate-segment disclosure under SegmentReportingOtherItemAmount.
+// The gate is presence of SegmentReportingOtherItemAmount on a recent 10-Q;
+// none of the standard regression tickers (AAPL, JPM, MSFT, NVDA, GS, LLY,
+// UNH, AMZN, BRK/B) file that concept.
+func deriveCostOfRevenueForSegmentFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"SegmentReportingOtherItemAmount"}) {
+		return
+	}
+
+	costsAndExpenses, okCE := fields["_costsAndExpensesRaw"]
+	sga, okSGA := fields["_sgaBroad"]
+	segmentOther, okSeg := fields["_segmentReportingOtherItem"]
+	revenues, okRev := fields["Revenues"]
+
+	if !okCE || !okSGA || !okSeg || !okRev || revenues == 0 {
+		return
+	}
+
+	opEx := sga + segmentOther
+	costOfRevenue := costsAndExpenses - opEx
+	if costOfRevenue < 0 {
+		return
+	}
+
+	grossProfit := revenues - costOfRevenue
+
+	fields["CostOfRevenue"] = costOfRevenue
+	fields["OperatingExpenses"] = opEx
+	fields["GrossProfit"] = grossProfit
+	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
+}
