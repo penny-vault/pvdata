@@ -1096,11 +1096,17 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		// Strip tax withholding from annual emit maps: Sharadar only
-		// includes it in quarterly NCFCOMMON when the company files it on
-		// 10-Q, not in the annual aggregation.
-		annualTWHStale := map[string]bool{"_taxWithholdingShareComp": true}
-		stripStaleAndRecompute(a.arEmit, annualTWHStale)
-		stripStaleAndRecompute(a.mrEmit, annualTWHStale)
+		// includes it in quarterly NCFCOMMON for bundled-presentation
+		// filers like NVDA, not in the annual aggregation. Restaurant
+		// filers (TXRH) report tax withholding as a distinct cash-flow
+		// line item, and Sharadar's annual NCFCOMMON equals the sum of
+		// quarterly stubs including that line — gated via PreOpeningCosts
+		// to preserve the strip for NVDA-style filers.
+		if !conceptFiledQuarterly(cf, []string{"PreOpeningCosts"}) {
+			annualTWHStale := map[string]bool{"_taxWithholdingShareComp": true}
+			stripStaleAndRecompute(a.arEmit, annualTWHStale)
+			stripStaleAndRecompute(a.mrEmit, annualTWHStale)
+		}
 
 		// Apply bank overrides to annual emit maps. Only for banks —
 		// the bundlesFinancing (NVDA) path modifies NCFCOMMON via tax
