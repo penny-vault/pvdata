@@ -356,6 +356,72 @@ func ResolveFieldsForFiling(cf *CompanyFacts, periodEnd time.Time, formType stri
 		}
 	}
 
+	// AllowCrossFormFallback concepts: if the filtered window is silent on
+	// the concept at periodEnd, splice in post-filedDate facts at the same
+	// period end so the cross-form fallback has something to find. MCD's
+	// 2024 10-K omits operating-lease liabilities and ROU; the first 10-Q
+	// comparatives that tag them come months after the 10-K filing date,
+	// so the strict AR window misses them entirely. Sharadar uses those
+	// 10-Q values at the 10-K period end. This only touches concepts whose
+	// mapping opts into AllowCrossFormFallback and only adds facts at the
+	// requested periodEnd, so it can't leak unrelated restatements into AR.
+	// Compare on exact End dates rather than NormalizeEventDate, since the
+	// 10-K normalization collapses every quarter-end in the year to Dec 31
+	// and would spuriously treat e.g. a 2024-06-30 10-Q fact as matching a
+	// 2024-12-31 10-K request.
+	for _, m := range FieldMappings {
+		if !m.AllowCrossFormFallback {
+			continue
+		}
+
+		for _, tag := range m.XBRLTags {
+			facts, ok := cf.Facts[tag]
+			if !ok {
+				continue
+			}
+
+			// If the filtered window already has a fact at this exact
+			// period end, don't extend. Cross-form fallback covers the
+			// rest without needing a splice.
+			haveMatch := false
+
+			for _, f := range filtered.Facts[tag] {
+				if f.End.Equal(periodEnd) {
+					haveMatch = true
+					break
+				}
+			}
+
+			if haveMatch {
+				continue
+			}
+
+			// Find the earliest post-filedDate fact at periodEnd. Facts
+			// are sorted by Filed ascending, so the first match is the
+			// earliest restatement that carried the concept.
+			for i := range facts {
+				f := &facts[i]
+				if !f.Filed.After(filedDate) {
+					continue
+				}
+
+				if !f.End.Equal(periodEnd) {
+					continue
+				}
+
+				// Append a single synthetic fact so ResolveDirect can find
+				// it. Copy the slice to avoid aliasing with cf.Facts (which
+				// ResolveFieldsForFiling otherwise shares).
+				extended := make([]Fact, len(filtered.Facts[tag]), len(filtered.Facts[tag])+1)
+				copy(extended, filtered.Facts[tag])
+				extended = append(extended, *f)
+				filtered.Facts[tag] = extended
+
+				break
+			}
+		}
+	}
+
 	return ResolveAllFields(filtered, periodEnd, formType)
 }
 

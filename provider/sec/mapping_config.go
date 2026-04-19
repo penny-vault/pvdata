@@ -132,6 +132,16 @@ type FieldMapping struct {
 	// 10-Q filings — even for annual year-end dates — leaving the 10-K
 	// period silent for that concept.
 	AllowCrossFormFallback bool
+
+	// PreferFormulaWhenFallbackZero overrides the usual "FallbackTag wins
+	// when it resolves" rule for derived fields: if the FallbackTag
+	// resolves to exactly zero but the formula produces a non-zero value,
+	// the formula wins. MCD tags us-gaap:DebtCurrent as 0 on its 10-K
+	// despite carrying operating-lease-current and commercial-paper
+	// balances that Sharadar rolls into debt_current. For filers whose
+	// DebtCurrent tag is genuinely zero (no short-term debt) the formula
+	// also sums to zero, so this gate is a no-op.
+	PreferFormulaWhenFallbackZero bool
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -558,10 +568,11 @@ var FieldMappings = []FieldMapping{
 	// DebtCurrent = 0.
 	{
 		FieldName: "DebtCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"DebtCurrent"},
-		Op:               OpAdd,
-		Operands:         []string{"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt", "_operatingLeaseLiabilityCurrent"},
-		OptionalOperands: true,
+		FallbackTags:                  []string{"DebtCurrent"},
+		Op:                            OpAdd,
+		Operands:                      []string{"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt", "_operatingLeaseLiabilityCurrent"},
+		OptionalOperands:              true,
+		PreferFormulaWhenFallbackZero: true,
 	},
 	{
 		FieldName: "_longTermDebtNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -706,8 +717,13 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{"LongTermDebtNoncurrent"},
 	},
 	{
+		// AllowCrossFormFallback lets the non-current operating-lease value
+		// reach the liabilities sum when the 10-K omits the concept but a
+		// later 10-Q comparative tags it (MCD 2024-12-31: 12.888B on the
+		// 2025-05-12 10-Q, silent on the 2025-02-25 10-K).
 		FieldName: "_opLeaseNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"OperatingLeaseLiabilityNoncurrent"},
+		AllowCrossFormFallback: true,
+		XBRLTags:               []string{"OperatingLeaseLiabilityNoncurrent"},
 	},
 	{
 		FieldName: "_finLeaseNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",

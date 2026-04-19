@@ -486,6 +486,19 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 						val = -val
 					}
 
+					// When the FallbackTag resolves to zero but the formula
+					// produces a non-zero value, prefer the formula. MCD tags
+					// us-gaap:DebtCurrent=0 on the 10-K while the sub-components
+					// (commercial paper, operating-lease-current) carry real
+					// values that Sharadar rolls into debt_current.
+					if m.PreferFormulaWhenFallbackZero && val == 0 {
+						if fv, fok := computeDerived(m, resolved); fok && fv != 0 {
+							resolved[m.FieldName] = fv
+
+							continue
+						}
+					}
+
 					resolved[m.FieldName] = val
 
 					continue
