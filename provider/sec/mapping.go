@@ -749,10 +749,10 @@ func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool,
 
 	// WMT-style filers declare a single annual per-share amount in the
 	// Q1 10-Q and re-publish that same annual value on every subsequent
-	// 10-Q/10-K (no single-quarter context). Sharadar's MR DPS for these
-	// filers is AnnualDeclared / 4 truncated to 3 decimals for quarterly
-	// views; annual views keep the annual value.
-	if isMR && !isAnnualView && dpsIsAnnualOnly(cf) {
+	// 10-Q/10-K. Sharadar's quarterly DPS for these filers is
+	// AnnualDeclared / 4 truncated to 3 decimals; annual views keep the
+	// full annual value.
+	if !isAnnualView && dpsIsAnnualOnly(cf) {
 		if annualDps, ok := latestAnnualDpsDeclared(cf, periodEnd); ok && annualDps > 0 {
 			truncated := math.Trunc(annualDps/4*1000) / 1000
 			fields["DividendsPerBasicCommonShare"] = truncated
