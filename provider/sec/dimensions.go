@@ -413,7 +413,13 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 			continue
 		}
 
-		if val, ok := ResolveLongestDuration(filtered, m, periodEnd, formType); ok {
+		// Require the winning fact to span more than one quarter. Otherwise
+		// we'd return the single-quarter value dressed up as "cumulative",
+		// which synthesize_q4 would subtract from the annual to produce a
+		// wrong Q4 (Annual - Q3_single instead of Annual - Q1Q2Q3_sum).
+		// The threshold admits Q2 YTD (~180d) and Q3 YTD (~270d) while
+		// rejecting Q1-only 10-Qs where YTD == single quarter.
+		if val, ok := resolveLongestDurationBounded(filtered, m, periodEnd, formType, ytdThresholdDays+1); ok {
 			if m.Negate {
 				val = -val
 			}

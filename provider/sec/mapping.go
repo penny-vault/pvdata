@@ -162,6 +162,16 @@ func resolveDirectForm(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 // from 10-Q filings for per-share fields where the company-reported cumulative
 // value avoids rounding error from summing individually rounded quarterly values.
 func ResolveLongestDuration(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) (float64, bool) {
+	return resolveLongestDurationBounded(cf, m, periodEnd, formType, 0)
+}
+
+// resolveLongestDurationBounded is the shared implementation behind
+// ResolveLongestDuration. minDays imposes an additional lower bound on the
+// accepted fact duration for 10-Q facts (ignored for 10-K, which already
+// requires >=300 days). Callers that need "truly YTD" values (e.g. the Q4
+// synthesis cumulative map) pass minDays > ytdThresholdDays so that single-
+// quarter facts are not returned as if they were multi-quarter cumulatives.
+func resolveLongestDurationBounded(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string, minDays int) (float64, bool) {
 	tags := m.XBRLTags
 	if m.Type == MappingDerived {
 		tags = m.FallbackTags
@@ -207,6 +217,10 @@ func ResolveLongestDuration(cf *CompanyFacts, m FieldMapping, periodEnd time.Tim
 				// producing wildly wrong Q4 values. Cap at 300 days to
 				// exclude TTM while still accepting YTD durations.
 				if days > 300 {
+					continue
+				}
+
+				if minDays > 0 && int(days) < minDays {
 					continue
 				}
 			}

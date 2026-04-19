@@ -142,30 +142,20 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			// restatements across quarters and avoids rounding error from
 			// summing individually rounded per-share values. For int64 flow
 			// fields (e.g. NetIncome), the cumulative also captures small
-			// adjustments (JPM: Q3 cumulative 43,199M vs Q1+Q2+Q3 sum 43,197M).
+			// adjustments (JPM: Q3 cumulative 43,199M vs Q1+Q2+Q3 sum 43,197M;
+			// MCD: Q3 YTD FX effect 47M vs Q1+Q2+Q3 sum 46M from canceling
+			// partial-quarter rounding).
 			//
-			// Only use cumulative values that span more than one quarter
-			// (> 120 days). Single-quarter "longest" values are just the
-			// quarterly amount, not a YTD cumulative, and would give wrong
-			// results (Q4 = Annual - Q3_single instead of Annual - Q1Q2Q3_sum).
+			// ResolveCumulativePerShareForFiling only populates cumPS entries
+			// when the winning fact spans more than one quarter, so any value
+			// present here is guaranteed to be a multi-quarter YTD rather than
+			// a single-quarter fact masquerading as "longest".
 			lastQ := preceding[0] // most recent quarter before the 10-K
 			if cumPS := cumPSFn(lastQ, m.FieldName); cumPS != nil {
 				if cumVal, ok := cumPS[m.FieldName]; ok {
-					// Verify the value is actually cumulative by checking if
-					// it's larger than any single-quarter emit value.
-					// For Q3 (3rd quarter), cumulative should be roughly 3x
-					// the average quarter. Use a simple heuristic: cumulative
-					// must differ from the single-quarter emit by > 10%.
-					singleQ := 0.0
-					if emit := emitFn(lastQ, m.FieldName); emit != nil {
-						singleQ = emit[m.FieldName]
-					}
+					result[m.FieldName] = annualVal - cumVal
 
-					if singleQ == 0 || math.Abs(cumVal-singleQ)/math.Abs(singleQ) > 0.1 {
-						result[m.FieldName] = annualVal - cumVal
-
-						continue
-					}
+					continue
 				}
 			}
 
