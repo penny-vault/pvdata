@@ -456,9 +456,12 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 
 // identifyStaleMRFields returns the set of Fundamental field names whose
 // underlying XBRL concepts are no longer reported by the company. A concept is
-// stale if it appeared in older filings but is absent from the company's latest
-// 10-K filing. The 10-K is used as the reference because it's the comprehensive
-// annual filing that includes all material concepts.
+// stale if it appeared in older filings but is absent from both the company's
+// latest 10-K filing AND any 10-Q filed after that 10-K. The 10-K is used as
+// the primary reference because it's the comprehensive annual filing, but
+// later 10-Q filings also count: some filers (MCD) tag certain balance-sheet
+// concepts (OperatingLeaseLiability*) only on 10-Q despite including them in
+// the 10-K notes, and those concepts must not be treated as stale.
 func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 	// Find the latest 10-K filing date.
 	var latest10KFiled time.Time
@@ -475,12 +478,22 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 		return nil
 	}
 
-	// Concepts present in the latest 10-K filing.
+	// Concepts present in the latest 10-K filing or in any 10-Q filed on or
+	// after that 10-K date. Including post-10-K 10-Qs ensures concepts that
+	// the filer tags only on 10-Q (e.g. MCD's OperatingLeaseLiability*) are
+	// not mis-classified as stale.
 	activeConcepts := make(map[string]bool)
 
 	for concept, facts := range cf.Facts {
 		for i := range facts {
-			if facts[i].Form == "10-K" && facts[i].Filed.Equal(latest10KFiled) {
+			f := &facts[i]
+			if f.Form == "10-K" && f.Filed.Equal(latest10KFiled) {
+				activeConcepts[concept] = true
+
+				break
+			}
+
+			if f.Form == "10-Q" && !f.Filed.Before(latest10KFiled) {
 				activeConcepts[concept] = true
 
 				break

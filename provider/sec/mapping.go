@@ -46,6 +46,29 @@ import (
 // to extend to its filing date; this is the desired behavior because the
 // amendment is the authoritative record of the period as filed.
 func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) (float64, bool) {
+	if val, ok := resolveDirectForm(cf, m, periodEnd, formType); ok {
+		return val, true
+	}
+
+	// Cross-form fallback: some filers only tag certain balance-sheet
+	// concepts on 10-Q (e.g. MCD's operating lease liabilities are
+	// silent on the 10-K). When the requested form has no match, try
+	// the opposite form at the same period end.
+	if m.AllowCrossFormFallback {
+		otherForm := "10-Q"
+		if formType == "10-Q" {
+			otherForm = "10-K"
+		}
+
+		if val, ok := resolveDirectForm(cf, m, periodEnd, otherForm); ok {
+			return val, true
+		}
+	}
+
+	return 0, false
+}
+
+func resolveDirectForm(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) (float64, bool) {
 	tags := m.XBRLTags
 	if m.Type == MappingDerived {
 		tags = m.FallbackTags

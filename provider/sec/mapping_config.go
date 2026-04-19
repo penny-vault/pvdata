@@ -114,6 +114,14 @@ type FieldMapping struct {
 	// a derived formula) while others present as a standalone line (and
 	// should not be added to avoid double-counting).
 	RequireIfQuarterly []string
+
+	// AllowCrossFormFallback enables ResolveDirect to fall back to the
+	// opposite form type (10-K ↔ 10-Q) at the same period end when no
+	// fact of the requested form is found. Used for point-in-time
+	// balance-sheet concepts that some filers (e.g. MCD) only tag on
+	// 10-Q filings — even for annual year-end dates — leaving the 10-K
+	// period silent for that concept.
+	AllowCrossFormFallback bool
 }
 
 // FieldMappings defines the complete mapping from XBRL to data.Fundamental fields.
@@ -339,11 +347,14 @@ var FieldMappings = []FieldMapping{
 	// reports them as a separate balance sheet line (filed on 10-Q).
 	// Exclude banks: Sharadar reports bank PP&E as just
 	// PropertyPlantAndEquipmentNet without operating lease assets.
+	// AllowCrossFormFallback covers MCD-style filers whose 10-K omits
+	// this concept despite tagging it on 10-Q comparatives.
 	{
 		FieldName: "_operatingLeaseROU", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		RequireQuarterly:   true,
-		ExcludeIfQuarterly: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
-		XBRLTags:           []string{"OperatingLeaseRightOfUseAsset"},
+		RequireQuarterly:       true,
+		ExcludeIfQuarterly:     []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
+		AllowCrossFormFallback: true,
+		XBRLTags:               []string{"OperatingLeaseRightOfUseAsset"},
 	},
 	// Property subject to operating leases (lessor-side assets like railcars,
 	// utility equipment) is included in PP&E for conglomerates like BRK/B.
@@ -523,11 +534,14 @@ var FieldMappings = []FieldMapping{
 	// reports them as a separate balance sheet line item (filed on 10-Q).
 	// RequireQuarterly ensures we only add them for companies like MSFT
 	// (separate line) and not AAPL (10-K note disclosure only).
+	// AllowCrossFormFallback covers MCD-style filers whose 10-K omits
+	// this concept despite tagging it on 10-Q comparatives.
 	{
 		FieldName: "_operatingLeaseLiabilityNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		RequireQuarterly:   true,
-		RequireIfQuarterly: []string{"AssetsCurrent"},
-		XBRLTags:           []string{"OperatingLeaseLiabilityNoncurrent"},
+		RequireQuarterly:       true,
+		RequireIfQuarterly:     []string{"AssetsCurrent"},
+		AllowCrossFormFallback: true,
+		XBRLTags:               []string{"OperatingLeaseLiabilityNoncurrent"},
 	},
 	// Finance lease liabilities: Sharadar includes non-current finance lease
 	// liabilities in debt_non_current for filers (AMZN) that break them out
