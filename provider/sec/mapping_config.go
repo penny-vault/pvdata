@@ -347,7 +347,15 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "Deposits", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
+		// Standard bank deposit tags first, then restaurant-filer extension
+		// concepts for "security/restricted deposits" balances that Sharadar
+		// maps into the deposits column (e.g. TXRH's restricted-stock deposit).
+		// Extension tags are captured from inline XBRL by EnrichWithExtensionFacts
+		// under their bare local name (no namespace prefix).
+		XBRLTags: []string{
+			"Deposits", "DepositsDomestic", "DepositsTotal",
+			"RestrictedStockAndOtherDepositsNoncurrent",
+		},
 	},
 	{
 		FieldName: "_ppneRaw", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -559,18 +567,34 @@ var FieldMappings = []FieldMapping{
 		AllowCrossFormFallback: true,
 		XBRLTags:               []string{"OperatingLeaseLiabilityCurrent"},
 	},
+	// Restaurant-filer variant: TXRH-style filers (PreOpeningCosts filed
+	// quarterly) have no traditional debt on the balance sheet — their
+	// operating lease liability IS their debt — so Sharadar rolls the
+	// current portion into debt_current even when it's tagged on both
+	// 10-K and 10-Q (where ExcludeIfAnnual would otherwise suppress it
+	// for AAPL/NVDA/AMZN, which classify it outside debt_current).
+	{
+		FieldName: "_operatingLeaseLiabilityCurrentRestaurant", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"PreOpeningCosts"},
+		XBRLTags:           []string{"OperatingLeaseLiabilityCurrent"},
+	},
 	// DebtCurrent = ShortTermDebt + LongTermDebtCurrentMaturities +
 	// CommercialPaperDebt + current operating lease liability. Sharadar
 	// includes all forms of current debt (bonds, commercial paper, notes
 	// payable, credit facilities, current lease liability). Apple tags
 	// LongTermDebtCurrent and CommercialPaper separately; the sum captures
 	// both. For banks (no AssetsCurrent), all components are gated off so
-	// DebtCurrent = 0.
+	// DebtCurrent = 0. The _operatingLeaseLiabilityCurrent* variants are
+	// mutually exclusive by gate: only one resolves per filer.
 	{
 		FieldName: "DebtCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:                  []string{"DebtCurrent"},
-		Op:                            OpAdd,
-		Operands:                      []string{"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt", "_operatingLeaseLiabilityCurrent"},
+		FallbackTags: []string{"DebtCurrent"},
+		Op:           OpAdd,
+		Operands: []string{
+			"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt",
+			"_operatingLeaseLiabilityCurrent", "_operatingLeaseLiabilityCurrentRestaurant",
+		},
 		OptionalOperands:              true,
 		PreferFormulaWhenFallbackZero: true,
 	},
