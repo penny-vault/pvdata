@@ -1586,10 +1586,11 @@ var FieldMappings = []FieldMapping{
 			"_paymentsJVAcquire",
 			"_proceedsJVDivest",
 			"_proceedsEquityMethodReturn",
+			"_proceedsBusinessEquityMethod",
 			"_paymentsOtherProductiveAssets",
 			"_proceedsOtherProductiveAssets",
 		},
-		Coefficients:     []float64{-1, -1, 1, 1, -1, 1},
+		Coefficients:     []float64{-1, -1, 1, 1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---
@@ -1914,17 +1915,18 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsInvestSaleAndMaturityOther", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"ProceedsFromSaleAndMaturityOfOtherInvestments"},
 	},
-	// Equity-method investments: payments to acquire and proceeds from sale
-	// of interests accounted for under the equity method. MCD's FY2024
-	// includes a $1.837B equity-method acquisition (PaymentsToAcquire
-	// InterestInJointVenture is already folded into NCF_business, but
-	// equity-method investments proper live in NCF_invest per Sharadar).
+	// Equity-method investments: payments to acquire interests accounted for
+	// under the equity method live in NCF_invest per Sharadar (e.g. MCD's
+	// FY2024 $1.837B equity-method acquisition). Proceeds from selling such
+	// interests live in NCF_business — Sharadar treats a divestiture of an
+	// equity-method interest like a partial business disposal (e.g. TXRH
+	// selling its non-consolidated joint-venture stake).
 	{
 		FieldName: "_paymentsInvestEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"PaymentsToAcquireEquityMethodInvestments"},
 	},
 	{
-		FieldName: "_proceedsInvestEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		FieldName: "_proceedsBusinessEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"ProceedsFromSaleOfEquityMethodInvestments"},
 	},
 	// Lease receivables: restaurant/franchise filers that sub-lease real estate
@@ -1953,10 +1955,10 @@ var FieldMappings = []FieldMapping{
 			"_paymentsInvestEquity", "_proceedsInvestEquity",
 			"_paymentsInvestShortTerm", "_proceedsInvestShortTerm",
 			"_paymentsInvestOther", "_proceedsInvestSaleAndMaturityOther",
-			"_paymentsInvestEquityMethod", "_proceedsInvestEquityMethod",
+			"_paymentsInvestEquityMethod",
 			"_proceedsInvestLeaseReceivables",
 		},
-		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1, 1},
+		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	{
