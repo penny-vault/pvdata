@@ -161,6 +161,8 @@ func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 		return true
 	})
 
+	normalizeShareScale(cf)
+
 	return cf, nil
 }
 
@@ -277,6 +279,101 @@ func parseNamespaceFacts(nsData gjson.Result, cf *CompanyFacts) {
 
 		return true
 	})
+}
+
+// weightedAvgShareConcepts are us-gaap share concepts that some filers
+// (e.g. MCD starting FY2023) report in compact units (millions) rather than
+// absolute share counts. The companyfacts API returns the raw filed value
+// (e.g. val=712.9), which is 6 orders of magnitude too small for downstream
+// per-share calculations. normalizeShareScale detects and corrects this on
+// a per-fact basis.
+var weightedAvgShareConcepts = []string{
+	"WeightedAverageNumberOfSharesOutstandingBasic",
+	"WeightedAverageNumberOfDilutedSharesOutstanding",
+	"WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
+	"WeightedAverageNumberOfSharesIssuedBasic",
+}
+
+// normalizeShareScale rescales weighted-average share facts that were filed
+// in compact units (millions or thousands) so they match the absolute share
+// counts used by Sharadar. MCD's current 10-K/10-Q filings report
+// WeightedAverageNumberOfSharesOutstandingBasic as 712.9 (meaning 712.9M
+// shares), while the companyfacts API passes the value through verbatim.
+//
+// Detection is per-fact: for each weighted-avg fact we compare its absolute
+// value to the temporally-nearest EntityCommonStockSharesOutstanding
+// reference (a DEI cover-page count that is consistently filed in absolute
+// units). A ratio of ~1e6 implies the fact is in millions; ~1e3 implies
+// thousands. Normal filings have ratio ~1 and are left unchanged.
+//
+// Mixed-scale history is preserved: MCD filed WAS in absolute units before
+// FY2023, so those older facts have ratio ~1 and are untouched.
+func normalizeShareScale(cf *CompanyFacts) {
+	refFacts := cf.Facts["EntityCommonStockSharesOutstanding"]
+	if len(refFacts) == 0 {
+		return
+	}
+
+	for _, concept := range weightedAvgShareConcepts {
+		facts, ok := cf.Facts[concept]
+		if !ok {
+			continue
+		}
+
+		for i := range facts {
+			v := math.Abs(facts[i].Val)
+			if v == 0 {
+				continue
+			}
+
+			ref := nearestRefShareCount(refFacts, facts[i].End)
+			// Require a large enough reference so the ratio is meaningful.
+			// Companies with under a million shares outstanding are unlikely
+			// to use compact unit reporting anyway.
+			if ref < 1_000_000 {
+				continue
+			}
+
+			ratio := ref / v
+			switch {
+			case ratio >= 3e5 && ratio <= 3e6:
+				facts[i].Val *= 1e6
+			case ratio >= 3e2 && ratio <= 3e3:
+				facts[i].Val *= 1e3
+			}
+		}
+	}
+}
+
+// nearestRefShareCount returns the absolute value of the reference fact
+// whose End date is closest to asOfDate, or 0 if no candidate exists.
+func nearestRefShareCount(refFacts []Fact, asOfDate time.Time) float64 {
+	var (
+		best     *Fact
+		bestDiff time.Duration
+	)
+
+	for i := range refFacts {
+		if refFacts[i].End.IsZero() {
+			continue
+		}
+
+		diff := refFacts[i].End.Sub(asOfDate)
+		if diff < 0 {
+			diff = -diff
+		}
+
+		if best == nil || diff < bestDiff {
+			best = &refFacts[i]
+			bestDiff = diff
+		}
+	}
+
+	if best == nil {
+		return 0
+	}
+
+	return math.Abs(best.Val)
 }
 
 // FetchCompanyFacts downloads the companyfacts JSON for a single CIK from SEC EDGAR.
