@@ -1612,11 +1612,13 @@ var FieldMappings = []FieldMapping{
 	// that always file it on 10-Q (AAPL, MSFT), the tag IS already
 	// embedded in PaymentsForRepurchaseOfCommonStock, so adding it would
 	// double-count. RequireIfQuarterly on AccruedLiabilitiesCurrent
-	// excludes those companies.
+	// excludes those companies. TXRH files OtherAccruedLiabilitiesCurrent
+	// instead of the generic AccruedLiabilitiesCurrent, so both names are
+	// listed as alternative signals.
 	{
 		FieldName: "_taxWithholdingShareComp", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		RequireQuarterly:   true,
-		RequireIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		RequireIfQuarterly: []string{"AccruedLiabilitiesCurrent", "OtherAccruedLiabilitiesCurrent"},
 		XBRLTags:           []string{"PaymentsRelatedToTaxWithholdingForShareBasedCompensation"},
 	},
 	// NetCashFlowCommon = −repurchases − taxWithholding + proceeds.
@@ -1658,6 +1660,13 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"PaymentsForFinancedPropertyPlantAndEquipmentAndIntangibleAssetsFinancingActivities",
 		},
+	},
+	// Debt issuance costs (credit-facility amendment fees, underwriting
+	// fees, etc.) are a financing-activities cash outflow that Sharadar
+	// includes in NCFDEBT.
+	{
+		FieldName: "_paymentsDebtIssuanceCosts", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PaymentsOfDebtIssuanceCosts"},
 	},
 	{
 		FieldName: "_netShortTermDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -1712,8 +1721,9 @@ var FieldMappings = []FieldMapping{
 			"_proceedsDebt", "_repaymentsDebt", "_repaymentsFinancedAssets", "_netShortTermDebt",
 			"_proceedsShortTermDebt", "_repaymentsShortTermDebt",
 			"_financeLeasePrincipalPayments", "_repaymentsFinancingObligations",
+			"_paymentsDebtIssuanceCosts",
 		},
-		Coefficients:     []float64{1, -1, -1, 1, 1, -1, -1, -1},
+		Coefficients:     []float64{1, -1, -1, 1, 1, -1, -1, -1, -1},
 		OptionalOperands: true,
 	},
 	// --- Bank-specific NCFDEBT sub-fields ---
