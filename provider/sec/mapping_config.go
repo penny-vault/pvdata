@@ -1149,7 +1149,14 @@ var FieldMappings = []FieldMapping{
 			"InterestExpenseNonoperating",
 		},
 		RequireIfQuarterly: []string{"OperatingIncomeLoss"},
-		XBRLTags:           []string{"InterestIncomeExpenseNet"},
+		// InterestIncomeExpenseNonoperatingNet is the post-2018 successor tag
+		// for filers (TXRH) that used InterestIncomeExpenseNet historically;
+		// both carry the same signed-net semantics so Sharadar treats them
+		// interchangeably for interest_expense.
+		XBRLTags: []string{
+			"InterestIncomeExpenseNet",
+			"InterestIncomeExpenseNonoperatingNet",
+		},
 	},
 	// InterestExpense: must come before OperatingIncome since the derived
 	// OperatingIncome formula uses it as an operand.
