@@ -984,7 +984,7 @@ var _ = Describe("Mapping Engine", func() {
 				"WeightedAverageShares":        7_433_000_000,
 				"DividendsPerBasicCommonShare": 0.83, // declared tag (wrong for cash-paid)
 			}
-			OverrideDPSFromCash(msftCashCF, fields, false, time.Time{})
+			OverrideDPSFromCash(msftCashCF, fields, false, time.Time{}, false)
 			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.75))
 		})
 
@@ -995,7 +995,7 @@ var _ = Describe("Mapping Engine", func() {
 				"WeightedAverageShares":        15_081_724_000,
 				"DividendsPerBasicCommonShare": 0.25,
 			}
-			OverrideDPSFromCash(&CompanyFacts{}, fields, false, time.Time{})
+			OverrideDPSFromCash(&CompanyFacts{}, fields, false, time.Time{}, false)
 			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.25))
 		})
 
@@ -1005,7 +1005,7 @@ var _ = Describe("Mapping Engine", func() {
 				"WeightedAverageShares":        0,
 				"DividendsPerBasicCommonShare": 0.83,
 			}
-			OverrideDPSFromCash(msftCashCF, fields, false, time.Time{})
+			OverrideDPSFromCash(msftCashCF, fields, false, time.Time{}, false)
 			Expect(fields["DividendsPerBasicCommonShare"]).To(Equal(0.83))
 		})
 	})

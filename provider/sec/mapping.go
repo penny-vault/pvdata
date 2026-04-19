@@ -726,7 +726,7 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 //   - AAPL (quarterly declarer): override is skipped entirely because
 //     PaymentsOfDividends includes dividend equivalents on RSUs that inflate
 //     cash-paid relative to the declared per-share value Sharadar uses.
-func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool, periodEnd time.Time) {
+func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool, periodEnd time.Time, isAnnualView bool) {
 	cashPaid, hasCash := fields["_absDividendsPaid"]
 	shares, hasShares := fields["WeightedAverageShares"]
 
@@ -747,10 +747,133 @@ func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool,
 		}
 	}
 
+	// WMT-style filers declare a single annual per-share amount in the
+	// Q1 10-Q and re-publish that same annual value on every subsequent
+	// 10-Q/10-K (no single-quarter context). Sharadar's MR DPS for these
+	// filers is AnnualDeclared / 4 truncated to 3 decimals for quarterly
+	// views; annual views keep the annual value.
+	if isMR && !isAnnualView && dpsIsAnnualOnly(cf) {
+		if annualDps, ok := latestAnnualDpsDeclared(cf, periodEnd); ok && annualDps > 0 {
+			truncated := math.Trunc(annualDps/4*1000) / 1000
+			fields["DividendsPerBasicCommonShare"] = truncated
+
+			return
+		}
+	}
+
 	dps := cashPaid / shares
 	// Round to 2 decimal places.
 	dps = math.Round(dps*100) / 100
 	fields["DividendsPerBasicCommonShare"] = dps
+}
+
+// dpsIsAnnualOnly reports true when CommonStockDividendsPerShareDeclared
+// facts always carry the full-year amount, even when their duration
+// looks quarterly (WMT-style: Q1 10-Q tags start=FY-start end=Q1-end
+// with the annualized value, later 10-Qs repeat the annual value on
+// YTD contexts and report a zero stub for the single-quarter context).
+// Filers that tag genuine per-quarter declared amounts (AAPL, MSFT)
+// return false because their max single-quarter value is much smaller
+// than the annual value.
+func dpsIsAnnualOnly(cf *CompanyFacts) bool {
+	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
+	if !ok {
+		return false
+	}
+
+	var (
+		annual       float64
+		hasAnnual    bool
+		maxShortVal  float64
+		hasShortFact bool
+	)
+
+	for i := range facts {
+		f := &facts[i]
+		if f.Form != "10-Q" && f.Form != "10-K" {
+			continue
+		}
+
+		if f.Start.IsZero() || f.End.IsZero() {
+			continue
+		}
+
+		days := f.End.Sub(f.Start).Hours() / 24
+		if days <= 0 {
+			continue
+		}
+
+		if days >= 300 && days <= 400 {
+			if f.Val > annual {
+				annual = f.Val
+			}
+
+			hasAnnual = true
+
+			continue
+		}
+
+		if days <= ytdThresholdDays {
+			hasShortFact = true
+
+			if f.Val > maxShortVal {
+				maxShortVal = f.Val
+			}
+		}
+	}
+
+	if !hasAnnual {
+		return false
+	}
+
+	// WMT-style: the max "quarterly-looking" declared value equals the
+	// annual amount (the Q1 10-Q tags the annual-declared value on a
+	// Q1 duration). AAPL-style: max quarterly value < annual amount.
+	if !hasShortFact {
+		return true
+	}
+
+	return maxShortVal >= annual-0.0001
+}
+
+// latestAnnualDpsDeclared returns the fiscal-year annual declared DPS
+// that applies to periodEnd. WMT-style filers publish the annual amount
+// on every 10-Q (Q1 duration, YTD durations, 10-K FY context). We look
+// for the fact whose [start, end] window contains periodEnd and return
+// the max value — the max handles "stub 0" facts that represent a
+// single quarter with no new declaration.
+func latestAnnualDpsDeclared(cf *CompanyFacts, periodEnd time.Time) (float64, bool) {
+	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
+	if !ok {
+		return 0, false
+	}
+
+	var (
+		bestVal float64
+		found   bool
+	)
+
+	for i := range facts {
+		f := &facts[i]
+		if f.Form != "10-Q" && f.Form != "10-K" {
+			continue
+		}
+
+		if f.Start.IsZero() || f.End.IsZero() {
+			continue
+		}
+
+		if f.Start.After(periodEnd) || f.End.Before(periodEnd) {
+			continue
+		}
+
+		if !found || f.Val > bestVal {
+			bestVal = f.Val
+			found = true
+		}
+	}
+
+	return bestVal, found
 }
 
 // hasQuarterlyDPSDeclarationAt returns true when the company filed a 10-Q
