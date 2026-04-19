@@ -107,6 +107,16 @@ type FieldMapping struct {
 	// file AccruedLiabilitiesCurrent.
 	ExcludeIfQuarterly []string
 
+	// ExcludeIfAnnual skips this field if ANY of the listed concepts
+	// appear on a recent 10-K filing. It captures the inverse pattern of
+	// the usual cross-form fallback: MCD breaks out its current operating
+	// lease liability only on 10-Q comparatives (the 10-K omits it), so
+	// the concept should contribute to debt_current there. Filers that
+	// already tag the concept on their 10-K (AAPL, NVDA) have Sharadar
+	// classifying it outside debt_current, and this gate keeps the field
+	// off their debt_current computation.
+	ExcludeIfAnnual []string
+
 	// RequireIfQuarterly gates resolution on a sentinel concept: the
 	// field is only resolved when ANY of the listed concepts appear on
 	// a recent 10-Q filing. This is used for cash flow items that some
@@ -505,20 +515,44 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "CommercialPaperDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		// RequireQuarterly excludes MCD-style filers that tag CommercialPaper
+		// only on the annual 10-K (their 10-Q comparatives re-tag the same
+		// balance-sheet line under ShortTermBorrowings=0). AAPL keeps filing
+		// CommercialPaper quarterly, so the gate leaves its debt_current
+		// reconstruction unchanged.
+		RequireQuarterly:   true,
 		RequireIfQuarterly: []string{"AssetsCurrent"},
 		XBRLTags:           []string{"CommercialPaper"},
 	},
+	// Current operating lease liabilities are included in debt_current only
+	// for filers whose 10-K omits the concept (MCD-style). MCD breaks out
+	// "Current portion of operating lease liability" on its 10-Q
+	// comparatives but not on the original 10-K — Sharadar rolls that
+	// into debt_current. Filers that tag OperatingLeaseLiabilityCurrent on
+	// their 10-K (NVDA, AAPL, AMZN) classify it outside debt_current in
+	// Sharadar, so ExcludeIfAnnual keeps it off their sum.
+	// AllowCrossFormFallback lets the 10-Q value populate the AR/MR
+	// resolution for the 10-K period end.
+	{
+		FieldName: "_operatingLeaseLiabilityCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:       true,
+		RequireIfQuarterly:     []string{"AssetsCurrent"},
+		ExcludeIfAnnual:        []string{"OperatingLeaseLiabilityCurrent"},
+		AllowCrossFormFallback: true,
+		XBRLTags:               []string{"OperatingLeaseLiabilityCurrent"},
+	},
 	// DebtCurrent = ShortTermDebt + LongTermDebtCurrentMaturities +
-	// CommercialPaperDebt. Sharadar includes all forms of current debt
-	// (bonds, commercial paper, notes payable, credit facilities). Apple
-	// tags LongTermDebtCurrent and CommercialPaper separately; the sum
-	// captures both. For banks (no AssetsCurrent), all components are
-	// gated off so DebtCurrent = 0.
+	// CommercialPaperDebt + current operating lease liability. Sharadar
+	// includes all forms of current debt (bonds, commercial paper, notes
+	// payable, credit facilities, current lease liability). Apple tags
+	// LongTermDebtCurrent and CommercialPaper separately; the sum captures
+	// both. For banks (no AssetsCurrent), all components are gated off so
+	// DebtCurrent = 0.
 	{
 		FieldName: "DebtCurrent", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
 		FallbackTags:     []string{"DebtCurrent"},
 		Op:               OpAdd,
-		Operands:         []string{"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt"},
+		Operands:         []string{"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt", "_operatingLeaseLiabilityCurrent"},
 		OptionalOperands: true,
 	},
 	{
@@ -1355,21 +1389,21 @@ var FieldMappings = []FieldMapping{
 	// _proceedsJVDivest and _proceedsEquityMethodReturn are inflows.
 	{
 		FieldName: "_paymentsJVAcquire", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"PaymentsToAcquireInterestInJointVenture"},
+		XBRLTags: []string{"PaymentsToAcquireInterestInJointVenture"},
 	},
 	{
 		FieldName: "_proceedsJVDivest", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"ProceedsFromDivestitureOfInterestInJointVenture"},
+		XBRLTags: []string{"ProceedsFromDivestitureOfInterestInJointVenture"},
 	},
 	{
 		FieldName: "_proceedsEquityMethodReturn", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"ProceedsFromEquityMethodInvestmentDividendsOrDistributionsReturnOfCapital"},
+		XBRLTags: []string{"ProceedsFromEquityMethodInvestmentDividendsOrDistributionsReturnOfCapital"},
 	},
 	// NetCashFlowBusiness = -acquisitions - jv_payments + divestitures + equity_method_returns.
 	// Inflows (divestitures, returns) are positive; outflows are negative.
 	{
 		FieldName: "NetCashFlowBusiness", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:       OpLinearCombination,
+		Op: OpLinearCombination,
 		Operands: []string{
 			"_paymentsBusinessAcquire",
 			"_paymentsJVAcquire",

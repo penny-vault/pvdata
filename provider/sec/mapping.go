@@ -390,6 +390,19 @@ func hasNonQuarterlyDPSDeclarationCadence(cf *CompanyFacts) bool {
 // positives from tags that were filed on 10-Q years ago but have since been
 // discontinued (e.g. AAPL's AccruedIncomeTaxesCurrent, last on 10-Q in 2010).
 func conceptFiledQuarterly(cf *CompanyFacts, tags []string) bool {
+	return conceptFiledOnForm(cf, tags, "10-Q")
+}
+
+// conceptFiledAnnually is the 10-K counterpart of conceptFiledQuarterly: it
+// returns true when the company reports any of the given concepts on a 10-K
+// within the last 3 years. Used by ExcludeIfAnnual to distinguish filers
+// whose 10-K tags a concept (standard presentation) from filers whose 10-K
+// omits it and only tags the 10-Q comparatives (MCD-style).
+func conceptFiledAnnually(cf *CompanyFacts, tags []string) bool {
+	return conceptFiledOnForm(cf, tags, "10-K")
+}
+
+func conceptFiledOnForm(cf *CompanyFacts, tags []string, form string) bool {
 	for _, tag := range tags {
 		facts, ok := cf.Facts[tag]
 		if !ok {
@@ -397,7 +410,7 @@ func conceptFiledQuarterly(cf *CompanyFacts, tags []string) bool {
 		}
 
 		for i := range facts {
-			if facts[i].Form == "10-Q" && !facts[i].End.IsZero() {
+			if facts[i].Form == form && !facts[i].End.IsZero() {
 				// Consider only facts from the last ~3 years
 				age := time.Since(facts[i].End)
 				if age < 3*365*24*time.Hour {
@@ -429,6 +442,14 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		// filed on 10-Q, indicating the field's tags are sub-components
 		// of a broader line item rather than separate balance sheet lines.
 		if len(m.ExcludeIfQuarterly) > 0 && conceptFiledQuarterly(cf, m.ExcludeIfQuarterly) {
+			continue
+		}
+
+		// ExcludeIfAnnual: skip this field when a sentinel concept is
+		// filed on 10-K. Used to gate the MCD-style op-lease-current
+		// operand of debt_current — include it only when the 10-K omits
+		// the concept and the 10-Q comparatives are the sole source.
+		if len(m.ExcludeIfAnnual) > 0 && conceptFiledAnnually(cf, m.ExcludeIfAnnual) {
 			continue
 		}
 

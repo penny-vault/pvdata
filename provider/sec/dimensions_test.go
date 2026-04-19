@@ -708,6 +708,7 @@ var _ = Describe("Dimensions", func() {
 				"_accruedIncomeTaxesNoncurrent":        true,
 				"_longTermDebtNoncurrent":              true,
 				"_operatingLeaseLiabilityNoncurrent":   true,
+				"_operatingLeaseLiabilityCurrent":      true,
 				"_paymentsInvestEquity":                true,
 				"_proceedsInvestEquity":                true,
 				"_paymentsInvestShortTerm":             true,
