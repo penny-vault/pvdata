@@ -244,7 +244,53 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 		}
 	}
 
-	// Second pass: recompute derived metric fields from the Q4 values.
+	// Second pass: recompute derived StmtFlow fields from Q4 operands when
+	// the operand recomputation agrees with the annual-sum value to within
+	// rounding drift. The initial annualVal - sum path subtracts individually
+	// rounded quarterly values (Q4 CapitalExpenditure = -2653 - (-1937) = -716
+	// for MCD) and loses precision compared to operand-level cumulative
+	// subtraction (_capexGross Q4 = 2775 - 1968 = 807; _proceedsPPESale Q4 =
+	// 122 - 32 = 90; CapitalExpenditure = -807 + 90 = -717, matching Sharadar).
+	//
+	// A 0.5% relative tolerance keeps this to rounding drift only. Larger
+	// disagreements (e.g. an annual value resolved via a tag the formula
+	// doesn't capture, or operands that are optional and not filed every
+	// quarter) fall back to the annual-sum answer.
+	for _, m := range FieldMappings {
+		if m.Type != MappingDerived || m.StatementType != StmtFlow {
+			continue
+		}
+
+		if len(m.Operands) == 0 {
+			continue
+		}
+
+		// Restrict to additive formulas. Division/multiplication (EPS, per-share
+		// metrics) are intentionally left to the annual-sum path so Q4 operand
+		// rounding doesn't amplify through a ratio.
+		switch m.Op {
+		case OpAdd, OpSubtract, OpLinearCombination:
+		default:
+			continue
+		}
+
+		val, ok := computeDerived(m, result)
+		if !ok {
+			continue
+		}
+
+		existing, hasExisting := result[m.FieldName]
+		if hasExisting {
+			scale := math.Max(math.Abs(val), math.Abs(existing))
+			if scale > 0 && math.Abs(val-existing)/scale > 0.005 {
+				continue
+			}
+		}
+
+		result[m.FieldName] = val
+	}
+
+	// Third pass: recompute derived metric fields from the Q4 values.
 	for _, m := range FieldMappings {
 		if m.Type != MappingDerived || m.StatementType != StmtMetric {
 			continue
