@@ -116,6 +116,16 @@ type FieldMapping struct {
 	// file AccruedLiabilitiesCurrent.
 	ExcludeIfQuarterly []string
 
+	// ExcludeIfQuarterlyUnless counteracts ExcludeIfQuarterly: when the
+	// ExcludeIfQuarterly sentinel fires, the field is still resolved if
+	// ANY of the concepts listed here are ALSO filed on a recent 10-Q.
+	// Example: NVDA bundles tax liabilities into AccruedLiabilitiesCurrent
+	// (ExcludeIfQuarterly triggers, tax_liab=0); WMT also files
+	// AccruedLiabilitiesCurrent but breaks out DeferredIncomeTaxesAndOther
+	// separately (the unless sentinel) — so TaxLiabilities still resolves
+	// for WMT via the retailer operands.
+	ExcludeIfQuarterlyUnless []string
+
 	// ExcludeIfAnnual skips this field if ANY of the listed concepts
 	// appear on a recent 10-K filing. It captures the inverse pattern of
 	// the usual cross-form fallback: MCD breaks out its current operating
@@ -510,6 +520,10 @@ var FieldMappings = []FieldMapping{
 	// --- Internal sub-fields for TaxLiabilities derivation ---
 	{
 		FieldName: "_deferredTaxLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		// WMT-style filers that report DeferredIncomeTaxesAndOther as a
+		// combined quarterly line use that tag instead; counting the
+		// 10-K note-level DeferredTaxLiabilities on top would double-count.
+		ExcludeIfQuarterly: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
 		XBRLTags: []string{
 			"DeferredTaxLiabilities",
 			"DeferredIncomeTaxLiabilitiesNet",
@@ -540,34 +554,39 @@ var FieldMappings = []FieldMapping{
 		RequireQuarterly: true,
 		XBRLTags:         []string{"AccrualForTaxesOtherThanIncomeTaxesCurrent"},
 	},
+	// Retailer-variant sub-field: WMT-style filers report "Deferred income
+	// taxes and other" as a single non-current line. Sharadar includes that
+	// combined balance in tax_liabilities. RequireIfQuarterly on the
+	// combined tag keeps this operand inert for filers that don't match.
+	// The existing _accruedIncomeTaxesCurrent operand already picks up
+	// AccruedIncomeTaxesCurrent for WMT (WMT files it quarterly) so no
+	// additional retailer operand is needed on the current side.
+	{
+		FieldName: "_retailerDeferredTaxAndOtherNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireIfQuarterly: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+		XBRLTags:           []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+	},
 	{
 		FieldName: "TaxLiabilities", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		// When AccruedLiabilitiesCurrent is filed on 10-Q, the company bundles
-		// tax liabilities into broader accrued/other line items (NVDA). Only
-		// resolve when tax items are separate balance sheet lines (MSFT).
+		// When AccruedLiabilitiesCurrent is filed on 10-Q, the company
+		// bundles tax liabilities into broader accrued/other line items
+		// (NVDA) — skip unless the filer also reports the combined
+		// "Deferred income taxes and other" non-current line, in which
+		// case the retailer operand carries the Sharadar-compatible value
+		// and the standard _accruedIncomeTaxesCurrent operand supplies
+		// the current-side accrual.
 		// IncomeTaxesPrincipallyDeferred is a BRK/B extension tag for the
 		// consolidated deferred tax liability (filed quarterly, unlike the
 		// standard DeferredIncomeTaxLiabilitiesNet which BRK only files on 10-K).
-		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
-		FallbackTags:       []string{"IncomeTaxesPrincipallyDeferred"},
-		Op:                 OpAdd,
-		Operands:           []string{"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent", "_otherTaxesPayableCurrent"},
-		OptionalOperands:   true,
-	},
-	// Retailer variant: WMT-style filers (which file AccruedLiabilitiesCurrent
-	// and thus trigger the standard TaxLiabilities ExcludeIfQuarterly gate)
-	// still report a distinct quarterly "Deferred income taxes and other"
-	// non-current line. Sharadar treats that combined value as tax_liabilities
-	// for these filers. RequireIfQuarterly on the combined tag keeps the rule
-	// tight: filers that break the components out separately (MSFT, NVDA) do
-	// not match and keep the standard entry's result. This mapping appears
-	// after the standard TaxLiabilities entry; when both are gated off the
-	// field stays unset, and when the retailer entry resolves it overwrites
-	// any zero from the standard path.
-	{
-		FieldName: "TaxLiabilities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		RequireIfQuarterly: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
-		XBRLTags:           []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+		ExcludeIfQuarterly:       []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterlyUnless: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+		FallbackTags:             []string{"IncomeTaxesPrincipallyDeferred"},
+		Op:                       OpAdd,
+		Operands: []string{
+			"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent", "_otherTaxesPayableCurrent",
+			"_retailerDeferredTaxAndOtherNoncurrent",
+		},
+		OptionalOperands: true,
 	},
 	// Debt sub-components are gated on AssetsCurrent: companies that classify
 	// assets as current/non-current (non-banks) also classify debt that way.
