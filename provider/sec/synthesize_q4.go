@@ -134,7 +134,30 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 		case m.StatementType == StmtFlow:
 			annualVal, hasAnnual := annual[m.FieldName]
 			if !hasAnnual {
-				continue
+				// Some filers report a concept only on 10-Q comparatives,
+				// never on the 10-K annual (WMT tags
+				// ProceedsFromDivestitureOfBusinesses on Q2/Q3 10-Qs but
+				// not on the 10-K). If any preceding quarter carried a
+				// value, synthesize Q4 as 0 - sum so the 4-quarter total
+				// equals the implied zero annual. Derived fields that
+				// reference this operand need the Q4 value to offset the
+				// prior-quarter cross-flow.
+				hasQuarterlyVal := false
+
+				for _, q := range preceding {
+					emit := emitFn(q, m.FieldName)
+					if _, ok := emit[m.FieldName]; ok {
+						hasQuarterlyVal = true
+
+						break
+					}
+				}
+
+				if !hasQuarterlyVal {
+					continue
+				}
+
+				annualVal = 0
 			}
 
 			// Prefer the last preceding quarter's YTD cumulative value for the

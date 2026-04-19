@@ -1703,6 +1703,10 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsEquityMethodReturn", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"ProceedsFromEquityMethodInvestmentDividendsOrDistributionsReturnOfCapital"},
 	},
+	{
+		FieldName: "_proceedsDivestBusinesses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ProceedsFromDivestitureOfBusinesses"},
+	},
 	// MCD-style filers that don't tag PaymentsToAcquireBusinesses* at all
 	// report their franchisee / real-estate acquisitions under the
 	// "other productive assets" pair instead. Sharadar folds that pair into
@@ -1746,10 +1750,11 @@ var FieldMappings = []FieldMapping{
 			"_proceedsJVDivest",
 			"_proceedsEquityMethodReturn",
 			"_proceedsBusinessEquityMethod",
+			"_proceedsDivestBusinesses",
 			"_paymentsOtherProductiveAssets",
 			"_proceedsOtherProductiveAssets",
 		},
-		Coefficients:     []float64{-1, -1, 1, 1, 1, -1, 1},
+		Coefficients:     []float64{-1, -1, 1, 1, 1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---
