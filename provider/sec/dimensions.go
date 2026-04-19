@@ -590,6 +590,15 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 	// after that 10-K date. Including post-10-K 10-Qs ensures concepts that
 	// the filer tags only on 10-Q (e.g. MCD's OperatingLeaseLiability*) are
 	// not mis-classified as stale.
+	//
+	// For flow-style concepts (cash flow lines, income statement items),
+	// also include any 10-Q filed within the 18 months before the latest
+	// 10-K. WMT-style filers report non-recurring flows like
+	// ProceedsFromDivestitureOfBusinesses only in the quarters when the
+	// underlying activity happens — treating those as stale erases the
+	// quarterly value from MR synthesis even though the concept is still
+	// a valid active disclosure.
+	flowLookback := latest10KFiled.AddDate(-1, -6, 0)
 	activeConcepts := make(map[string]bool)
 
 	for concept, facts := range cf.Facts {
@@ -602,6 +611,16 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 			}
 
 			if f.Form == "10-Q" && !f.Filed.Before(latest10KFiled) {
+				activeConcepts[concept] = true
+
+				break
+			}
+
+			// Widened window for flow concepts: any 10-Q with a start/end
+			// duration (distinguishes flow from point-in-time) filed
+			// within 18 months before the latest 10-K counts as active.
+			if f.Form == "10-Q" && !f.Start.IsZero() && !f.End.IsZero() &&
+				f.End.After(f.Start) && !f.Filed.Before(flowLookback) {
 				activeConcepts[concept] = true
 
 				break
