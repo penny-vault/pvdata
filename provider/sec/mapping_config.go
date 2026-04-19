@@ -711,28 +711,69 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_finLeaseNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"FinanceLeaseLiabilityNoncurrent"},
+		// RequireQuarterly keeps MCD's 10-K-only finance lease disclosure
+		// out of the noncurrent liabilities sum. AMZN tags
+		// FinanceLeaseLiabilityNoncurrent on every 10-Q (separate BS line)
+		// so its value continues to feed the sum.
+		RequireQuarterly: true,
+		XBRLTags:         []string{"FinanceLeaseLiabilityNoncurrent"},
 	},
 	{
 		FieldName: "_otherLiabilitiesNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{"OtherLiabilitiesNoncurrent"},
 	},
+	// MCD breaks out deferred revenue, accrued income taxes, and deferred
+	// income taxes as standalone non-current balance sheet lines without
+	// filing the consolidated us-gaap:Liabilities or LiabilitiesNoncurrent
+	// roll-up tags. ExcludeIfAnnual restricts these operands to that
+	// MCD-style pattern: filers that file the Liabilities/LiabilitiesNoncurrent
+	// roll-up directly (LLY, MSFT, AAPL) already resolve _liabilitiesNoncurrentRaw
+	// via the FallbackTag path and would double-count if these operands
+	// contributed to the formula recompute triggered by the MR merge step.
+	{
+		FieldName: "_deferredRevenueNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		ExcludeIfAnnual:  []string{"Liabilities", "LiabilitiesNoncurrent"},
+		XBRLTags:         []string{"DeferredRevenueNoncurrent"},
+	},
+	{
+		FieldName: "_accruedIncomeTaxesNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		ExcludeIfAnnual:  []string{"Liabilities", "LiabilitiesNoncurrent"},
+		XBRLTags:         []string{"AccruedIncomeTaxesNoncurrent"},
+	},
+	{
+		FieldName: "_deferredTaxLiabilitiesNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly: true,
+		ExcludeIfAnnual:  []string{"Liabilities", "LiabilitiesNoncurrent"},
+		XBRLTags: []string{
+			"DeferredTaxLiabilitiesNoncurrent",
+			"DeferredIncomeTaxLiabilitiesNet",
+		},
+	},
 	// _liabilitiesNoncurrentRaw resolves from the direct LiabilitiesNoncurrent
 	// tag when available; otherwise falls back to summing the individual
 	// non-current line items. Used both for TotalLiabilities synthesis
 	// (when the company doesn't file the consolidated Liabilities tag, e.g.
-	// LLY, AMZN) and as the fallback for LiabilitiesNonCurrent. Filers that
-	// file the consolidated us-gaap:Liabilities tag (MSFT, AAPL) resolve
+	// LLY, AMZN, MCD) and as the fallback for LiabilitiesNonCurrent. Filers
+	// that file the consolidated us-gaap:Liabilities tag (MSFT, AAPL) resolve
 	// TotalLiabilities via that tag and never consult this field's sum.
-	// ContractWithCustomerLiabilityNoncurrent/DeferredRevenueNoncurrent are
-	// intentionally NOT operands here: AMZN-style filers roll the non-current
-	// contract liability into OtherLiabilitiesNoncurrent, so adding it would
-	// double-count.
+	// ContractWithCustomerLiabilityNoncurrent is intentionally NOT an operand
+	// here: AMZN-style filers roll the non-current contract liability into
+	// OtherLiabilitiesNoncurrent, so adding it would double-count.
 	{
 		FieldName: "_liabilitiesNoncurrentRaw", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		FallbackTags:     []string{"LiabilitiesNoncurrent"},
-		Op:               OpAdd,
-		Operands:         []string{"_ltDebtNoncurrentForLiab", "_opLeaseNoncurrentForLiab", "_finLeaseNoncurrentForLiab", "_otherLiabilitiesNoncurrentForLiab"},
+		FallbackTags: []string{"LiabilitiesNoncurrent"},
+		Op:           OpAdd,
+		Operands: []string{
+			"_ltDebtNoncurrentForLiab",
+			"_opLeaseNoncurrentForLiab",
+			"_finLeaseNoncurrentForLiab",
+			"_otherLiabilitiesNoncurrentForLiab",
+			"_deferredRevenueNoncurrentForLiab",
+			"_accruedIncomeTaxesNoncurrentForLiab",
+			"_deferredTaxLiabilitiesNoncurrentForLiab",
+		},
 		OptionalOperands: true,
 	},
 	// TotalLiabilities: prefer the consolidated Liabilities tag; otherwise sum
