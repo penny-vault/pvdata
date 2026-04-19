@@ -254,6 +254,10 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"AccountsReceivableNetCurrent",
 			"AccountsReceivableNet",
+			// Franchise-heavy filers (e.g. MCD) report trade, notes, and loan
+			// receivables on a single line. Sharadar includes the combined
+			// balance in its receivables total.
+			"AccountsNotesAndLoansReceivableNetCurrent",
 		},
 	},
 	{
