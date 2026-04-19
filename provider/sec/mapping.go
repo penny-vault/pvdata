@@ -1074,6 +1074,20 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	common, hasC := fields["NetCashFlowCommon"]
 	dividend, hasD := fields["NetCashFlowDividend"]
 
+	// WMT-style filers bundle accrued-liabilities-current but break debt
+	// cash flows out into specific XBRL tags. When the filer reports a
+	// distinct quarterly ProceedsFromRepaymentsOfShortTermDebt (net-style
+	// revolver/commercial-paper activity), Sharadar's NCFDEBT follows the
+	// direct formula rather than the financing-section residual (which
+	// sweeps in "other, net" items Sharadar doesn't classify as debt).
+	// NVDA-style filers bundle into Other/Accrued and don't file this
+	// distinctive net-short-term-debt tag, so they continue using the
+	// residual path.
+	if bundlesFinancing && !isBank && !isInsuranceConglomerate &&
+		conceptFiledQuarterly(cf, []string{"ProceedsFromRepaymentsOfShortTermDebt"}) {
+		return
+	}
+
 	if hasF && hasC && hasD {
 		fields["NetCashFlowDebt"] = financing - common - dividend
 	}
