@@ -113,8 +113,14 @@ func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInf
 	}
 	defer conn.Release()
 
+	// Only active assets: inactive rows (e.g. delisted or superseded FIGIs
+	// that still carry the same CIK as a live listing — MCD has
+	// BBG000BNSZP1 active alongside inactive BBG000C9R4J8) would otherwise
+	// let Go map iteration order pick the dead FIGI for the CIK slot,
+	// causing SEC observations to be written under a FIGI Sharadar
+	// doesn't track and showing up as "missing in sharadar" diffs.
 	rows, err := conn.Query(ctx,
-		`SELECT ticker, composite_figi, cik FROM assets WHERE cik IS NOT NULL AND cik != ''`)
+		`SELECT ticker, composite_figi, cik FROM assets WHERE cik IS NOT NULL AND cik != '' AND active = TRUE`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("querying assets: %w", err)
 	}
