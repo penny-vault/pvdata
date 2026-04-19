@@ -1475,3 +1475,55 @@ func deriveCostOfRevenueForSegmentFiler(cf *CompanyFacts, fields map[string]floa
 	fields["GrossProfit"] = grossProfit
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
+
+// deriveCostOfRevenueForRestaurantFiler handles TXRH-style restaurant filers
+// whose income statement breaks restaurant operating costs into sub-lines
+// (Food/Labor/Rent/Other) and separately reports D&A, Pre-opening, and
+// Impairment as their own expense lines. Sharadar's split:
+//
+//	operating_expenses = G&A + D&A + Pre-opening + Impairment + Rent
+//	cost_of_revenue    = CostsAndExpenses - operating_expenses
+//
+// The gate is presence of PreOpeningCosts on a recent 10-Q — a concept
+// filed by restaurants/retailers/hotels but none of the regression tickers
+// (AAPL, JPM, MSFT, NVDA, GS, LLY, UNH, AMZN, MCD, BRK/B).
+//
+// Rent is the company-specific extension concept that captures the "Rent"
+// line on the income statement (e.g. txrh:RentAndLeaseExpenseIncludedInCostOfRevenue).
+// When the rent extension does not resolve for a period, the fix is skipped
+// to avoid over-shifting costs; the previously-derived CoR/OpEx remain.
+func deriveCostOfRevenueForRestaurantFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"PreOpeningCosts"}) {
+		return
+	}
+
+	costsAndExpenses, okCE := fields["_costsAndExpensesRaw"]
+	revenues, okRev := fields["Revenues"]
+
+	if !okCE || !okRev || revenues == 0 {
+		return
+	}
+
+	rent, okRent := fields["_rentInCostOfRevenue"]
+	if !okRent {
+		return
+	}
+
+	gna := fields["_generalAndAdministrativeExpense"]
+	depAmor := fields["_depreciationDepletionAndAmortization"]
+	preOpen := fields["_preOpeningCosts"]
+	impair := fields["_restaurantImpairmentProvisions"]
+
+	opEx := gna + depAmor + preOpen + impair + rent
+	costOfRevenue := costsAndExpenses - opEx
+	if costOfRevenue < 0 {
+		return
+	}
+
+	grossProfit := revenues - costOfRevenue
+
+	fields["CostOfRevenue"] = costOfRevenue
+	fields["OperatingExpenses"] = opEx
+	fields["GrossProfit"] = grossProfit
+	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
+}

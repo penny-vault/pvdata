@@ -991,6 +991,40 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_sgaBroad", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"SellingGeneralAndAdministrativeExpense"},
 	},
+	// Sub-fields for deriveCostOfRevenueForRestaurantFiler (TXRH-style).
+	// Restaurant filers that report D&A, PreOpening, and Impairment as
+	// separate income-statement lines (not embedded in CoR) and tag rent
+	// with a company-specific extension concept. Sharadar treats all of
+	// these — plus G&A — as OpEx and leaves only food/labor/other-operating
+	// in CoR.
+	{
+		FieldName: "_preOpeningCosts", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"PreOpeningCosts"},
+	},
+	{
+		FieldName: "_restaurantImpairmentProvisions", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"RestructuringSettlementAndImpairmentProvisions",
+			"AssetImpairmentCharges",
+			"ImpairmentOfLongLivedAssetsHeldForUse",
+		},
+	},
+	{
+		FieldName: "_depreciationDepletionAndAmortization", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"DepreciationDepletionAndAmortization"},
+	},
+	// _rentInCostOfRevenue: the "Rent" line on restaurant income statements.
+	// Companies tag this with an extension concept (e.g. txrh:
+	// RentAndLeaseExpenseIncludedInCostOfRevenue). EnrichWithExtensionFacts
+	// pulls extension facts from inline XBRL filings under the bare local
+	// name, so these match the namespaced filings without the prefix.
+	{
+		FieldName: "_rentInCostOfRevenue", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"RentAndLeaseExpenseIncludedInCostOfRevenue",
+			"RentExpenseIncludedInCostOfRevenue",
+		},
+	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
 	// CostOfRevenue; with CostOfRevenue absent (treated as 0), the derived

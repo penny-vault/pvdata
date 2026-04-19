@@ -1115,6 +1115,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			deriveCostOfRevenueBottomUp(a.mrEmit)
 			deriveCostOfRevenueForSegmentFiler(cf, a.arEmit)
 			deriveCostOfRevenueForSegmentFiler(cf, a.mrEmit)
+			deriveCostOfRevenueForRestaurantFiler(cf, a.arEmit)
+			deriveCostOfRevenueForRestaurantFiler(cf, a.mrEmit)
 		}
 
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
@@ -1243,6 +1245,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			deriveCostOfRevenueBottomUp(q.mrEmit)
 			deriveCostOfRevenueForSegmentFiler(cf, q.arEmit)
 			deriveCostOfRevenueForSegmentFiler(cf, q.mrEmit)
+			deriveCostOfRevenueForRestaurantFiler(cf, q.arEmit)
+			deriveCostOfRevenueForRestaurantFiler(cf, q.mrEmit)
 		}
 
 		// ARQ
