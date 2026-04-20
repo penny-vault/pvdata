@@ -529,6 +529,18 @@ var FieldMappings = []FieldMapping{
 			"IndefiniteLivedTrademarks",
 		},
 	},
+	// Separate "other intangible assets, net" balance sheet line. KO reports
+	// this alongside IndefiniteLivedTrademarks on 10-Q (it rolled off by the
+	// 10-K filing, so the effect is limited to quarterly observations). Gated
+	// ExcludeIfQuarterly on the rollup tag IntangibleAssetsNetExcludingGoodwill
+	// so filers that already roll Other into the broader line don't double-
+	// count.
+	{
+		FieldName: "_otherIntangiblesAdditional", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:   true,
+		ExcludeIfQuarterly: []string{"IntangibleAssetsNetExcludingGoodwill", "CustomerAndOtherPayables"},
+		XBRLTags:           []string{"OtherIntangibleAssetsNet"},
+	},
 	// Intangibles: Sharadar defines this as "all intangible assets and
 	// goodwill." Use the combined tag if available; otherwise sum Goodwill +
 	// other intangibles. MSFT reports Goodwill and FiniteLivedIntangibleAssetsNet
@@ -542,7 +554,7 @@ var FieldMappings = []FieldMapping{
 			"GoodwillServicingAssetsatFairValueandOtherIntangibleAssets", // JPM 10-K extension (different casing)
 		},
 		Op:               OpAdd,
-		Operands:         []string{"_goodwill", "_intangiblesExGoodwill"},
+		Operands:         []string{"_goodwill", "_intangiblesExGoodwill", "_otherIntangiblesAdditional"},
 		OptionalOperands: true,
 	},
 	// TaxAssets: prefer DeferredIncomeTaxAssetsNet (Sharadar's "deferred tax
