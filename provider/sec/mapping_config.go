@@ -229,8 +229,26 @@ var FieldMappings = []FieldMapping{
 			"MarketableSecurities",
 		},
 	},
+	// _equityMethodInvestmentsForKoPattern: KO-pattern filers that report
+	// their equity-method affiliate holdings (bottler investments, ~$20B)
+	// as a separate balance-sheet line under EquityMethodInvestments and
+	// file the unqualified MarketableSecurities tag for current investments.
+	// Sharadar rolls this balance into investments_non_current for those
+	// filers but NOT for AMZN-style filers that file EquityMethodInvestments
+	// only as a footnote disclosure (no standalone balance-sheet line).
+	// Gated on MarketableSecurities (unqualified) which AMZN does not file
+	// (AMZN uses MarketableSecuritiesCurrent instead).
 	{
-		FieldName: "InvestmentsNonCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "_equityMethodInvestmentsForKoPattern",
+		Type:     MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireIfQuarterly: []string{"MarketableSecurities"},
+		XBRLTags:           []string{"EquityMethodInvestments"},
+	},
+	{
+		FieldName:     "InvestmentsNonCurrent",
+		Type:          MappingDerived,
+		StatementType: StmtPointInTime,
+		ValueType:     "int64",
 		// Banks (Deposits) and investment banks / broker-dealers
 		// (CustomerAndOtherPayables) report investment portfolios under
 		// broker-dealer-specific tags that Sharadar does not classify as
@@ -242,7 +260,7 @@ var FieldMappings = []FieldMapping{
 			"Deposits", "DepositsDomestic", "DepositsTotal",
 			"CustomerAndOtherPayables",
 		},
-		XBRLTags: []string{
+		FallbackTags: []string{
 			"LongTermInvestments",
 			"MarketableSecuritiesNoncurrent",
 			"AvailableForSaleSecuritiesDebtSecuritiesNoncurrent",
@@ -250,6 +268,9 @@ var FieldMappings = []FieldMapping{
 			// venture/affiliate holdings) rather than the LongTerm* tags.
 			"InvestmentsInAffiliatesSubsidiariesAssociatesAndJointVentures",
 		},
+		Op:               OpAdd,
+		Operands:         []string{"_equityMethodInvestmentsForKoPattern"},
+		OptionalOperands: true,
 	},
 	// Insurance/conglomerate investment sub-fields. These companies (BRK/B)
 	// hold equity securities, debt securities, and equity method investments
@@ -274,10 +295,14 @@ var FieldMappings = []FieldMapping{
 		// JV holdings and the latter is already summed into InvestmentsNonCurrent
 		// above. Counting both double-counts at the annual/Q4 row where
 		// EquityMethodInvestments (annual-only for CALM) appears.
+		// MarketableSecurities is KO's current-investments tag and also
+		// gates _equityMethodInvestmentsForKoPattern on InvestmentsNonCurrent
+		// below; exclude here to avoid double-counting the balance.
 		ExcludeIfQuarterly: []string{
 			"ShortTermInvestments",
 			"MarketableSecuritiesCurrent",
 			"InvestmentsInAffiliatesSubsidiariesAssociatesAndJointVentures",
+			"MarketableSecurities",
 		},
 		XBRLTags: []string{"EquityMethodInvestments"},
 	},
@@ -287,7 +312,11 @@ var FieldMappings = []FieldMapping{
 		// filed (CALM pattern): the generic tag and its -Current sibling report
 		// the same value (no non-current AFS debt), so counting both once via
 		// InvestmentsCurrent and again via _debtSecurities doubles the total.
-		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent"},
+		// MarketableSecurities (KO pattern): the unqualified tag rolls up
+		// debt and equity marketable securities into a single figure that's
+		// already counted via InvestmentsCurrent. Counting the AFS debt
+		// subset on top would double-count.
+		ExcludeIfQuarterly: []string{"ShortTermInvestments", "MarketableSecuritiesCurrent", "AvailableForSaleSecuritiesDebtSecuritiesCurrent", "MarketableSecurities"},
 		XBRLTags:           []string{"AvailableForSaleSecuritiesDebtSecurities"},
 	},
 	{
