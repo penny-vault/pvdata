@@ -1394,12 +1394,16 @@ var FieldMappings = []FieldMapping{
 			"InterestExpenseNonoperating",
 		},
 		RequireIfQuarterly: []string{"OperatingIncomeLoss"},
-		// InterestIncomeExpenseNonoperatingNet is the post-2018 successor tag
-		// for filers (TXRH) that used InterestIncomeExpenseNet historically;
-		// both carry the same signed-net semantics so Sharadar treats them
-		// interchangeably for interest_expense.
+		// Use only InterestIncomeExpenseNonoperatingNet (the post-2018
+		// non-operating successor tag). CALM and post-2018 TXRH file this
+		// one with signed semantics (positive = net expense, negative = net
+		// income), which Sharadar treats as interest_expense directly.
+		// InterestIncomeExpenseNet (the operating-level variant, filed by
+		// cash-rich filers like CELH that have net interest income rather
+		// than expense) is intentionally excluded because Sharadar reports
+		// interest_expense = 0 for those filers rather than propagating the
+		// signed net income as a negative interest expense.
 		XBRLTags: []string{
-			"InterestIncomeExpenseNet",
 			"InterestIncomeExpenseNonoperatingNet",
 		},
 	},
