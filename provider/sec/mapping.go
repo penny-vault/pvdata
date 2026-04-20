@@ -536,8 +536,124 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 
 	overrideForEmbeddedCurrentDebt(cf, resolved, periodEnd, formType)
 	overrideSGAForSmallOtherSGA(cf, resolved, periodEnd, formType)
+	overrideIntangiblesForSplitComponents(cf, resolved, periodEnd, formType)
 
 	return resolved
+}
+
+// overrideIntangiblesForSplitComponents recomputes Intangibles from the
+// component tags (Goodwill + IntangibleAssetsNetExcludingGoodwill OR
+// FiniteLivedIntangibleAssetsNet + IndefiniteLivedIntangibleAssetsExcludingGoodwill
+// + IndefiniteLivedTrademarks) when the component sum exceeds what the
+// default formula/fallback produced. Two patterns motivate this:
+//
+//  1. CELH files IntangibleAssetsNetIncludingGoodwill as its fallback-preferred
+//     rollup, but the tag value is smaller than Goodwill + components (the
+//     company essentially mis-tags the rollup as goodwill alone).
+//  2. For periods where IntangibleAssetsNetExcludingGoodwill (the finite+indefinite
+//     rollup) is not filed but FiniteLivedIntangibleAssetsNet AND
+//     IndefiniteLivedIntangibleAssetsExcludingGoodwill are filed separately,
+//     the priority-based sub-field resolution picks only one, missing the
+//     other. Summing both recovers the true ex-goodwill intangibles.
+//
+// Only component tags the filer reports on a 10-Q are eligible — mirroring
+// _intangiblesExGoodwill's RequireQuarterly gate. AMZN discloses ex-goodwill
+// intangibles only in 10-K footnotes (not on the face of the balance sheet),
+// and Sharadar excludes them; the override must do the same.
+//
+// The override never shrinks Intangibles — it only increases when the
+// component sum is larger than the current value. This preserves FallbackTag-
+// based resolutions (JPM extension tag captures MSR that the us-gaap
+// components miss).
+func overrideIntangiblesForSplitComponents(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
+	// GS-pattern filer: contract liabilities are bundled under Other assets,
+	// intangibles are not a separate balance-sheet line.
+	if conceptFiledQuarterly(cf, []string{"CustomerAndOtherPayables"}) {
+		return
+	}
+
+	gw, _ := resolveInstantValue(cf, "Goodwill", periodEnd, formType)
+	if gw == 0 {
+		return
+	}
+
+	// AMZN-style filers disclose ex-goodwill intangibles only in 10-K
+	// footnotes and Sharadar excludes them. If neither the rollup nor any
+	// component tag is filed on 10-Q, leave Intangibles as-is (Goodwill-only
+	// after the default formula).
+	INegFiledQuarterly := conceptFiledQuarterly(cf, []string{"IntangibleAssetsNetExcludingGoodwill"})
+	finiteFiledQuarterly := conceptFiledQuarterly(cf, []string{"FiniteLivedIntangibleAssetsNet"})
+	indefFiledQuarterly := conceptFiledQuarterly(cf, []string{"IndefiniteLivedIntangibleAssetsExcludingGoodwill"})
+	indefTMFiledQuarterly := conceptFiledQuarterly(cf, []string{"IndefiniteLivedTrademarks"})
+	otherIAFiledQuarterly := conceptFiledQuarterly(cf, []string{"OtherIntangibleAssetsNet"})
+
+	if !INegFiledQuarterly && !finiteFiledQuarterly && !indefFiledQuarterly &&
+		!indefTMFiledQuarterly && !otherIAFiledQuarterly {
+		return
+	}
+
+	var exGoodwill float64
+
+	// Prefer the rollup tag when it has a value for THIS period (captures all
+	// ex-goodwill intangibles without double-counting components). Otherwise
+	// sum whichever components the filer reports on 10-Q — CELH Q2/Q3 2025
+	// stopped filing the rollup after its Alani acquisition and reports
+	// FiniteLived + IndefiniteLived as separate lines.
+	if INegFiledQuarterly {
+		if INeg, _ := resolveInstantValue(cf, "IntangibleAssetsNetExcludingGoodwill", periodEnd, formType); INeg > 0 {
+			exGoodwill = INeg
+		}
+	}
+
+	if exGoodwill == 0 {
+		if finiteFiledQuarterly {
+			if v, ok := resolveInstantValue(cf, "FiniteLivedIntangibleAssetsNet", periodEnd, formType); ok {
+				exGoodwill += v
+			}
+		}
+
+		if indefFiledQuarterly {
+			if v, ok := resolveInstantValue(cf, "IndefiniteLivedIntangibleAssetsExcludingGoodwill", periodEnd, formType); ok {
+				exGoodwill += v
+			}
+		}
+
+		if indefTMFiledQuarterly {
+			if v, ok := resolveInstantValue(cf, "IndefiniteLivedTrademarks", periodEnd, formType); ok {
+				exGoodwill += v
+			}
+		}
+
+		// OtherIntangibleAssetsNet is an additional line only when the
+		// ex-goodwill rollup is not the filer's standard (otherwise it's
+		// already part of INeg). Mirror _otherIntangiblesAdditional.
+		if !INegFiledQuarterly && otherIAFiledQuarterly {
+			if v, ok := resolveInstantValue(cf, "OtherIntangibleAssetsNet", periodEnd, formType); ok {
+				exGoodwill += v
+			}
+		}
+	}
+
+	computed := gw + exGoodwill
+	if computed == 0 {
+		return
+	}
+
+	current := resolved["Intangibles"]
+	if computed <= current {
+		return
+	}
+
+	delta := computed - current
+	resolved["Intangibles"] = computed
+
+	if tav, ok := resolved["TangibleAssetValue"]; ok {
+		resolved["TangibleAssetValue"] = tav - delta
+	}
+
+	if ic, ok := resolved["InvestedCapital"]; ok {
+		resolved["InvestedCapital"] = ic - delta
+	}
 }
 
 // overrideSGAForSmallOtherSGA handles filers that file both

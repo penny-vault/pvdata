@@ -857,9 +857,15 @@ var FieldMappings = []FieldMapping{
 	// (NVDA), not a separate balance sheet line. Sharadar reports 0 in
 	// that case. AAPL and MSFT present contract liabilities as their own
 	// line and do not file AccruedLiabilitiesCurrent.
+	// ExcludeIfQuarterlyUnless OtherLiabilitiesCurrent: CELH-style filers
+	// file AccruedLiabilitiesCurrent AND have a distinct OtherLiabilities
+	// bucket, indicating contract liabilities are their own balance-sheet
+	// line (not subsumed into accrued). NVDA files AccruedLiabilitiesCurrent
+	// without OtherLiabilitiesCurrent (combined "accrued and other" line).
 	{
 		FieldName: "_deferredRevenueCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterly:       []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterlyUnless: []string{"OtherLiabilitiesCurrent"},
 		XBRLTags: []string{
 			"DeferredRevenueCurrent",
 			"ContractWithCustomerLiabilityCurrent",
@@ -867,7 +873,8 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_deferredRevenueNoncurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterly:       []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterlyUnless: []string{"OtherLiabilitiesCurrent"},
 		XBRLTags: []string{
 			"DeferredRevenueNoncurrent",
 			"ContractWithCustomerLiabilityNoncurrent",
@@ -884,19 +891,22 @@ var FieldMappings = []FieldMapping{
 	// for all life/annuity insurers (LNC, MET report 0).
 	{
 		FieldName: "_unearnedPremiums", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
-		XBRLTags:           []string{"UnearnedPremiums"},
+		ExcludeIfQuarterly:       []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterlyUnless: []string{"OtherLiabilitiesCurrent"},
+		XBRLTags:                 []string{"UnearnedPremiums"},
 	},
 	{
 		FieldName: "_aircraftDeferredRevenue", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
-		XBRLTags:           []string{"AircraftRepurchaseLiabilitiesAndDeferredRevenueLeasesNet"}, // BRK (brka:) NetJets extension
+		ExcludeIfQuarterly:       []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterlyUnless: []string{"OtherLiabilitiesCurrent"},
+		XBRLTags:                 []string{"AircraftRepurchaseLiabilitiesAndDeferredRevenueLeasesNet"}, // BRK (brka:) NetJets extension
 	},
 	{
 		FieldName: "DeferredRevenue", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
-		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
-		FallbackTags:       []string{"DeferredRevenue"},
-		Op:                 OpAdd,
+		ExcludeIfQuarterly:       []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterlyUnless: []string{"OtherLiabilitiesCurrent"},
+		FallbackTags:             []string{"DeferredRevenue"},
+		Op:                       OpAdd,
 		Operands: []string{
 			"_deferredRevenueCurrent", "_deferredRevenueNoncurrent",
 			"_unearnedPremiums", "_aircraftDeferredRevenue",
