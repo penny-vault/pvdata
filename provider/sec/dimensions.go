@@ -570,6 +570,12 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 	// (main line), inflating the Q4 value by the difference.
 	overrideCumPSForSmallOtherSGA(cf, result, periodEnd, formType)
 
+	// Apply the preferred-dividends mezzanine-accretion override (same as
+	// ResolveAllFields) to the YTD cumulative map so Q4 synthesis subtracts
+	// a matching YTD total. Without this, annual = 37.6M (with override) but
+	// YTD Q3 = 20.6M (explicit tag only), so Q4 = 17M instead of ~4.6M.
+	overridePreferredDividendsForMezzanineAccretion(cf, result)
+
 	return result
 }
 
