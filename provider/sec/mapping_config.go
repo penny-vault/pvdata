@@ -1786,6 +1786,12 @@ var FieldMappings = []FieldMapping{
 			"AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets", // MSFT extension
 			"PaymentsForProceedsFromBusinessesAndInterestInAffiliates",            // broker-dealers (GS) combining acquisitions and affiliate interests
 			"OtherPaymentsToAcquireBusinesses",                                    // LLY uses this tag for their primary acquisition spend
+			// KO extension: combined "Acquisitions of businesses, equity method
+			// investments and nonmarketable securities" line. KO never files the
+			// standard us-gaap acquisition tags, so there's no double-count risk.
+			// The 10-K and 10-Q use different casing for the same concept.
+			"AcquisitionsOfBusinessesEquityMethodInvestmentsAndNonmarketableSecurities", // 10-K casing
+			"Acquisitionsofbusinessesequitymethodinvestmentsandnonmarketablesecurities", // 10-Q casing
 		},
 	},
 	// CALM-style joint-venture / equity-method investments included by Sharadar
@@ -1805,7 +1811,14 @@ var FieldMappings = []FieldMapping{
 	},
 	{
 		FieldName: "_proceedsDivestBusinesses", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"ProceedsFromDivestitureOfBusinesses"},
+		XBRLTags: []string{
+			"ProceedsFromDivestitureOfBusinesses",
+			// KO extension: combined "Proceeds from disposals of businesses,
+			// equity method investments and nonmarketable securities" line.
+			// The 10-K and 10-Q use different casing for the same concept.
+			"ProceedsFromDisposalsOfBusinessesEquityMethodInvestmentsAndNonmarketableSecurities", // 10-K casing
+			"ProceedsfromDisposalsofbusinessesequitymethodinvestmentsandnonmarketablesecurities", // 10-Q casing
+		},
 	},
 	// MCD-style filers that don't tag PaymentsToAcquireBusinesses* at all
 	// report their franchisee / real-estate acquisitions under the
@@ -2121,6 +2134,10 @@ var FieldMappings = []FieldMapping{
 			// only the AFS-debt tag, which still resolves via the next entry.
 			"PaymentsToAcquireMarketableSecurities",
 			"PaymentsToAcquireAvailableForSaleSecuritiesDebt",
+			// KO extension: "Purchases of investments" line on the cash flow
+			// statement. KO's taxonomy uses this extension rather than a
+			// standard us-gaap tag.
+			"PurchasesofInvestments",
 		},
 	},
 	// LLY-style filers separate investment purchases by horizon: short-term
@@ -2157,6 +2174,12 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "_proceedsInvestSales", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
+			// KO extension: "Proceeds from disposals of investments" covering
+			// both sales and maturities of all marketable securities. KO also
+			// files the us-gaap AFS-debt-only tag below as a partial sub-measure
+			// (e.g. FY2024: us-gaap=709M vs combined=6.59B), so the KO extension
+			// must win by list order.
+			"ProceedsFromDisposalsOfInvestments",
 			// BRK/B extension: combined T-bill + AFS debt sales
 			"ProceedsFromSaleOfUSTreasuryBillsAndAvailableForSaleSecuritiesDebt",
 			"ProceedsFromSaleOfAvailableForSaleSecuritiesDebt",
@@ -2171,10 +2194,6 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsInvestOther", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"ProceedsFromInvestments",
-			// KO reports proceeds from IPOing a minority stake in a
-			// subsidiary (bottler) on the investing section under this tag.
-			// Sharadar classifies these as investing cash flows.
-			"ProceedsFromMinorityShareholders",
 		},
 	},
 	// LLY-style filers report combined sale+maturity per investment horizon.
