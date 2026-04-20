@@ -25,11 +25,15 @@ import (
 )
 
 // TTM span limits: a valid trailing-twelve-month aggregation should cover roughly
-// one calendar year. We allow some slack for fiscal calendar variations (53-week
-// retailers, leap years, fiscal-year boundary shifts) but reject anything that
-// could not plausibly represent twelve months of activity.
+// one calendar year. We allow some slack for fiscal calendar variations (52/53-
+// week filers whose fiscal year end drifts 4-6 days off calendar month-end, leap
+// years, fiscal-year boundary shifts) but reject anything that could not
+// plausibly represent twelve months of activity. KO's 52/53-week calendar aligns
+// quarters to Fridays, so its end-to-end 4-quarter span dips to 269 days in
+// years when Dec 31 falls mid-week and Sept quarter-end falls on Fri before the
+// 30th (2014, 2020, 2025).
 const (
-	ttmMinSpanDays = 270
+	ttmMinSpanDays = 265
 	ttmMaxSpanDays = 410
 )
 

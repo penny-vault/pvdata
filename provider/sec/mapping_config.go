@@ -1871,6 +1871,9 @@ var FieldMappings = []FieldMapping{
 			"RepaymentsOfDebt",
 			"RepaymentsOfLongTermDebtAndCapitalSecurities",
 			"RepaymentsOfDebtMaturingInMoreThanThreeMonths",
+			// KO reports repayments of long-term debt and finance-lease
+			// obligations in a single combined line.
+			"RepaymentsOfDebtAndCapitalLeaseObligations",
 		},
 	},
 	// Some companies (NVDA) report payments on financed PP&E as a separate
