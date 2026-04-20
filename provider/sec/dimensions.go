@@ -563,7 +563,40 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 		}
 	}
 
+	// Apply the same SGA override used by ResolveAllFields so the YTD
+	// cumulative for SellingGeneralAndAdministrativeExpense agrees with the
+	// annual value on KO-style product-sales filers. Without this, Q4
+	// synthesis subtracts the OtherSGA YTD (carve-out) from the SGA annual
+	// (main line), inflating the Q4 value by the difference.
+	overrideCumPSForSmallOtherSGA(cf, result, periodEnd, formType)
+
 	return result
+}
+
+// overrideCumPSForSmallOtherSGA mirrors overrideSGAForSmallOtherSGA in
+// mapping.go but operates on the YTD cumulative map. Applied only when the
+// resolved YTD is already populated (so the override affects the same
+// filers whose annual map gets the override) and the company isn't a
+// franchisor.
+func overrideCumPSForSmallOtherSGA(cf *CompanyFacts, result map[string]float64, periodEnd time.Time, formType string) {
+	if _, ok := result["SellingGeneralAndAdministrativeExpense"]; !ok {
+		return
+	}
+
+	if _, ok := cf.Facts["FranchiseRevenue"]; ok {
+		return
+	}
+
+	if _, ok := cf.Facts["FranchiseCosts"]; ok {
+		return
+	}
+
+	if val, ok := resolveLongestDurationBounded(cf, FieldMapping{
+		XBRLTags:      []string{"SellingGeneralAndAdministrativeExpense"},
+		StatementType: StmtFlow,
+	}, periodEnd, formType, ytdThresholdDays+1); ok && val > 0 {
+		result["SellingGeneralAndAdministrativeExpense"] = val
+	}
 }
 
 // identifyStaleMRFields returns the set of Fundamental field names whose
