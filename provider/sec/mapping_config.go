@@ -184,15 +184,34 @@ var FieldMappings = []FieldMapping{
 		Op:           OpSubtract,
 		Operands:     []string{"TotalAssets", "CurrentAssets"},
 	},
+	// _cashStandard: default cash resolution used for most filers.
+	// Prefers the plain CashAndCashEquivalentsAtCarryingValue tag so that
+	// short-term investments reported as a separate balance-sheet line
+	// (MSFT, AMZN) stay out of cash.
 	{
-		FieldName: "CashAndEquivalents", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		FieldName: "_cashStandard", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags: []string{
 			"CashAndCashEquivalentsAtCarryingValue",
-			"CashCashEquivalentsAndShortTermInvestments",
 			"CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", // Banks (JPM) use this
 			"Cash",
 			"CashEquivalentsAtCarryingValue",
 		},
+	},
+	// CashAndEquivalents: Sharadar rolls short-term investments into
+	// cash_and_equivalents when the filer combines them on the balance-sheet
+	// face (KO's "Cash, cash equivalents and short-term investments" line).
+	// FallbackRequireIfQuarterly gates the combined tag on
+	// MarketableSecurities (KO's current-investments tag, unqualified) so
+	// filers that break out short-term investments as a separate line with
+	// the MarketableSecuritiesCurrent / ShortTermInvestments tag (MSFT, AMZN)
+	// keep the cash-only treatment via the _cashStandard fallback.
+	{
+		FieldName: "CashAndEquivalents", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:               []string{"CashCashEquivalentsAndShortTermInvestments"},
+		FallbackRequireIfQuarterly: []string{"MarketableSecurities"},
+		Op:                         OpAdd,
+		Operands:                   []string{"_cashStandard"},
+		OptionalOperands:           true,
 	},
 	{
 		FieldName: "Inventory", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -204,6 +223,10 @@ var FieldMappings = []FieldMapping{
 			"ShortTermInvestments",
 			"MarketableSecuritiesCurrent",
 			"AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+			// KO reports its short-dated marketable securities under the
+			// unqualified MarketableSecurities tag (no Current/Noncurrent
+			// suffix) with equity-method holdings under a different tag.
+			"MarketableSecurities",
 		},
 	},
 	{
@@ -471,6 +494,10 @@ var FieldMappings = []FieldMapping{
 			"IntangibleAssetsNetExcludingGoodwill",
 			"FiniteLivedIntangibleAssetsNet",
 			"IndefiniteLivedIntangibleAssetsExcludingGoodwill", // BRK/B and other conglomerates with brand/franchise intangibles
+			// KO files only us-gaap:IndefiniteLivedTrademarks for the non-
+			// goodwill portion of intangibles (no IntangibleAssetsNet...
+			// roll-up). Sharadar includes its brand value in intangibles.
+			"IndefiniteLivedTrademarks",
 		},
 	},
 	// Intangibles: Sharadar defines this as "all intangible assets and
@@ -600,7 +627,13 @@ var FieldMappings = []FieldMapping{
 	{
 		FieldName: "LongTermDebtCurrentMaturities", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		RequireIfQuarterly: []string{"AssetsCurrent"},
-		XBRLTags:           []string{"LongTermDebtCurrent"},
+		XBRLTags: []string{
+			"LongTermDebtCurrent",
+			// KO files the current portion of long-term debt under
+			// LongTermDebtAndCapitalLeaseObligationsCurrent rather than
+			// LongTermDebtCurrent.
+			"LongTermDebtAndCapitalLeaseObligationsCurrent",
+		},
 	},
 	{
 		FieldName: "CommercialPaperDebt", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -611,7 +644,16 @@ var FieldMappings = []FieldMapping{
 		// reconstruction unchanged.
 		RequireQuarterly:   true,
 		RequireIfQuarterly: []string{"AssetsCurrent"},
-		XBRLTags:           []string{"CommercialPaper"},
+		XBRLTags: []string{
+			// KO files a broader NotesAndLoansPayable that rolls its
+			// commercial paper (1.99B) into a larger "Loans and notes
+			// payable" balance-sheet line (2.32B = CP + other short-term
+			// notes). Prefer the broader tag so the extra short-term
+			// borrowings are captured; filers that file only CommercialPaper
+			// (AAPL, MCD, WMT, etc.) fall through.
+			"NotesAndLoansPayable",
+			"CommercialPaper",
+		},
 	},
 	// Current operating lease liabilities are included in debt_current only
 	// for filers whose 10-K omits the concept (MCD-style). MCD breaks out
@@ -687,6 +729,12 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"LongTermDebtNoncurrent",
 			"LongTermDebt",
+			// KO-style filers file LongTermDebtAndCapitalLeaseObligations as the
+			// non-current-only long-term debt (with a separate
+			// ...Current counterpart and an ...IncludingCurrentMaturities total).
+			// Prefer this over the including-current-maturities tag so the
+			// noncurrent field doesn't double-count the current portion.
+			"LongTermDebtAndCapitalLeaseObligations",
 			"LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities",
 		},
 	},
@@ -821,7 +869,15 @@ var FieldMappings = []FieldMapping{
 	// _liabilitiesNoncurrentRaw below.
 	{
 		FieldName: "_ltDebtNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"LongTermDebtNoncurrent"},
+		XBRLTags: []string{
+			"LongTermDebtNoncurrent",
+			// KO-style filers roll long-term debt into
+			// LongTermDebtAndCapitalLeaseObligations (noncurrent-only) rather
+			// than LongTermDebtNoncurrent. Must appear before any
+			// ...IncludingCurrentMaturities alternative to avoid pulling in
+			// the current portion.
+			"LongTermDebtAndCapitalLeaseObligations",
+		},
 	},
 	{
 		// AllowCrossFormFallback lets the non-current operating-lease value
