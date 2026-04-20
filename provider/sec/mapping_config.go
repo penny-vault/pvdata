@@ -645,15 +645,21 @@ var FieldMappings = []FieldMapping{
 		// When AccruedLiabilitiesCurrent is filed on 10-Q, the company
 		// bundles tax liabilities into broader accrued/other line items
 		// (NVDA) — skip unless the filer also reports the combined
-		// "Deferred income taxes and other" non-current line, in which
-		// case the retailer operand carries the Sharadar-compatible value
-		// and the standard _accruedIncomeTaxesCurrent operand supplies
-		// the current-side accrual.
+		// "Deferred income taxes and other" non-current line (WMT-style
+		// retailer), in which case the retailer operand carries the
+		// Sharadar-compatible value and the standard
+		// _accruedIncomeTaxesCurrent operand supplies the current-side
+		// accrual. Also unless the filer reports OtherLiabilitiesCurrent
+		// (CELH-style: "accrued" and "other" are distinct balance-sheet
+		// lines, so income-tax accruals are their own line item).
 		// IncomeTaxesPrincipallyDeferred is a BRK/B extension tag for the
 		// consolidated deferred tax liability (filed quarterly, unlike the
 		// standard DeferredIncomeTaxLiabilitiesNet which BRK only files on 10-K).
-		ExcludeIfQuarterly:       []string{"AccruedLiabilitiesCurrent"},
-		ExcludeIfQuarterlyUnless: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+		ExcludeIfQuarterly: []string{"AccruedLiabilitiesCurrent"},
+		ExcludeIfQuarterlyUnless: []string{
+			"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent",
+			"OtherLiabilitiesCurrent",
+		},
 		FallbackTags:             []string{"IncomeTaxesPrincipallyDeferred"},
 		Op:                       OpAdd,
 		Operands: []string{
