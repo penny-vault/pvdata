@@ -552,9 +552,15 @@ var FieldMappings = []FieldMapping{
 		// 10-K note-level DeferredTaxLiabilities on top would double-count.
 		ExcludeIfQuarterly: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
 		XBRLTags: []string{
-			"DeferredTaxLiabilities",
+			// Prefer the net liability-side tag (Sharadar's
+			// tax_liabilities uses this). KO files both
+			// DeferredTaxLiabilities (1150M, net of deferred tax assets)
+			// and DeferredIncomeTaxLiabilitiesNet (2469M, liability-side
+			// net); the latter matches the balance-sheet line Sharadar
+			// picks up.
 			"DeferredIncomeTaxLiabilitiesNet",
 			"DeferredTaxLiabilitiesNoncurrent",
+			"DeferredTaxLiabilities",
 		},
 	},
 	// Accrued income taxes are included when filed as separate quarterly
@@ -884,7 +890,13 @@ var FieldMappings = []FieldMapping{
 		// reach the liabilities sum when the 10-K omits the concept but a
 		// later 10-Q comparative tags it (MCD 2024-12-31: 12.888B on the
 		// 2025-05-12 10-Q, silent on the 2025-02-25 10-K).
+		// RequireQuarterly keeps this off for filers whose 10-K tags
+		// OperatingLeaseLiabilityNoncurrent but the 10-Q does not (KO). For
+		// those filers Sharadar excludes the concept from liabilities_non_current,
+		// treating the 10-K-only disclosure as a footnote rather than a
+		// balance-sheet line.
 		FieldName: "_opLeaseNoncurrentForLiab", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:       true,
 		AllowCrossFormFallback: true,
 		XBRLTags:               []string{"OperatingLeaseLiabilityNoncurrent"},
 	},
