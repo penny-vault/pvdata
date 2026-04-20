@@ -2168,6 +2168,10 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsInvestOther", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"ProceedsFromInvestments",
+			// KO reports proceeds from IPOing a minority stake in a
+			// subsidiary (bottler) on the investing section under this tag.
+			// Sharadar classifies these as investing cash flows.
+			"ProceedsFromMinorityShareholders",
 		},
 	},
 	// LLY-style filers report combined sale+maturity per investment horizon.
