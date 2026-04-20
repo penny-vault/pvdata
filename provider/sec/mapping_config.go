@@ -1279,7 +1279,7 @@ var FieldMappings = []FieldMapping{
 	// --- Internal sub-fields for SG&A derivation ---
 	{
 		FieldName: "_generalAndAdministrativeExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"GeneralAndAdministrativeExpense"},
+		XBRLTags:  []string{"GeneralAndAdministrativeExpense"},
 	},
 	{
 		FieldName: "_sellingAndMarketingExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -1299,6 +1299,9 @@ var FieldMappings = []FieldMapping{
 	// (MCD) that split SG&A into a broader bucket plus an income-statement
 	// "Other SG&A" line — Sharadar reports the line-item value (OtherSGA),
 	// not the broader bucket. Filers that don't file OtherSGA fall through.
+	// KO files a small OtherSGA carve-out (~58M/quarter) alongside the main
+	// SGA line (3.6B/quarter); a post-resolution override in mapping.go
+	// (overrideSGAForSmallOtherSGA) swaps to SGA for that pattern.
 	{
 		FieldName: "SellingGeneralAndAdministrativeExpense", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{

@@ -535,8 +535,41 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	}
 
 	overrideForEmbeddedCurrentDebt(cf, resolved, periodEnd, formType)
+	overrideSGAForSmallOtherSGA(cf, resolved, periodEnd, formType)
 
 	return resolved
+}
+
+// overrideSGAForSmallOtherSGA handles filers that file both
+// us-gaap:OtherSellingGeneralAndAdministrativeExpense and the broader
+// us-gaap:SellingGeneralAndAdministrativeExpense. The default SGA mapping
+// prefers OtherSGA first (MCD-style franchisors where OtherSGA IS the
+// main income-statement line). Product-sales filers (KO) also file
+// OtherSGA but as a carve-out from the main SGA line — Sharadar uses the
+// main SGA total for them.
+//
+// The gate excludes franchisor filers (presence of us-gaap:FranchiseRevenue
+// or us-gaap:FranchiseCosts on any filing — MCD tagged these pre-2020 and
+// they remain in the company-facts history) so the override applies only
+// to product-sales filers like KO.
+func overrideSGAForSmallOtherSGA(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
+	if _, ok := cf.Facts["FranchiseRevenue"]; ok {
+		return
+	}
+
+	if _, ok := cf.Facts["FranchiseCosts"]; ok {
+		return
+	}
+
+	sga, sgaOK := ResolveDirect(cf, FieldMapping{
+		XBRLTags:      []string{"SellingGeneralAndAdministrativeExpense"},
+		StatementType: StmtFlow,
+	}, periodEnd, formType)
+	if !sgaOK || sga <= 0 {
+		return
+	}
+
+	resolved["SellingGeneralAndAdministrativeExpense"] = sga
 }
 
 // overrideForEmbeddedCurrentDebt rewrites DebtCurrent, DeferredRevenue, and
