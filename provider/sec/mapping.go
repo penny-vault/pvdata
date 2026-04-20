@@ -537,8 +537,58 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	overrideForEmbeddedCurrentDebt(cf, resolved, periodEnd, formType)
 	overrideSGAForSmallOtherSGA(cf, resolved, periodEnd, formType)
 	overrideIntangiblesForSplitComponents(cf, resolved, periodEnd, formType)
+	overridePreferredDividendsForMezzanineAccretion(cf, resolved)
 
 	return resolved
+}
+
+// overridePreferredDividendsForMezzanineAccretion reclassifies the residual
+// between NetIncome and NetIncomeCommonStock as preferred_dividends when the
+// filer reports explicit preferred dividends BUT no NCI tag. Sharadar treats
+// this residual (explicit preferred + accretion of redeemable preferred to
+// redemption value + other mezzanine adjustments) as a single
+// preferred_dividends_income_statement_impact and zeros out NCI.
+//
+// CELH (Series A preferred held by PepsiCo) files
+// PreferredStockDividendsIncomeStatementImpact = 27.5M and has another 10M
+// of accretion; Sharadar reports preferred_dividends = 37.6M and NCI = 0.
+//
+// GS (actual preferred dividends equal the full residual) is unaffected
+// because explicit preferred already equals the residual, so the override
+// sees no residual-to-reclassify. JPM (no explicit preferred tag, real NCI
+// from consolidated subsidiaries) is also unaffected because the override
+// gates on PreferredStockDividendsIncomeStatementImpact being filed.
+func overridePreferredDividendsForMezzanineAccretion(cf *CompanyFacts, resolved map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{
+		"PreferredStockDividendsIncomeStatementImpact",
+		"PreferredStockDividendsAndOtherAdjustments",
+	}) {
+		return
+	}
+
+	if conceptFiledQuarterly(cf, []string{"NetIncomeLossAttributableToNoncontrollingInterest"}) {
+		return
+	}
+
+	ci := resolved["ConsolidatedIncome"]
+	nic := resolved["NetIncomeCommonStock"]
+
+	if ci == 0 || nic == 0 {
+		return
+	}
+
+	totalDeduction := ci - nic
+	if totalDeduction <= 0 {
+		return
+	}
+
+	explicitPref := resolved["PreferredDividendsIncomeStatementImpact"]
+	if explicitPref >= totalDeduction-1.0 {
+		return
+	}
+
+	resolved["PreferredDividendsIncomeStatementImpact"] = totalDeduction
+	resolved["NetIncomeToNonControllingInterests"] = 0
 }
 
 // overrideIntangiblesForSplitComponents recomputes Intangibles from the

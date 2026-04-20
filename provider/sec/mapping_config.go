@@ -1585,6 +1585,16 @@ var FieldMappings = []FieldMapping{
 			"DiscontinuedOperationIncomeLossFromDiscontinuedOperationDuringPhaseOutPeriodNetOfTax",
 		},
 	},
+	// PreferredDividendsIncomeStatementImpact: must be resolved before
+	// NetIncomeToNonControllingInterests since the NCI formula subtracts it
+	// from ConsolidatedIncome to isolate the NCI residual.
+	{
+		FieldName: "PreferredDividendsIncomeStatementImpact", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"PreferredStockDividendsIncomeStatementImpact",
+			"PreferredStockDividendsAndOtherAdjustments",
+		},
+	},
 	// NetIncomeToNonControllingInterests: use the direct tag if available.
 	// Banks (JPM) don't report this tag; derive as ConsolidatedIncome -
 	// NetIncomeCommonStock - PreferredDividends. NetIncomeCommonStock uses
@@ -1601,13 +1611,6 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"ConsolidatedIncome", "NetIncomeCommonStock", "PreferredDividendsIncomeStatementImpact"},
 		Coefficients:     []float64{1, -1, -1},
 		OptionalOperands: true,
-	},
-	{
-		FieldName: "PreferredDividendsIncomeStatementImpact", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{
-			"PreferredStockDividendsIncomeStatementImpact",
-			"PreferredStockDividendsAndOtherAdjustments",
-		},
 	},
 
 	// ==================== PER-SHARE DATA (flow) ====================
