@@ -1403,6 +1403,15 @@ var FieldMappings = []FieldMapping{
 			"ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
 			"TechnologyAndInfrastructureExpense",
 		},
+		// FallbackTags is unused for direct-mapping resolution but is consulted
+		// by applyMRComparativeFilter when collecting leaf tags. For energy
+		// filers (XOM) where overrideRandDForEnergyFilers redirects R&D to
+		// ExplorationExpense, listing it here ensures the MR comparative
+		// filter sees the substituted concept's quarterly comparatives and
+		// doesn't zero out the override-set value.
+		FallbackTags: []string{
+			"ExplorationExpense",
+		},
 	},
 	// CostsAndExpenses is total income statement costs. Used to derive
 	// OperatingIncome for companies without an explicit OperatingIncomeLoss
