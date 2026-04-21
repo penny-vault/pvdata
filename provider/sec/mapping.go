@@ -539,8 +539,41 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	overrideIntangiblesForSplitComponents(cf, resolved, periodEnd, formType)
 	overridePreferredDividendsForMezzanineAccretion(cf, resolved)
 	overrideRandDExpensesForFootnoteOnly(resolved)
+	overrideCashAndEquivalentsIncludeRestrictedCash(cf, resolved, periodEnd, formType)
 
 	return resolved
+}
+
+// overrideCashAndEquivalentsIncludeRestrictedCash switches cash_and_equivalents
+// to the combined "cash + restricted cash" balance when the filer reports a
+// non-zero RestrictedCash balance for this period. Sharadar includes
+// restricted cash in cashneq for filers that tag it as a separate
+// balance-sheet item (CELH Q3 2025 has $126M of restricted cash post-Alani
+// closing); our default _cashStandard mapping prefers the plain
+// CashAndCashEquivalentsAtCarryingValue tag to keep short-term investments
+// out, but that tag excludes restricted cash by definition.
+func overrideCashAndEquivalentsIncludeRestrictedCash(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
+	restricted, hasRestricted := resolveInstantValue(cf, "RestrictedCash", periodEnd, formType)
+	if !hasRestricted || restricted <= 0 {
+		return
+	}
+
+	combined, hasCombined := resolveInstantValue(cf, "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", periodEnd, formType)
+	if !hasCombined || combined <= 0 {
+		return
+	}
+
+	current := resolved["CashAndEquivalents"]
+	if combined <= current {
+		return
+	}
+
+	delta := combined - current
+	resolved["CashAndEquivalents"] = combined
+
+	if _, ok := resolved["InvestedCapital"]; ok {
+		resolved["InvestedCapital"] -= delta
+	}
 }
 
 // overrideRandDExpensesForFootnoteOnly zeros out RandDExpenses for filers
