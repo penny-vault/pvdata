@@ -12,7 +12,7 @@ require (
 	github.com/adrg/strutil v0.3.1
 	github.com/alphadose/haxmap v1.4.1
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/go-co-op/gocron/v2 v2.21.0
+	github.com/go-co-op/gocron/v2 v2.21.1
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/goccy/go-json v0.10.6
 	github.com/gofiber/fiber/v2 v2.52.12
