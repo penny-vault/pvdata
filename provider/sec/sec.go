@@ -1127,6 +1127,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			deriveCostOfRevenueForEnergyFiler(cf, a.mrEmit)
 		}
 
+		overrideWASForNoDilutedFiler(cf, a.arEmit)
+		overrideWASForNoDilutedFiler(cf, a.mrEmit)
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
@@ -1258,6 +1261,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			deriveCostOfRevenueForEnergyFiler(cf, q.arEmit)
 			deriveCostOfRevenueForEnergyFiler(cf, q.mrEmit)
 		}
+
+		overrideWASForNoDilutedFiler(cf, q.arEmit)
+		overrideWASForNoDilutedFiler(cf, q.mrEmit)
 
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",

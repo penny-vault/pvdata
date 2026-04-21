@@ -2039,6 +2039,61 @@ func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
+// overrideWASForNoDilutedFiler replaces WeightedAverageShares with
+// SharesBasic (the EntityCommonStockSharesOutstanding DEI cover-page count)
+// for filers matching the XOM-style pattern: energy filers that report
+// ExplorationExpense but stopped filing
+// WeightedAverageNumberOfDilutedSharesOutstanding years ago. Sharadar uses
+// the cover-page share count as weighted_average_shares for these filers
+// rather than the XBRL WeightedAverageNumberOfSharesOutstandingBasic
+// (which would otherwise resolve via our default mapping).
+//
+// Called after Q4 synthesis so the synthesized Q4 WAS — which uses
+// day-weighted averaging that doesn't apply to point-in-time cover-page
+// counts — is replaced with the annual SharesBasic. Per-share derived
+// metrics that depend on WeightedAverageShares are recomputed from the
+// overridden value.
+func overrideWASForNoDilutedFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"ExplorationExpense"}) {
+		return
+	}
+
+	if conceptFiledQuarterly(cf, []string{"WeightedAverageNumberOfDilutedSharesOutstanding"}) {
+		return
+	}
+
+	sharesBasic, ok := fields["SharesBasic"]
+	if !ok || sharesBasic == 0 {
+		return
+	}
+
+	fields["WeightedAverageShares"] = sharesBasic
+
+	for _, m := range FieldMappings {
+		if m.Type != MappingDerived || m.StatementType != StmtMetric {
+			continue
+		}
+
+		usesWAS := false
+
+		for _, op := range m.Operands {
+			if op == "WeightedAverageShares" {
+				usesWAS = true
+
+				break
+			}
+		}
+
+		if !usesWAS {
+			continue
+		}
+
+		if val, ok := computeDerived(m, fields); ok {
+			fields[m.FieldName] = val
+		}
+	}
+}
+
 func deriveCostOfRevenueForRestaurantFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"PreOpeningCosts"}) {
 		return

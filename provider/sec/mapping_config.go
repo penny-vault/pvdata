@@ -2076,6 +2076,28 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_repaymentsFinancingObligations", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"RepaymentsOfLongTermFinancingObligations"},
 	},
+	// XOM-style integrated energy filers report short-term debt with maturity
+	// > 3 months as separate proceeds/repayments tags. AAPL also files these
+	// but the ExplorationExpense gate keeps AAPL's NCFDEBT path unchanged.
+	{
+		FieldName: "_proceedsShortTermDebtEnergyFiler", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"ExplorationExpense"},
+		XBRLTags:           []string{"ProceedsFromShortTermDebtMaturingInMoreThanThreeMonths"},
+	},
+	{
+		FieldName: "_repaymentsShortTermDebtEnergyFiler", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"ExplorationExpense"},
+		XBRLTags:           []string{"RepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths"},
+	},
+	// XOM reports net other-debt activity (issuance/repayment combined) as a
+	// separate financing line. Sign convention: positive = net proceeds.
+	// JPM also files ProceedsFromRepaymentsOfOtherDebt — gate on
+	// ExplorationExpense so only energy filers use this path.
+	{
+		FieldName: "_netOtherDebtEnergyFiler", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"ExplorationExpense"},
+		XBRLTags:           []string{"ProceedsFromRepaymentsOfOtherDebt"},
+	},
 	// NetCashFlowDebt = proceeds - repayments - financedAssets + netShortTermDebt
 	// + proceedsShortTermDebt - repaymentsShortTermDebt - financeLeasePrincipal
 	// - repaymentsFinancingObligations
@@ -2090,8 +2112,9 @@ var FieldMappings = []FieldMapping{
 			"_proceedsShortTermDebt", "_repaymentsShortTermDebt",
 			"_financeLeasePrincipalPayments", "_repaymentsFinancingObligations",
 			"_paymentsDebtIssuanceCosts",
+			"_proceedsShortTermDebtEnergyFiler", "_repaymentsShortTermDebtEnergyFiler", "_netOtherDebtEnergyFiler",
 		},
-		Coefficients:     []float64{1, -1, -1, 1, 1, -1, -1, -1, -1},
+		Coefficients:     []float64{1, -1, -1, 1, 1, -1, -1, -1, -1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	// --- Bank-specific NCFDEBT sub-fields ---
@@ -2322,6 +2345,16 @@ var FieldMappings = []FieldMapping{
 		Operands:         []string{"_proceedsInvestMaturities", "_proceedsInvestSales", "_proceedsInvestOther"},
 		OptionalOperands: true,
 	},
+	// XOM-style integrated energy filers report "Proceeds from asset sales and
+	// returns of investments" under a broad tag that Sharadar classifies as
+	// NCFINV (not NCF_business). Gate on ExplorationExpense so only energy
+	// filers pick up this tag, avoiding classification collisions with
+	// non-energy filers that would treat a similar line differently.
+	{
+		FieldName: "_proceedsInvestEnergyFiler", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"ExplorationExpense"},
+		XBRLTags:           []string{"ProceedsFromSalesOfBusinessAffiliateAndProductiveAssets"},
+	},
 	// NetCashFlowInvest = -payments + proceeds (Sharadar NCFINV:
 	// "net cash inflow (outflow) associated with acquisition & disposal of investments")
 	{
@@ -2334,8 +2367,9 @@ var FieldMappings = []FieldMapping{
 			"_paymentsInvestOther", "_proceedsInvestSaleAndMaturityOther",
 			"_paymentsInvestEquityMethod",
 			"_proceedsInvestLeaseReceivables",
+			"_proceedsInvestEnergyFiler",
 		},
-		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1},
+		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1, 1},
 		OptionalOperands: true,
 	},
 	{

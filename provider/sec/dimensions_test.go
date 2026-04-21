@@ -787,6 +787,10 @@ var _ = Describe("Dimensions", func() {
 				"_inventoryPartsAndComponents":             true,
 				"_explorationExpense":                      true,
 				"_nonServicePensionExpense":                true,
+				"_proceedsInvestEnergyFiler":               true,
+				"_proceedsShortTermDebtEnergyFiler":        true,
+				"_repaymentsShortTermDebtEnergyFiler":      true,
+				"_netOtherDebtEnergyFiler":                 true,
 			}
 
 			var missing []string
