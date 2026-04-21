@@ -931,7 +931,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// fields. This must happen before TTM computation so that trailing sums
 	// use the corrected MR values.
 	for i := range quarters {
-		stripStaleAndRecompute(quarters[i].mrEmit, staleMRFields)
+		stripStaleAndRecompute(quarters[i].mrEmit, staleMRFields, cf)
 	}
 
 	// Apply bank-specific post-processing (TotalDebt/InvestedCapital/NCFDebt
@@ -1044,7 +1044,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// This matches Sharadar's MR semantics: if a company stops reporting
 		// a concept (e.g. InterestExpense), derived fields like EBIT should
 		// be recomputed without it.
-		stripStaleAndRecompute(a.mrEmit, staleMRFields)
+		stripStaleAndRecompute(a.mrEmit, staleMRFields, cf)
 
 		// Find the 4 constituent quarters for this fiscal year to compute
 		// 4-quarter balance sheet averages (matching Sharadar methodology).
@@ -1104,8 +1104,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		// to preserve the strip for NVDA-style filers.
 		if !conceptFiledQuarterly(cf, []string{"PreOpeningCosts"}) {
 			annualTWHStale := map[string]bool{"_taxWithholdingShareComp": true}
-			stripStaleAndRecompute(a.arEmit, annualTWHStale)
-			stripStaleAndRecompute(a.mrEmit, annualTWHStale)
+			stripStaleAndRecompute(a.arEmit, annualTWHStale, cf)
+			stripStaleAndRecompute(a.mrEmit, annualTWHStale, cf)
 		}
 
 		// Apply bank overrides to annual emit maps. Only for banks —

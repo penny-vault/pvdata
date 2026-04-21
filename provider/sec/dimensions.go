@@ -619,14 +619,24 @@ func overrideCumPSForSmallOtherSGA(cf *CompanyFacts, result map[string]float64, 
 // later 10-Q filings also count: some filers (MCD) tag certain balance-sheet
 // concepts (OperatingLeaseLiability*) only on 10-Q despite including them in
 // the 10-K notes, and those concepts must not be treated as stale.
+//
+// A balance-sheet (instant) concept is additionally flagged stale when the
+// filer's LATEST 10-Q omits it — CELH dropped OperatingLeaseLiability*
+// tags from Q2/Q3 2025 10-Qs after filing them in the 2024 10-K and Q1
+// 2025 10-Q, and Sharadar's MR reports those concepts as 0 rather than
+// carrying forward the older filing's value.
 func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
-	// Find the latest 10-K filing date.
-	var latest10KFiled time.Time
+	// Find the latest 10-K and latest 10-Q filing dates.
+	var latest10KFiled, latest10QFiled time.Time
 
 	for _, facts := range cf.Facts {
 		for i := range facts {
 			if facts[i].Form == "10-K" && facts[i].Filed.After(latest10KFiled) {
 				latest10KFiled = facts[i].Filed
+			}
+
+			if facts[i].Form == "10-Q" && facts[i].Filed.After(latest10QFiled) {
+				latest10QFiled = facts[i].Filed
 			}
 		}
 	}
@@ -649,20 +659,17 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 	// a valid active disclosure.
 	flowLookback := latest10KFiled.AddDate(-1, -6, 0)
 	activeConcepts := make(map[string]bool)
+	latestQConcepts := make(map[string]bool)
 
 	for concept, facts := range cf.Facts {
 		for i := range facts {
 			f := &facts[i]
 			if f.Form == "10-K" && f.Filed.Equal(latest10KFiled) {
 				activeConcepts[concept] = true
-
-				break
 			}
 
 			if f.Form == "10-Q" && !f.Filed.Before(latest10KFiled) {
 				activeConcepts[concept] = true
-
-				break
 			}
 
 			// Widened window for flow concepts: any 10-Q with a start/end
@@ -671,8 +678,49 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 			if f.Form == "10-Q" && !f.Start.IsZero() && !f.End.IsZero() &&
 				f.End.After(f.Start) && !f.Filed.Before(flowLookback) {
 				activeConcepts[concept] = true
+			}
 
-				break
+			// Track concepts that appear in the LATEST 10-Q. Balance-sheet
+			// instant concepts get an additional staleness check below —
+			// if present in older filings but dropped from the most recent
+			// 10-Q, Sharadar treats them as stale.
+			if f.Form == "10-Q" && f.Filed.Equal(latest10QFiled) {
+				latestQConcepts[concept] = true
+			}
+		}
+	}
+
+	// If the latest 10-Q was filed after the latest 10-K, balance-sheet
+	// (instant-style, zero Start) concepts must appear in that 10-Q to
+	// remain active. Flow/duration concepts are unaffected by this
+	// tightening (they follow the wider flowLookback window above).
+	if !latest10QFiled.IsZero() && latest10QFiled.After(latest10KFiled) {
+		for concept, facts := range cf.Facts {
+			if !activeConcepts[concept] {
+				continue
+			}
+
+			if latestQConcepts[concept] {
+				continue
+			}
+
+			// Only consider instant-style concepts for tightening — they're
+			// the balance-sheet lines Sharadar drops when a more recent 10-Q
+			// omits them.
+			hasInstant := false
+			hasDuration := false
+
+			for i := range facts {
+				f := &facts[i]
+				if f.Start.IsZero() {
+					hasInstant = true
+				} else if f.End.After(f.Start) {
+					hasDuration = true
+				}
+			}
+
+			if hasInstant && !hasDuration {
+				delete(activeConcepts, concept)
 			}
 		}
 	}
@@ -761,7 +809,7 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 // recalculated without the stale operand, while derived fields resolved via
 // FallbackTags (e.g. DepreciationDepletionAndAmortization) are preserved when
 // none of their operands changed.
-func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool) {
+func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool, cf *CompanyFacts) {
 	if len(stale) == 0 {
 		return
 	}
