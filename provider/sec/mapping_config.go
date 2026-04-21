@@ -1966,6 +1966,8 @@ var FieldMappings = []FieldMapping{
 			// KO reports repayments of long-term debt and finance-lease
 			// obligations in a single combined line.
 			"RepaymentsOfDebtAndCapitalLeaseObligations",
+			// CELH repays its Alani acquisition line of credit under this tag.
+			"RepaymentsOfLinesOfCredit",
 		},
 	},
 	// Some companies (NVDA) report payments on financed PP&E as a separate
