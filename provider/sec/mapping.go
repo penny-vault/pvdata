@@ -538,8 +538,42 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	overrideSGAForSmallOtherSGA(cf, resolved, periodEnd, formType)
 	overrideIntangiblesForSplitComponents(cf, resolved, periodEnd, formType)
 	overridePreferredDividendsForMezzanineAccretion(cf, resolved)
+	overrideRandDExpensesForFootnoteOnly(resolved)
 
 	return resolved
+}
+
+// overrideRandDExpensesForFootnoteOnly zeros out RandDExpenses for filers
+// that tag R&D as a footnote disclosure rather than an income-statement
+// line item. The heuristic: if R&D is less than 1% of revenue (and under
+// 10M absolute), treat it as footnote-only and exclude. Sharadar excludes
+// such small amounts because they appear only in the notes to the
+// financial statements, not on the face of the income statement.
+//
+// CELH (consumer beverage) files ResearchAndDevelopmentExpense at ~200K
+// per quarter / 1M annual — Sharadar reports 0. Real R&D-spending filers
+// (NVDA/MSFT/LLY/AAPL) all have R&D > 8% of revenue so the threshold
+// leaves them unaffected.
+func overrideRandDExpensesForFootnoteOnly(resolved map[string]float64) {
+	rd, ok := resolved["RandDExpenses"]
+	if !ok || rd == 0 {
+		return
+	}
+
+	revenue := resolved["Revenues"]
+	if revenue <= 0 {
+		return
+	}
+
+	if rd >= 10_000_000 {
+		return
+	}
+
+	if rd/revenue >= 0.01 {
+		return
+	}
+
+	resolved["RandDExpenses"] = 0
 }
 
 // overridePreferredDividendsForMezzanineAccretion reclassifies the residual

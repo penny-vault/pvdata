@@ -576,6 +576,12 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 	// YTD Q3 = 20.6M (explicit tag only), so Q4 = 17M instead of ~4.6M.
 	overridePreferredDividendsForMezzanineAccretion(cf, result)
 
+	// Apply the footnote-only R&D override to the YTD cumulative map so Q4
+	// synthesis subtracts a matching zero. Without this, the annual R&D is
+	// zeroed but Q3 YTD still reports the tag value, producing a spurious
+	// negative Q4 value via Annual - YTD_Q3.
+	overrideRandDExpensesForFootnoteOnly(result)
+
 	return result
 }
 
