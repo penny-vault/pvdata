@@ -2041,12 +2041,15 @@ func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float
 
 // overrideWASForNoDilutedFiler replaces WeightedAverageShares with
 // SharesBasic (the EntityCommonStockSharesOutstanding DEI cover-page count)
-// for filers matching the XOM-style pattern: energy filers that report
-// ExplorationExpense but stopped filing
-// WeightedAverageNumberOfDilutedSharesOutstanding years ago. Sharadar uses
-// the cover-page share count as weighted_average_shares for these filers
-// rather than the XBRL WeightedAverageNumberOfSharesOutstandingBasic
-// (which would otherwise resolve via our default mapping).
+// for filers that have stopped filing
+// WeightedAverageNumberOfDilutedSharesOutstanding (XOM stopped in 2013).
+// Sharadar uses the cover-page share count as weighted_average_shares for
+// these filers rather than the XBRL WeightedAverageNumberOfSharesOutstanding
+// Basic that would otherwise resolve via our default mapping.
+//
+// Multi-class filers (BRK/B) are handled separately in EnrichMarketData where
+// share_factor scaling is applied; this override sets the same WAS=SharesBasic
+// value those filers already get, so it's a no-op for them.
 //
 // Called after Q4 synthesis so the synthesized Q4 WAS — which uses
 // day-weighted averaging that doesn't apply to point-in-time cover-page
@@ -2054,10 +2057,6 @@ func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float
 // metrics that depend on WeightedAverageShares are recomputed from the
 // overridden value.
 func overrideWASForNoDilutedFiler(cf *CompanyFacts, fields map[string]float64) {
-	if !conceptFiledQuarterly(cf, []string{"ExplorationExpense"}) {
-		return
-	}
-
 	if conceptFiledQuarterly(cf, []string{"WeightedAverageNumberOfDilutedSharesOutstanding"}) {
 		return
 	}
