@@ -540,8 +540,63 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	overridePreferredDividendsForMezzanineAccretion(cf, resolved)
 	overrideRandDExpensesForFootnoteOnly(resolved)
 	overrideCashAndEquivalentsIncludeRestrictedCash(cf, resolved, periodEnd, formType)
+	overrideDebtCurrentForSmallAmortization(cf, resolved, periodEnd, formType)
 
 	return resolved
+}
+
+// overrideDebtCurrentForSmallAmortization zeros out a small
+// LongTermDebtCurrent ("current portion of long-term debt") when it
+// represents the minimum principal amortization of a term loan rather
+// than a meaningful current-debt balance. Sharadar reports debt_current =
+// 0 and rolls the amount into debt_non_current when the filer's
+// LongTermDebtCurrent is under 2% of total long-term debt AND no other
+// current-debt components (ShortTermBorrowings, CommercialPaper,
+// Operating/FinanceLeaseLiabilityCurrent) are filed.
+//
+// CELH post-Alani acquisition (Q2/Q3 2025) has $9M of current portion
+// on an $871M term loan (~1%); our formula reports debt_current = $9M
+// while Sharadar reports 0. MSFT / NVDA / AAPL / WMT all have either
+// commercial paper, operating lease current, or significantly larger
+// LongTermDebtCurrent ratios and stay unaffected.
+func overrideDebtCurrentForSmallAmortization(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
+	ltdCurrent, hasLtdCurrent := resolveInstantValue(cf, "LongTermDebtCurrent", periodEnd, formType)
+	if !hasLtdCurrent || ltdCurrent <= 0 {
+		return
+	}
+
+	ltdNC, hasLtdNC := resolveInstantValue(cf, "LongTermDebtNoncurrent", periodEnd, formType)
+	if !hasLtdNC || ltdNC <= 0 {
+		return
+	}
+
+	totalLtd := ltdCurrent + ltdNC
+	if ltdCurrent/totalLtd >= 0.02 {
+		return
+	}
+
+	// Skip if any other current-debt-like component is filed for this
+	// period. The presence of short-term borrowings, commercial paper, or
+	// operating/finance lease current indicates a richer current-debt
+	// balance-sheet section that Sharadar recognizes and includes.
+	for _, tag := range []string{
+		"ShortTermBorrowings",
+		"CommercialPaper",
+		"OperatingLeaseLiabilityCurrent",
+		"FinanceLeaseLiabilityCurrent",
+	} {
+		if v, ok := resolveInstantValue(cf, tag, periodEnd, formType); ok && v > 0 {
+			return
+		}
+	}
+
+	resolved["LongTermDebtCurrentMaturities"] = 0
+	resolved["DebtCurrent"] -= ltdCurrent
+	resolved["TotalDebt"] -= ltdCurrent
+
+	if _, ok := resolved["InvestedCapital"]; ok {
+		resolved["InvestedCapital"] -= ltdCurrent
+	}
 }
 
 // overrideCashAndEquivalentsIncludeRestrictedCash switches cash_and_equivalents
