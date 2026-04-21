@@ -2085,27 +2085,47 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_repaymentsFinancingObligations", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"RepaymentsOfLongTermFinancingObligations"},
 	},
-	// XOM-style integrated energy filers report short-term debt with maturity
-	// > 3 months as separate proceeds/repayments tags. AAPL also files these
-	// but the ExplorationExpense gate keeps AAPL's NCFDEBT path unchanged.
+	// Gross short-term debt tags for filers that report issuance and
+	// repayment as separate lines (XOM) instead of bundling them into a net
+	// commercial-paper or short-term-debt tag (AAPL, MSFT, JPM, etc.).
+	//
+	// Gate on the absence of any net short-term-debt tag. When the filer
+	// reports a net tag, it's already counted via _netShortTermDebt and
+	// adding the gross legs here would double-count. AAPL files
+	// RepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths and the net
+	// ProceedsFromRepaymentsOfCommercialPaper at the same time; the gate
+	// keeps AAPL's NCFDEBT path on the net tag unchanged.
 	{
-		FieldName: "_proceedsShortTermDebtEnergyFiler", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		RequireIfQuarterly: []string{"ExplorationExpense"},
-		XBRLTags:           []string{"ProceedsFromShortTermDebtMaturingInMoreThanThreeMonths"},
+		FieldName: "_proceedsShortTermDebtGross", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"ProceedsFromRepaymentsOfCommercialPaper",
+			"ProceedsFromRepaymentsOfShortTermDebt",
+			"ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess",
+		},
+		XBRLTags: []string{"ProceedsFromShortTermDebtMaturingInMoreThanThreeMonths"},
 	},
 	{
-		FieldName: "_repaymentsShortTermDebtEnergyFiler", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		RequireIfQuarterly: []string{"ExplorationExpense"},
-		XBRLTags:           []string{"RepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths"},
+		FieldName: "_repaymentsShortTermDebtGross", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"ProceedsFromRepaymentsOfCommercialPaper",
+			"ProceedsFromRepaymentsOfShortTermDebt",
+			"ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess",
+		},
+		XBRLTags: []string{"RepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths"},
 	},
-	// XOM reports net other-debt activity (issuance/repayment combined) as a
-	// separate financing line. Sign convention: positive = net proceeds.
-	// JPM also files ProceedsFromRepaymentsOfOtherDebt — gate on
-	// ExplorationExpense so only energy filers use this path.
+	// Net other-debt activity (combined issuance/repayment, sign convention
+	// positive = net proceeds). Gate on absence of net ST-debt tags for the
+	// same reason as the gross tags above — JPM files both the bank-style
+	// _netShortTermDebt (ProceedsFromRepaymentsOfShortTermDebt) and
+	// ProceedsFromRepaymentsOfOtherDebt; the latter would double-count there.
 	{
-		FieldName: "_netOtherDebtEnergyFiler", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		RequireIfQuarterly: []string{"ExplorationExpense"},
-		XBRLTags:           []string{"ProceedsFromRepaymentsOfOtherDebt"},
+		FieldName: "_netOtherDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{
+			"ProceedsFromRepaymentsOfCommercialPaper",
+			"ProceedsFromRepaymentsOfShortTermDebt",
+			"ProceedsFromRepaymentsOfShortTermDebtMaturingInThreeMonthsOrLess",
+		},
+		XBRLTags: []string{"ProceedsFromRepaymentsOfOtherDebt"},
 	},
 	// NetCashFlowDebt = proceeds - repayments - financedAssets + netShortTermDebt
 	// + proceedsShortTermDebt - repaymentsShortTermDebt - financeLeasePrincipal
@@ -2121,7 +2141,7 @@ var FieldMappings = []FieldMapping{
 			"_proceedsShortTermDebt", "_repaymentsShortTermDebt",
 			"_financeLeasePrincipalPayments", "_repaymentsFinancingObligations",
 			"_paymentsDebtIssuanceCosts",
-			"_proceedsShortTermDebtEnergyFiler", "_repaymentsShortTermDebtEnergyFiler", "_netOtherDebtEnergyFiler",
+			"_proceedsShortTermDebtGross", "_repaymentsShortTermDebtGross", "_netOtherDebt",
 		},
 		Coefficients:     []float64{1, -1, -1, 1, 1, -1, -1, -1, -1, 1, -1, 1},
 		OptionalOperands: true,
