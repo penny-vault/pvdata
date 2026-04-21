@@ -2093,6 +2093,41 @@ func overrideWASForNoDilutedFiler(cf *CompanyFacts, fields map[string]float64) {
 	}
 }
 
+// overrideNCFBusinessAsResidualForReceivablesFiler computes NetCashFlowBusiness
+// as the residual of the investing-activities section for filers (XOM) that
+// don't tag explicit business-acquisition concepts and instead bundle
+// minority-interest cash flows, equity-method investments, and other
+// investing items into an unidentified residual line. Sharadar reproduces
+// that residual by subtracting the explicitly classified buckets from the
+// total:
+//
+//	NCF_business = NCF_from_investing - NCF_invest - CapitalExpenditure
+//	               - ProceedsFromSaleAndCollectionOfReceivables
+//
+// (CapitalExpenditure is already negative in our schema, so subtracting it
+// adds back the gross PPE outflow.)
+//
+// Gate on ProceedsFromSaleAndCollectionOfReceivables filed quarterly. None
+// of the protected regression tickers file this concept, so the gate is
+// safe; XOM is the canonical match.
+func overrideNCFBusinessAsResidualForReceivablesFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"ProceedsFromSaleAndCollectionOfReceivables"}) {
+		return
+	}
+
+	ncfInvesting, hasNCFI := fields["NetCashFlowFromInvesting"]
+	ncfInvest, hasInvest := fields["NetCashFlowInvest"]
+	capex, hasCapex := fields["CapitalExpenditure"]
+
+	if !hasNCFI || !hasInvest || !hasCapex {
+		return
+	}
+
+	rec := fields["_proceedsReceivablesCollection"]
+
+	fields["NetCashFlowBusiness"] = ncfInvesting - ncfInvest - capex - rec
+}
+
 func deriveCostOfRevenueForRestaurantFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"PreOpeningCosts"}) {
 		return

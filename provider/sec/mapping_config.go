@@ -2384,6 +2384,15 @@ var FieldMappings = []FieldMapping{
 		RequireIfQuarterly: []string{"ExplorationExpense"},
 		XBRLTags:           []string{"ProceedsFromSalesOfBusinessAffiliateAndProductiveAssets"},
 	},
+	// Sub-field consumed by overrideNCFBusinessAsResidualForReceivablesFiler.
+	// Holds XOM's "Collection of advances" / receivables-securitization
+	// proceeds. None of the protected tickers file this concept, so leaving
+	// the field universally resolvable is safe; the override only fires when
+	// the same concept is filed quarterly.
+	{
+		FieldName: "_proceedsReceivablesCollection", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"ProceedsFromSaleAndCollectionOfReceivables"},
+	},
 	// NetCashFlowInvest = -payments + proceeds (Sharadar NCFINV:
 	// "net cash inflow (outflow) associated with acquisition & disposal of investments")
 	{

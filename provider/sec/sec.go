@@ -1130,6 +1130,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		overrideWASForNoDilutedFiler(cf, a.arEmit)
 		overrideWASForNoDilutedFiler(cf, a.mrEmit)
 
+		overrideNCFBusinessAsResidualForReceivablesFiler(cf, a.arEmit)
+		overrideNCFBusinessAsResidualForReceivablesFiler(cf, a.mrEmit)
+
 		fundamental := BuildFundamental(a.arEmit, asset.Ticker, asset.CompositeFigi, "ARY",
 			a.period.ARFiledDate, calendarDate, a.period.PeriodEnd, a.period.ARFiledDate)
 		buffered = append(buffered, &data.Observation{
@@ -1264,6 +1267,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		overrideWASForNoDilutedFiler(cf, q.arEmit)
 		overrideWASForNoDilutedFiler(cf, q.mrEmit)
+
+		overrideNCFBusinessAsResidualForReceivablesFiler(cf, q.arEmit)
+		overrideNCFBusinessAsResidualForReceivablesFiler(cf, q.mrEmit)
 
 		// ARQ
 		fundamental := BuildFundamental(q.arEmit, asset.Ticker, asset.CompositeFigi, "ARQ",
