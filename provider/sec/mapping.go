@@ -539,6 +539,7 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	overrideIntangiblesForSplitComponents(cf, resolved, periodEnd, formType)
 	overridePreferredDividendsForMezzanineAccretion(cf, resolved)
 	overrideRandDExpensesForFootnoteOnly(resolved)
+	overrideRandDForEnergyFilers(cf, resolved, periodEnd, formType)
 	overrideCashAndEquivalentsIncludeRestrictedCash(cf, resolved, periodEnd, formType)
 	overrideDebtCurrentForSmallAmortization(cf, resolved, periodEnd, formType)
 
@@ -610,7 +611,13 @@ func overrideDebtCurrentForSmallAmortization(cf *CompanyFacts, resolved map[stri
 func overrideCashAndEquivalentsIncludeRestrictedCash(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
 	restricted, hasRestricted := resolveInstantValue(cf, "RestrictedCash", periodEnd, formType)
 	if !hasRestricted || restricted <= 0 {
-		return
+		// Some filers (XOM) tag restricted cash under the
+		// -AtCarryingValue suffix rather than the unqualified
+		// RestrictedCash concept. Fall through to that concept.
+		restricted, hasRestricted = resolveInstantValue(cf, "RestrictedCashAndCashEquivalentsAtCarryingValue", periodEnd, formType)
+		if !hasRestricted || restricted <= 0 {
+			return
+		}
 	}
 
 	combined, hasCombined := resolveInstantValue(cf, "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", periodEnd, formType)
@@ -662,6 +669,33 @@ func overrideRandDExpensesForFootnoteOnly(resolved map[string]float64) {
 	}
 
 	resolved["RandDExpenses"] = 0
+}
+
+// overrideRandDForEnergyFilers replaces RandDExpenses with ExplorationExpense
+// for integrated oil/gas filers (XOM). These companies tag their
+// income-statement "Exploration expenses, including dry holes" line under
+// us-gaap:ExplorationExpense, which Sharadar maps to r_and_d_expenses for
+// the energy sector. Any ResearchAndDevelopmentExpense XBRL tag is an
+// annual-only footnote disclosure (not on the face of the 10-Q income
+// statement) and Sharadar excludes it in favor of the quarterly exploration
+// line. Gate: ExplorationExpense is filed quarterly. Non-energy filers
+// don't file ExplorationExpense at all, so they're unaffected.
+func overrideRandDForEnergyFilers(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
+	if !conceptFiledQuarterly(cf, []string{"ExplorationExpense"}) {
+		return
+	}
+
+	val, ok := ResolveDirect(cf, FieldMapping{
+		XBRLTags:      []string{"ExplorationExpense"},
+		StatementType: StmtFlow,
+	}, periodEnd, formType)
+	if !ok {
+		resolved["RandDExpenses"] = 0
+
+		return
+	}
+
+	resolved["RandDExpenses"] = val
 }
 
 // overridePreferredDividendsForMezzanineAccretion reclassifies the residual
@@ -1958,6 +1992,53 @@ func deriveCostOfRevenueForSegmentFiler(cf *CompanyFacts, fields map[string]floa
 // line on the income statement (e.g. txrh:RentAndLeaseExpenseIncludedInCostOfRevenue).
 // When the rent extension does not resolve for a period, the fix is skipped
 // to avoid over-shifting costs; the previously-derived CoR/OpEx remain.
+// deriveCostOfRevenueForEnergyFiler handles XOM-style integrated oil/gas
+// filers whose income statement lists "Crude oil and product purchases" and
+// "Production and manufacturing expenses" inside a single CostsAndExpenses
+// subtotal alongside SG&A, D&A, Exploration expenses, Non-service pension,
+// Interest expense, and Other taxes and duties. Sharadar's split:
+//
+//	operating_expenses = SG&A + D&A + Exploration + NonServicePension
+//	cost_of_revenue    = CostsAndExpenses - operating_expenses - InterestExpense
+//
+// The gate is presence of ExplorationExpense on a recent 10-Q — a concept
+// filed by oil/gas/mining filers but none of the regression tickers (AAPL,
+// JPM, MSFT, NVDA, GS, LLY, UNH, AMZN, MCD, TXRH, WMT, KO, CELH, BRK/B).
+// Runs after deriveCostOfRevenueBottomUp, overriding its OpEx=SGA-only
+// result when the richer energy pattern applies.
+func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"ExplorationExpense"}) {
+		return
+	}
+
+	costsAndExpenses, okCE := fields["_costsAndExpensesRaw"]
+
+	revenues, okRev := fields["Revenues"]
+	if !okCE || !okRev || revenues == 0 {
+		return
+	}
+
+	sga := fields["SellingGeneralAndAdministrativeExpense"]
+	dda := fields["_depreciationDepletionAndAmortization"]
+	exploration := fields["_explorationExpense"]
+	nonServicePension := fields["_nonServicePensionExpense"]
+	interestExp := fields["InterestExpense"]
+
+	opEx := sga + dda + exploration + nonServicePension
+
+	costOfRevenue := costsAndExpenses - opEx - interestExp
+	if costOfRevenue < 0 {
+		return
+	}
+
+	grossProfit := revenues - costOfRevenue
+
+	fields["CostOfRevenue"] = costOfRevenue
+	fields["OperatingExpenses"] = opEx
+	fields["GrossProfit"] = grossProfit
+	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
+}
+
 func deriveCostOfRevenueForRestaurantFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"PreOpeningCosts"}) {
 		return

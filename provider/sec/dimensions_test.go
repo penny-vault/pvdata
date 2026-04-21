@@ -783,6 +783,10 @@ var _ = Describe("Dimensions", func() {
 				"_otherExpenses":                           true,
 				"_premiumsReceivables":                     true,
 				"_railroadReceivables":                     true,
+				"_energyRelatedInventory":                  true,
+				"_inventoryPartsAndComponents":             true,
+				"_explorationExpense":                      true,
+				"_nonServicePensionExpense":                true,
 			}
 
 			var missing []string

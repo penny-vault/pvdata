@@ -213,9 +213,26 @@ var FieldMappings = []FieldMapping{
 		Operands:                   []string{"_cashStandard"},
 		OptionalOperands:           true,
 	},
+	// Inventory: prefer the consolidated InventoryNet tag. XOM-style integrated
+	// energy filers don't file InventoryNet at all — they report inventory in
+	// two balance-sheet lines: "Crude oil, products and merchandise"
+	// (EnergyRelatedInventory) plus "Materials and supplies"
+	// (InventoryPartsAndComponentsNetOfReserves). Sum the two when the
+	// consolidated tag is absent so inventory matches Sharadar's total.
 	{
-		FieldName: "Inventory", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags: []string{"InventoryNet", "InventoryFinishedGoodsAndWorkInProcess"},
+		FieldName: "_energyRelatedInventory", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"EnergyRelatedInventory"},
+	},
+	{
+		FieldName: "_inventoryPartsAndComponents", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags: []string{"InventoryPartsAndComponentsNetOfReserves"},
+	},
+	{
+		FieldName: "Inventory", Type: MappingDerived, StatementType: StmtPointInTime, ValueType: "int64",
+		FallbackTags:     []string{"InventoryNet", "InventoryFinishedGoodsAndWorkInProcess"},
+		Op:               OpAdd,
+		Operands:         []string{"_energyRelatedInventory", "_inventoryPartsAndComponents"},
+		OptionalOperands: true,
 	},
 	{
 		FieldName: "InvestmentsCurrent", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
@@ -240,7 +257,7 @@ var FieldMappings = []FieldMapping{
 	// (AMZN uses MarketableSecuritiesCurrent instead).
 	{
 		FieldName: "_equityMethodInvestmentsForKoPattern",
-		Type:     MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		Type:      MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		RequireIfQuarterly: []string{"MarketableSecurities"},
 		XBRLTags:           []string{"EquityMethodInvestments"},
 	},
@@ -261,6 +278,12 @@ var FieldMappings = []FieldMapping{
 			"CustomerAndOtherPayables",
 		},
 		FallbackTags: []string{
+			// XOM-style energy integrated filers combine long-term investments
+			// + advances + long-term receivables into a single balance-sheet
+			// line ("Investments, advances and long-term receivables"). Prefer
+			// this combined tag over the narrower LongTermInvestments subset
+			// (XOM files both; the combined total matches Sharadar).
+			"LongTermInvestmentsAndReceivablesNet",
 			"LongTermInvestments",
 			"MarketableSecuritiesNoncurrent",
 			"AvailableForSaleSecuritiesDebtSecuritiesNoncurrent",
@@ -303,6 +326,13 @@ var FieldMappings = []FieldMapping{
 			"MarketableSecuritiesCurrent",
 			"InvestmentsInAffiliatesSubsidiariesAssociatesAndJointVentures",
 			"MarketableSecurities",
+			// XOM-style integrated energy filers report the equity-method
+			// balance AND a combined "Investments, advances and long-term
+			// receivables" line. The combined tag is picked up by
+			// InvestmentsNonCurrent above and already includes the equity-
+			// method portion — counting EquityMethodInvestments again here
+			// would double-count ~34B for XOM.
+			"LongTermInvestmentsAndReceivablesNet",
 		},
 		XBRLTags: []string{"EquityMethodInvestments"},
 	},
@@ -402,6 +432,14 @@ var FieldMappings = []FieldMapping{
 			"CostOfRevenue",
 			"CostOfGoodsSold",
 			"CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+			// XOM-style integrated energy filers don't report a standard
+			// CoGS tag; their consolidated operating costs land under
+			// CostsAndExpenses. Include it here so ReceivablesNetCurrent
+			// (the combined trade+notes total XOM files for all periods)
+			// resolves. BRK/B files CostsAndExpenses too but doesn't file
+			// ReceivablesNetCurrent, so it falls through to the segment-
+			// sum formula unchanged.
+			"CostsAndExpenses",
 			"Deposits",
 			"DepositsDomestic",
 			"DepositsTotal",
@@ -660,8 +698,8 @@ var FieldMappings = []FieldMapping{
 			"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent",
 			"OtherLiabilitiesCurrent",
 		},
-		FallbackTags:             []string{"IncomeTaxesPrincipallyDeferred"},
-		Op:                       OpAdd,
+		FallbackTags: []string{"IncomeTaxesPrincipallyDeferred"},
+		Op:           OpAdd,
 		Operands: []string{
 			"_deferredTaxLiabilities", "_accruedIncomeTaxesCurrent", "_accruedIncomeTaxesNoncurrent", "_otherTaxesPayableCurrent",
 			"_retailerDeferredTaxAndOtherNoncurrent",
@@ -1279,6 +1317,18 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_depreciationDepletionAndAmortization", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{"DepreciationDepletionAndAmortization"},
 	},
+	// Sub-fields for deriveCostOfRevenueForEnergyFiler (XOM-style integrated
+	// oil/gas). Sharadar classifies Exploration and Non-service pension as
+	// operating expenses (alongside SG&A and D&A) rather than as cost of
+	// revenue, and puts Interest expense below the operating line.
+	{
+		FieldName: "_explorationExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"ExplorationExpense"},
+	},
+	{
+		FieldName: "_nonServicePensionExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{"NetPeriodicDefinedBenefitsExpenseReversalOfExpenseExcludingServiceCostComponent"},
+	},
 	// _rentInCostOfRevenue: the "Rent" line on restaurant income statements.
 	// Companies tag this with an extension concept (e.g. txrh:
 	// RentAndLeaseExpenseIncludedInCostOfRevenue). EnrichWithExtensionFacts
@@ -1307,7 +1357,7 @@ var FieldMappings = []FieldMapping{
 	// --- Internal sub-fields for SG&A derivation ---
 	{
 		FieldName: "_generalAndAdministrativeExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"GeneralAndAdministrativeExpense"},
+		XBRLTags: []string{"GeneralAndAdministrativeExpense"},
 	},
 	{
 		FieldName: "_sellingAndMarketingExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
