@@ -522,6 +522,14 @@ var FieldMappings = []FieldMapping{
 		ExcludeIfQuarterly: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
 		XBRLTags:           []string{"PropertySubjectToOrAvailableForOperatingLeaseNet"},
 	},
+	// Oil and gas properties under the full-cost method are reported separately
+	// from the small office-equipment PP&E by E&P filers (BATL). Sharadar
+	// includes the net full-cost balance in PP&E. None of the regression
+	// tickers file this concept.
+	{
+		FieldName: "_oilAndGasPropertyFullCost", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags:  []string{"OilAndGasPropertyFullCostMethodNet"},
+	},
 	// PropertyPlantAndEquipmentNet: use the combined extension tag if
 	// available (JPM files a combined premises+equipment+ROU tag); otherwise
 	// sum the sub-components.
@@ -530,8 +538,11 @@ var FieldMappings = []FieldMapping{
 		FallbackTags: []string{
 			"PropertyPlantAndEquipmentAndOperatingLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization", // JPM extension
 		},
-		Op:               OpAdd,
-		Operands:         []string{"_ppneRaw", "_operatingLeaseROU", "_financeLeaseROU", "_propertyHeldForLease"},
+		Op: OpAdd,
+		Operands: []string{
+			"_ppneRaw", "_operatingLeaseROU", "_financeLeaseROU", "_propertyHeldForLease",
+			"_oilAndGasPropertyFullCost",
+		},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for Intangibles derivation ---
@@ -1810,6 +1821,10 @@ var FieldMappings = []FieldMapping{
 			"DepreciationDepletionAndAmortization",
 			"DepreciationAmortizationAndAccretionNet",
 			"DepreciationAmortizationAndOther", // MSFT extension tag for cash flow D&A line
+			// Full-cost-method E&P filers (BATL) tag their depletion, depreciation,
+			// and accretion line with this disclosure concept rather than the
+			// cash-flow D&A tags. None of the regression tickers file it.
+			"ResultsOfOperationsDepreciationDepletionAmortizationAndAccretion",
 		},
 		Op:               OpAdd,
 		Operands:         []string{"_depreciation", "_amortizationOfIntangibles", "_financeLeaseAmortization"},
