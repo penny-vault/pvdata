@@ -2196,12 +2196,31 @@ func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[
 		ebit := netIncome + taxExp + val
 		fields["EBIT"] = ebit
 
+		rev, hasRev := fields["Revenues"]
+
+		// Recompute ReturnOnSales only when it was already populated before
+		// the override — ResolveAllFields skips the ratio for quarterly
+		// dimensions where Sharadar reports 0.
+		if _, hasROS := fields["ReturnOnSales"]; hasROS && hasRev && rev != 0 {
+			fields["ReturnOnSales"] = math.Round(ebit/rev*1000) / 1000
+		}
+
 		if dda, ok := fields["DepreciationAmortizationAndAccretion"]; ok {
 			ebitda := ebit + dda
 			fields["EBITDA"] = ebitda
 
-			if rev, ok := fields["Revenues"]; ok && rev != 0 {
+			if _, hasMargin := fields["EBITDAMargin"]; hasMargin && hasRev && rev != 0 {
 				fields["EBITDAMargin"] = math.Round(ebitda/rev*1000) / 1000
+			}
+		}
+
+		// ROIC = EBIT / InvestedCapitalAverage. Only recompute when
+		// ResolveAllFields already produced a ROIC value.
+		if _, hasROIC := fields["ROIC"]; hasROIC {
+			if ic, ok := fields["InvestedCapitalAverage"]; ok && ic != 0 {
+				fields["ROIC"] = math.Round(ebit/ic*1000) / 1000
+			} else if ic, ok := fields["InvestedCapital"]; ok && ic != 0 {
+				fields["ROIC"] = math.Round(ebit/ic*1000) / 1000
 			}
 		}
 	}
