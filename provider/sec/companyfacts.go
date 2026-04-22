@@ -1079,6 +1079,7 @@ var singleSegmentAllowed = map[string]bool{
 	"AircraftRepurchaseLiabilitiesAndDeferredRevenueLeasesNet": true, // BRK (brka:) NetJets deferred lease revenue
 	"InterestExpenseNonoperating":                              true, // CAT: only reported under AllOtherExcludingFinancialProducts segment (financial-products interest is above the line)
 	"ShortTermBorrowings":                                      true, // CAT: only reported under FinancialProducts segment on 10-Q balance sheet (MET has no ST borrowings)
+	"ProceedsFromDebtMaturingInMoreThanThreeMonths":            true, // CAT: 10-K dimensional (only FP segment; MET has no LT debt issuance)
 }
 
 // extensionSynthesisConcepts lists extension (non-us-gaap) concept names that
