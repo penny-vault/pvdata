@@ -622,12 +622,29 @@ func overrideBalanceSheetForIndustrialFinancialFiler(cf *CompanyFacts, fields ma
 		fields["DeferredRevenue"] = 0
 	}
 
-	// DeferredTaxAssetsNet is filed only on 10-K; Sharadar copies the annual
-	// value across all four quarters of the fiscal year. The resolver returns
-	// the most recent filed fact via StmtPointInTime semantics.
-	if dta, ok := resolveInstantValue(cf, "DeferredTaxAssetsNet", periodEnd, formType); ok && dta > 0 {
+	// CAT tags "Deferred and refundable income taxes" on the balance sheet
+	// under the extension concept NoncurrentDeferredAndRefundableIncomeTaxes
+	// (captured from inline XBRL by EnrichWithExtensionFacts under the bare
+	// local name). This is Sharadar's tax_assets source and is filed on
+	// every 10-Q and 10-K. Fall back to us-gaap:DeferredTaxAssetsNet (10-K
+	// only, annual valuation allowance-netted value) for older periods where
+	// the extension tag isn't captured. The balance-sheet line is already
+	// a net DTA-DTL figure, so zero out TaxLiabilities to avoid double-counting
+	// the 10-K-only DeferredIncomeTaxLiabilitiesNet footnote disclosure.
+	if dta, ok := resolveInstantValue(cf, "NoncurrentDeferredAndRefundableIncomeTaxes", periodEnd, formType); ok && dta > 0 {
 		fields["TaxAssets"] = dta
+		fields["TaxLiabilities"] = 0
+	} else if dta, ok := resolveInstantValue(cf, "DeferredTaxAssetsNet", periodEnd, formType); ok && dta > 0 {
+		fields["TaxAssets"] = dta
+		fields["TaxLiabilities"] = 0
 	}
+
+	// Sharadar reports share_based_compensation = 0 for CAT across all
+	// quarters. CAT tags both ShareBasedCompensation and
+	// AllocatedShareBasedCompensationExpense inconsistently (Q1 standalone
+	// only for ShareBasedCompensation), so Q4 synthesis from Annual − Q1−Q3
+	// yields -44M from an incomplete fact sequence. Zeroing matches Sharadar.
+	fields["ShareBasedCompensation"] = 0
 }
 
 // overrideDebtCurrentForSmallAmortization zeros out a small
