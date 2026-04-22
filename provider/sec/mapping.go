@@ -2092,6 +2092,48 @@ func deriveCostOfRevenueForFullCostEnergyFiler(cf *CompanyFacts, fields map[stri
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
+// overrideLiabilitiesForFullCostEnergyFiler adds BATL-style balance-sheet
+// line items that Sharadar rolls into liabilities_non_current but that do
+// not flow into our derivation when the filer omits us-gaap:Liabilities /
+// us-gaap:LiabilitiesNoncurrent: asset-retirement obligations, long-term
+// derivative liabilities, and the carrying amount of redeemable convertible
+// preferred stock (mezzanine equity).
+//
+// Gate on OilAndGasPropertyFullCostMethodNet filed quarterly — a balance-
+// sheet tag filed only by full-cost E&P companies. None of the regression
+// tickers file it, so additions here don't affect them even if they file
+// one of the three component tags.
+func overrideLiabilitiesForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
+		return
+	}
+
+	aro := fields["_fcEnergyARO"]
+	derivNC := fields["_fcEnergyDerivLiabNC"]
+	tempEquity := fields["_fcEnergyTemporaryEquity"]
+
+	addition := aro + derivNC + tempEquity
+	if addition == 0 {
+		return
+	}
+
+	if v, ok := fields["LiabilitiesNonCurrent"]; ok {
+		fields["LiabilitiesNonCurrent"] = v + addition
+	}
+
+	if v, ok := fields["TotalLiabilities"]; ok {
+		fields["TotalLiabilities"] = v + addition
+	}
+
+	// DebtToEquityRatio = TotalLiabilities / Equity — recompute against the
+	// updated TotalLiabilities.
+	if totalLiab, ok := fields["TotalLiabilities"]; ok {
+		if equity, ok := fields["Equity"]; ok && equity != 0 {
+			fields["DebtToEquityRatio"] = math.Round(totalLiab/equity*1000) / 1000
+		}
+	}
+}
+
 // overrideNCFBusinessAsResidualForReceivablesFiler computes NetCashFlowBusiness
 // as the residual of the investing-activities section for filers (XOM) that
 // don't tag explicit business-acquisition concepts and instead bundle

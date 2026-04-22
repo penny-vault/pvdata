@@ -805,6 +805,17 @@ var FieldMappings = []FieldMapping{
 		RequireIfQuarterly: []string{"FinanceLeaseRightOfUseAsset"},
 		XBRLTags:           []string{"FinanceLeaseLiabilityCurrent"},
 	},
+	// Full-cost E&P variant (BATL): Sharadar rolls OperatingLeaseLiabilityCurrent
+	// into debt_current for full-cost-method oil/gas filers, similar to the
+	// restaurant and retailer patterns above. Gate on
+	// OilAndGasPropertyFullCostMethodNet — filed only by full-cost E&P filers;
+	// none of the regression tickers file it.
+	{
+		FieldName: "_operatingLeaseLiabilityCurrentFullCostEnergy", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		RequireQuarterly:   true,
+		RequireIfQuarterly: []string{"OilAndGasPropertyFullCostMethodNet"},
+		XBRLTags:           []string{"OperatingLeaseLiabilityCurrent"},
+	},
 	// DebtCurrent = ShortTermDebt + LongTermDebtCurrentMaturities +
 	// CommercialPaperDebt + current operating lease liability. Sharadar
 	// includes all forms of current debt (bonds, commercial paper, notes
@@ -821,6 +832,7 @@ var FieldMappings = []FieldMapping{
 			"ShortTermDebt", "LongTermDebtCurrentMaturities", "CommercialPaperDebt",
 			"_operatingLeaseLiabilityCurrent", "_operatingLeaseLiabilityCurrentRestaurant",
 			"_operatingLeaseLiabilityCurrentRetailer", "_financeLeaseLiabilityCurrentRetailer",
+			"_operatingLeaseLiabilityCurrentFullCostEnergy",
 		},
 		OptionalOperands:              true,
 		PreferFormulaWhenFallbackZero: true,
@@ -1385,6 +1397,25 @@ var FieldMappings = []FieldMapping{
 			"AssetImpairmentCharges",
 			"EquityMethodInvestmentOtherThanTemporaryImpairment",
 		},
+	},
+	// Additional non-current liability components filed by BATL-style full-cost
+	// E&P companies but absent from the us-gaap:Liabilities/LiabilitiesNoncurrent
+	// roll-up tags. Sharadar adds Asset-retirement obligations, long-term
+	// derivative liabilities, and the carrying amount of redeemable convertible
+	// preferred stock (mezzanine equity) into liabilities_non_current and
+	// total_liabilities. Read only by overrideLiabilitiesForFullCostEnergyFiler,
+	// which gates on OilAndGasPropertyFullCostMethodNet.
+	{
+		FieldName: "_fcEnergyARO", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags:  []string{"AssetRetirementObligationsNoncurrent"},
+	},
+	{
+		FieldName: "_fcEnergyDerivLiabNC", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags:  []string{"DerivativeLiabilitiesNoncurrent"},
+	},
+	{
+		FieldName: "_fcEnergyTemporaryEquity", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
+		XBRLTags:  []string{"TemporaryEquityCarryingAmountAttributableToParent"},
 	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
