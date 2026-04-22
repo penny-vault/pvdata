@@ -640,25 +640,21 @@ var FieldMappings = []FieldMapping{
 		// WMT-style filers that report DeferredIncomeTaxesAndOther as a
 		// combined quarterly line use that tag instead; counting the
 		// 10-K note-level DeferredTaxLiabilities on top would double-count.
-		//
-		// Full-cost E&P filers (BATL) have DTA = DTL = 1,064 (fully offsetting)
-		// and report no deferred tax line on the balance sheet, but they
-		// still tag DeferredTaxLiabilities in footnotes. Excluding them via
-		// the E&P marker keeps tax_liabilities at 0 to match Sharadar.
-		ExcludeIfQuarterly: []string{
-			"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent",
-			"OilAndGasPropertyFullCostMethodNet",
-		},
+		ExcludeIfQuarterly: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+		// Sharadar's tax_liabilities reflects the balance-sheet net deferred
+		// tax position. Resolve from the balance-sheet-net tags only:
+		//   - DeferredIncomeTaxLiabilitiesNet (KO: 2,469M liability-side net)
+		//   - DeferredTaxLiabilitiesNoncurrent (AAPL/MSFT/NVDA etc.)
+		// The gross us-gaap:DeferredTaxLiabilities tag is intentionally
+		// NOT listed here: it's a footnote disclosure of pre-netting DTL
+		// that is fully offset by DeferredTaxAssetsNet for filers that don't
+		// show a net deferred tax line on their balance sheet (BATL:
+		// DTL=DTA=1,064, no BS line). Using the gross tag there overstates
+		// tax_liabilities. Filers with a real net DTL reliably file one of
+		// the two balance-sheet-net tags above.
 		XBRLTags: []string{
-			// Prefer the net liability-side tag (Sharadar's
-			// tax_liabilities uses this). KO files both
-			// DeferredTaxLiabilities (1150M, net of deferred tax assets)
-			// and DeferredIncomeTaxLiabilitiesNet (2469M, liability-side
-			// net); the latter matches the balance-sheet line Sharadar
-			// picks up.
 			"DeferredIncomeTaxLiabilitiesNet",
 			"DeferredTaxLiabilitiesNoncurrent",
-			"DeferredTaxLiabilities",
 		},
 	},
 	// Accrued income taxes are included when filed as separate quarterly
@@ -1394,16 +1390,22 @@ var FieldMappings = []FieldMapping{
 		XBRLTags:  []string{"ProductionTaxExpenseBenefit"},
 	},
 	{
-		// EquityMethodInvestmentOtherThanTemporaryImpairment appears here because
-		// BATL's 2024 10-K mis-tagged its "Impairment of contract asset" line
-		// under that concept. Only read by deriveCostOfRevenueForFullCostEnergyFiler,
-		// which gates on OilAndGasPropertyFullCostMethodNet; non-E&P filers that
-		// legitimately use the equity-method impairment tag (KO, BRK/B) never
-		// reach the override.
+		// Full-cost E&P filers roll impairment losses into operating expenses
+		// regardless of the specific underlying concept (contract-asset,
+		// equity-method-investment, oil/gas property, or generic asset).
+		// Accept all operating-impairment tags so the OpEx total matches the
+		// income-statement line (BATL 2024 FY: 18,511 under
+		// EquityMethodInvestmentOtherThanTemporaryImpairment; BATL 2025 FY:
+		// 1,072 under AssetImpairmentCharges). Only read by
+		// deriveCostOfRevenueForFullCostEnergyFiler, which gates on
+		// OilAndGasPropertyFullCostMethodNet; non-E&P filers that file
+		// EquityMethodInvestmentOtherThanTemporaryImpairment (KO, BRK/B)
+		// don't reach the override and retain their existing treatment.
 		FieldName: "_fcEnergyAssetImpairment", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags: []string{
 			"AssetImpairmentCharges",
 			"EquityMethodInvestmentOtherThanTemporaryImpairment",
+			"ImpairmentOfOilAndGasProperties",
 		},
 	},
 	// Additional non-current liability components filed by BATL-style full-cost
