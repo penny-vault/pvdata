@@ -1417,6 +1417,15 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_fcEnergyTemporaryEquity", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
 		XBRLTags:  []string{"TemporaryEquityCarryingAmountAttributableToParent"},
 	},
+	// Full-cost E&P filers (BATL) tag "Interest expense and other" under the
+	// company-specific extension concept InterestExpenseAndOtherNonoperatingIncomeExpense
+	// rather than us-gaap:InterestExpense. Sharadar's interest_expense matches
+	// the extension value (which already nets other non-operating items).
+	// Only read by overrideInterestExpenseForFullCostEnergyFiler.
+	{
+		FieldName: "_fcEnergyInterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"InterestExpenseAndOtherNonoperatingIncomeExpense"},
+	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
 	// CostOfRevenue; with CostOfRevenue absent (treated as 0), the derived
@@ -1901,6 +1910,14 @@ var FieldMappings = []FieldMapping{
 		XBRLTags: []string{
 			"PaymentsToAcquirePropertyPlantAndEquipment",
 			"PaymentsToAcquireProductiveAssets",
+			// Full-cost E&P filers (BATL) tag their drilling/development capex
+			// as PaymentsToExploreAndDevelopOilAndGasProperties. None of the
+			// regression tickers file this concept. Listed before
+			// CapitalExpendituresIncurredButNotYetPaid because BATL files both:
+			// the "NotYetPaid" tag is a year-end accrual (~7M) not the cash-
+			// flow capex (~65M), and the regression tickers that file it
+			// (AAPL/NVDA/AMZN/TXRH) already match the standard tag first.
+			"PaymentsToExploreAndDevelopOilAndGasProperties",
 			"CapitalExpendituresIncurredButNotYetPaid",
 			// LLY tags PP&E capex as PaymentsToAcquireOtherPropertyPlantAndEquipment
 			// (with Other in the name even though it is the company's primary capex line).

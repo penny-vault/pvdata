@@ -2134,6 +2134,39 @@ func overrideLiabilitiesForFullCostEnergyFiler(cf *CompanyFacts, fields map[stri
 	}
 }
 
+// overrideInterestExpenseForFullCostEnergyFiler sets interest_expense from
+// the filer's income-statement "Interest expense and other" line rather
+// than the us-gaap:InterestExpense tag. BATL files the line under the
+// company-specific extension InterestExpenseAndOtherNonoperatingIncomeExpense,
+// which nets minor other-income items with gross interest and matches
+// Sharadar's interest_expense. Gate on OilAndGasPropertyFullCostMethodNet.
+func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
+		return
+	}
+
+	val, ok := fields["_fcEnergyInterestExpense"]
+	if !ok {
+		return
+	}
+
+	fields["InterestExpense"] = val
+
+	// EBIT = NetIncome + IncomeTaxExpense + InterestExpense — recompute
+	// against the updated InterestExpense. EBITDA = EBIT + DD&A follows.
+	netIncome, hasNI := fields["NetIncome"]
+	taxExp := fields["IncomeTaxExpense"]
+
+	if hasNI {
+		ebit := netIncome + taxExp + val
+		fields["EBIT"] = ebit
+
+		if dda, ok := fields["DepreciationAmortizationAndAccretion"]; ok {
+			fields["EBITDA"] = ebit + dda
+		}
+	}
+}
+
 // overrideNCFBusinessAsResidualForReceivablesFiler computes NetCashFlowBusiness
 // as the residual of the investing-activities section for filers (XOM) that
 // don't tag explicit business-acquisition concepts and instead bundle
