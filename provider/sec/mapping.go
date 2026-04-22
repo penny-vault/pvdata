@@ -2134,6 +2134,41 @@ func overrideLiabilitiesForFullCostEnergyFiler(cf *CompanyFacts, fields map[stri
 	}
 }
 
+// overrideNCIForFullCostEnergyFiler zeros the NCI residual for BATL-style
+// filers that have no consolidated subsidiaries (no
+// NetIncomeLossAttributableToNoncontrollingInterest tag) but whose
+// ConsolidatedIncome / NetIncomeCommonStock / PreferredDividends values
+// drift apart quarter-by-quarter because of mezzanine-accretion timing —
+// the preferred_dividends line on the income statement lags the XBRL
+// PreferredStockDividendsIncomeStatementImpact value in some quarters.
+// Sharadar reports NCI = 0 for all these filers and rolls the residual
+// into preferred_dividends; this override does the same and recomputes
+// NetIncomeCommonStock so the identity ci - nic - pref = 0 holds.
+//
+// Gate on OilAndGasPropertyFullCostMethodNet filed quarterly and the
+// absence of NetIncomeLossAttributableToNoncontrollingInterest (only true
+// for full-cost E&P filers with no operating NCI).
+func overrideNCIForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
+		return
+	}
+
+	if conceptFiledQuarterly(cf, []string{"NetIncomeLossAttributableToNoncontrollingInterest"}) {
+		return
+	}
+
+	ci, hasCI := fields["ConsolidatedIncome"]
+	nic, hasNIC := fields["NetIncomeCommonStock"]
+
+	if !hasCI || !hasNIC {
+		return
+	}
+
+	totalDeduction := ci - nic
+	fields["PreferredDividendsIncomeStatementImpact"] = totalDeduction
+	fields["NetIncomeToNonControllingInterests"] = 0
+}
+
 // overrideInterestExpenseForFullCostEnergyFiler sets interest_expense from
 // the filer's income-statement "Interest expense and other" line rather
 // than the us-gaap:InterestExpense tag. BATL files the line under the
@@ -2162,7 +2197,12 @@ func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[
 		fields["EBIT"] = ebit
 
 		if dda, ok := fields["DepreciationAmortizationAndAccretion"]; ok {
-			fields["EBITDA"] = ebit + dda
+			ebitda := ebit + dda
+			fields["EBITDA"] = ebitda
+
+			if rev, ok := fields["Revenues"]; ok && rev != 0 {
+				fields["EBITDAMargin"] = math.Round(ebitda/rev*1000) / 1000
+			}
 		}
 	}
 }

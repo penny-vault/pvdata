@@ -1133,6 +1133,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		overrideLiabilitiesForFullCostEnergyFiler(cf, a.mrEmit)
 		overrideInterestExpenseForFullCostEnergyFiler(cf, a.arEmit)
 		overrideInterestExpenseForFullCostEnergyFiler(cf, a.mrEmit)
+		overrideNCIForFullCostEnergyFiler(cf, a.arEmit)
+		overrideNCIForFullCostEnergyFiler(cf, a.mrEmit)
 
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, a.arEmit)
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, a.mrEmit)
@@ -1275,6 +1277,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		overrideLiabilitiesForFullCostEnergyFiler(cf, q.mrEmit)
 		overrideInterestExpenseForFullCostEnergyFiler(cf, q.arEmit)
 		overrideInterestExpenseForFullCostEnergyFiler(cf, q.mrEmit)
+		overrideNCIForFullCostEnergyFiler(cf, q.arEmit)
+		overrideNCIForFullCostEnergyFiler(cf, q.mrEmit)
 
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, q.arEmit)
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, q.mrEmit)
