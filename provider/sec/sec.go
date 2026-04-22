@@ -894,6 +894,41 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		quarters[idx] = q4
 	}
 
+	// CAT-style industrial-financial filers: Sharadar reports the annual
+	// weighted-average share count as the Q4 synth ARQ/MRQ value instead of
+	// the day-weighted quarterly value. The filer's XBRL contains only the
+	// FY weighted-average (no Q4-standalone tag), and Sharadar's ARQ for
+	// the 10-K period pins to that annual value rather than synthesizing a
+	// Q4-specific weighted average. Other filers continue to use the day-
+	// weighted synth.
+	if isIndustrialFinancialFiler(cf) {
+		for i := range quarters {
+			for _, a := range annuals {
+				if !quarters[i].period.PeriodEnd.Equal(a.period.PeriodEnd) {
+					continue
+				}
+
+				if v, ok := a.arFields["WeightedAverageShares"]; ok {
+					quarters[i].arEmit["WeightedAverageShares"] = v
+				}
+
+				if v, ok := a.arFields["WeightedAverageSharesDiluted"]; ok {
+					quarters[i].arEmit["WeightedAverageSharesDiluted"] = v
+				}
+
+				if v, ok := a.mrFields["WeightedAverageShares"]; ok {
+					quarters[i].mrEmit["WeightedAverageShares"] = v
+				}
+
+				if v, ok := a.mrFields["WeightedAverageSharesDiluted"]; ok {
+					quarters[i].mrEmit["WeightedAverageSharesDiluted"] = v
+				}
+
+				break
+			}
+		}
+	}
+
 	// Override DPS with cash-paid methodology for all quarters (including
 	// synthesized Q4). This must happen after de-cumulation and Q4 synthesis
 	// so _absDividendsPaid is the correct single-quarter cash amount.
