@@ -2064,6 +2064,19 @@ var FieldMappings = []FieldMapping{
 			"ProceedsfromDisposalsofbusinessesequitymethodinvestmentsandnonmarketablesecurities", // 10-Q casing
 		},
 	},
+	// _proceedsDivestBusinessesNetOfCashDivested: CAT-style industrial filers
+	// file the "NetOfCashDivested" variant on the 10-K with a sign="-" attribute
+	// (so the stored value is negative, indicating a net outflow after
+	// deducting cash divested with the sold business). Sharadar folds the
+	// signed value into NCF_business for this filer shape. Broker-dealers
+	// (GS) file the same concept but Sharadar classifies it under NCF_invest
+	// — exclude them via the CustomerAndOtherPayables investment-bank marker
+	// so they keep the existing behavior.
+	{
+		FieldName: "_proceedsDivestBusinessesNetOfCashDivested", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		ExcludeIfQuarterly: []string{"CustomerAndOtherPayables"},
+		XBRLTags:           []string{"ProceedsFromDivestitureOfBusinessesNetOfCashDivested"},
+	},
 	// MCD-style filers that don't tag PaymentsToAcquireBusinesses* at all
 	// report their franchisee / real-estate acquisitions under the
 	// "other productive assets" pair instead. Sharadar folds that pair into
@@ -2098,6 +2111,9 @@ var FieldMappings = []FieldMapping{
 	// NetCashFlowBusiness = -acquisitions - jv_payments + divestitures + equity_method_returns
 	// + (-other_productive_asset_payments + other_productive_asset_proceeds) for MCD-style filers.
 	// Inflows (divestitures, returns) are positive; outflows are negative.
+	// CAT's NetOfCashDivested value is signed (may be negative to reflect
+	// cash divested exceeding proceeds) so it enters with a +1 coefficient
+	// unchanged.
 	{
 		FieldName: "NetCashFlowBusiness", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op: OpLinearCombination,
@@ -2108,10 +2124,11 @@ var FieldMappings = []FieldMapping{
 			"_proceedsEquityMethodReturn",
 			"_proceedsBusinessEquityMethod",
 			"_proceedsDivestBusinesses",
+			"_proceedsDivestBusinessesNetOfCashDivested",
 			"_paymentsOtherProductiveAssets",
 			"_proceedsOtherProductiveAssets",
 		},
-		Coefficients:     []float64{-1, -1, 1, 1, 1, 1, -1, 1},
+		Coefficients:     []float64{-1, -1, 1, 1, 1, 1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowCommon derivation ---
