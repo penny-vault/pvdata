@@ -921,9 +921,31 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// dates in February that normalize to the next quarter). Use the same
 	// filing-date resolution with the AR filing date to pick the DEI fact
 	// from the actual filing.
+	//
+	// For synthesized Q4 quarters (whose period end matches an annual), use
+	// the annual-AR resolver so CAT-style filers (10-K cover page discloses
+	// only the fiscal-Q2 shares) get the mid-year value.
+	annualPeriodEnds := make(map[time.Time]bool, len(annuals))
+	for _, a := range annuals {
+		annualPeriodEnds[a.period.PeriodEnd] = true
+	}
+
 	for i := range quarters {
-		if val, ok := resolveSharesBasicAsOf(cf, quarters[i].period.ARFiledDate); ok {
-			quarters[i].arEmit["SharesBasic"] = val
+		q := &quarters[i]
+
+		var (
+			val float64
+			ok  bool
+		)
+
+		if annualPeriodEnds[q.period.PeriodEnd] {
+			val, ok = resolveSharesBasicForAnnualAR(cf, q.period.ARFiledDate, q.period.PeriodEnd)
+		} else {
+			val, ok = resolveSharesBasicAsOf(cf, q.period.ARFiledDate)
+		}
+
+		if ok {
+			q.arEmit["SharesBasic"] = val
 		}
 	}
 
@@ -1091,7 +1113,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 
 		// ARY — override SharesBasic for AR semantics (see quarterly override above).
-		if val, ok := resolveSharesBasicAsOf(cf, a.period.ARFiledDate); ok {
+		// Use the annual-specific resolver: Sharadar's ARQ shares_basic for 10-K
+		// periods matches the cover-page disclosure, which for some filers (CAT)
+		// only appears as mid-fiscal-year (Q2) prose.
+		if val, ok := resolveSharesBasicForAnnualAR(cf, a.period.ARFiledDate, a.period.PeriodEnd); ok {
 			a.arEmit["SharesBasic"] = val
 		}
 

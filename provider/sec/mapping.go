@@ -1431,6 +1431,159 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 	return total, true
 }
 
+// resolveSharesBasicForAnnualAR returns the as-reported shares outstanding for
+// an annual (10-K) period. SEC 10-K cover pages disclose shares outstanding
+// under two conventions:
+//
+//  1. "As of [latest practicable date before filing], there were N shares" —
+//     filed as dei:EntityCommonStockSharesOutstanding with end > fiscal year
+//     end. AAPL/MSFT/most filers follow this convention.
+//  2. "As of [last business day of fiscal Q2], there were N shares" (for
+//     public-float calculation) — CAT-style filers only disclose this value
+//     on the cover page and don't tag a separate post-period-end DEI. The
+//     value is only in XBRL via the mid-fiscal-year Q2 10-Q filing.
+//
+// Sharadar's ARQ shares_basic for 10-K periods matches whichever disclosure
+// the filer uses. This function:
+//
+//   - First picks the latest DEI fact filed by arFiledDate whose end > periodEnd
+//     (convention #1).
+//   - Falls back to the DEI fact with end ≈ periodEnd − 6 months (fiscal Q2 end,
+//     convention #2).
+//
+// Quarterly periods continue to use the simpler resolveSharesBasicAsOf path.
+func resolveSharesBasicForAnnualAR(cf *CompanyFacts, arFiledDate, periodEnd time.Time) (float64, bool) {
+	staleThreshold := arFiledDate.AddDate(-2, 0, 0)
+	postPeriodEndWindow := periodEnd.AddDate(0, 4, 0) // ~4 months after FY end
+
+	// Convention #1: find the latest-filed DEI whose end is after the fiscal
+	// year end (cover-page "as of recent date" disclosure). Gate the end date
+	// to within 4 months of period end so comparative data from a later 10-Q
+	// doesn't leak in.
+	var (
+		postPeriodConcept string
+		postPeriodFiled   time.Time
+		postPeriodFound   bool
+	)
+
+	for _, conceptName := range []string{
+		"EntityCommonStockSharesOutstanding",
+		"CommonStockSharesOutstanding",
+	} {
+		facts, ok := cf.Facts[conceptName]
+		if !ok {
+			continue
+		}
+
+		for i := range facts {
+			f := &facts[i]
+
+			if f.Form != "10-K" && f.Form != "10-Q" {
+				continue
+			}
+
+			if f.Filed.After(arFiledDate) || f.Filed.Before(staleThreshold) {
+				continue
+			}
+
+			if !f.End.After(periodEnd) || f.End.After(postPeriodEndWindow) {
+				continue
+			}
+
+			if !postPeriodFound || f.Filed.After(postPeriodFiled) {
+				postPeriodConcept = conceptName
+				postPeriodFiled = f.Filed
+				postPeriodFound = true
+			}
+		}
+	}
+
+	if postPeriodFound {
+		total := 0.0
+		for i := range cf.Facts[postPeriodConcept] {
+			f := &cf.Facts[postPeriodConcept][i]
+			if f.Filed.Equal(postPeriodFiled) && (f.Form == "10-K" || f.Form == "10-Q") && f.End.After(periodEnd) && !f.End.After(postPeriodEndWindow) {
+				total += f.Val
+			}
+		}
+
+		if total > 0 {
+			return total, true
+		}
+	}
+
+	// Convention #2: fall back to the DEI at fiscal Q2 end (period end − 6 months).
+	q2End := periodEnd.AddDate(0, -6, 0)
+	q2Window := 30 * 24 * time.Hour
+
+	var (
+		q2Concept string
+		q2Filed   time.Time
+		q2Found   bool
+	)
+
+	for _, conceptName := range []string{
+		"EntityCommonStockSharesOutstanding",
+		"CommonStockSharesOutstanding",
+	} {
+		facts, ok := cf.Facts[conceptName]
+		if !ok {
+			continue
+		}
+
+		for i := range facts {
+			f := &facts[i]
+
+			if f.Form != "10-K" && f.Form != "10-Q" {
+				continue
+			}
+
+			if f.Filed.After(arFiledDate) || f.Filed.Before(staleThreshold) {
+				continue
+			}
+
+			delta := f.End.Sub(q2End)
+			if delta < 0 {
+				delta = -delta
+			}
+
+			if delta > q2Window {
+				continue
+			}
+
+			if !q2Found || f.Filed.After(q2Filed) {
+				q2Concept = conceptName
+				q2Filed = f.Filed
+				q2Found = true
+			}
+		}
+	}
+
+	if q2Found {
+		total := 0.0
+		for i := range cf.Facts[q2Concept] {
+			f := &cf.Facts[q2Concept][i]
+			if f.Filed.Equal(q2Filed) && (f.Form == "10-K" || f.Form == "10-Q") {
+				delta := f.End.Sub(q2End)
+				if delta < 0 {
+					delta = -delta
+				}
+
+				if delta <= q2Window {
+					total += f.Val
+				}
+			}
+		}
+
+		if total > 0 {
+			return total, true
+		}
+	}
+
+	// Last resort: fall back to the generic latest-filed resolution.
+	return resolveSharesBasicAsOf(cf, arFiledDate)
+}
+
 // resolveClassSharesAsOf returns the Class A and Class B raw cover-page share
 // counts from the most recently filed 10-K or 10-Q on or before asOfDate.
 // Returns (filed, classA, classB, true) when a filing with BOTH class values
