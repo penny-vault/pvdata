@@ -2559,6 +2559,30 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_proceedsReceivablesCollection", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags:  []string{"ProceedsFromSaleAndCollectionOfReceivables"},
 	},
+	// Captive-finance receivables activity. CAT-style industrial manufacturers
+	// with a financing arm report originations and collections of customer
+	// finance receivables as investing-activities line items; Sharadar rolls
+	// the net into net_cash_flow_invest. Gate on PaymentsToAcquireFinanceReceivables
+	// filed quarterly AND NOT filed by a bank (Deposits absent). None of the
+	// regression tickers file PaymentsToAcquireFinanceReceivables.
+	{
+		FieldName: "_paymentsFinanceReceivables", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"PaymentsToAcquireFinanceReceivables"},
+		ExcludeIfQuarterly: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
+		XBRLTags:           []string{"PaymentsToAcquireFinanceReceivables"},
+	},
+	{
+		FieldName: "_proceedsCollectionFinanceReceivables", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"PaymentsToAcquireFinanceReceivables"},
+		ExcludeIfQuarterly: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
+		XBRLTags:           []string{"ProceedsFromCollectionOfFinanceReceivables"},
+	},
+	{
+		FieldName: "_proceedsSaleFinanceReceivables", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"PaymentsToAcquireFinanceReceivables"},
+		ExcludeIfQuarterly: []string{"Deposits", "DepositsDomestic", "DepositsTotal"},
+		XBRLTags:           []string{"ProceedsFromSaleOfFinanceReceivables"},
+	},
 	// NetCashFlowInvest = -payments + proceeds (Sharadar NCFINV:
 	// "net cash inflow (outflow) associated with acquisition & disposal of investments")
 	{
@@ -2572,8 +2596,10 @@ var FieldMappings = []FieldMapping{
 			"_paymentsInvestEquityMethod",
 			"_proceedsInvestLeaseReceivables",
 			"_proceedsInvestEnergyFiler",
+			"_paymentsFinanceReceivables", "_proceedsCollectionFinanceReceivables",
+			"_proceedsSaleFinanceReceivables",
 		},
-		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1, 1},
+		Coefficients:     []float64{-1, 1, -1, 1, -1, 1, -1, 1, -1, 1, 1, -1, 1, 1},
 		OptionalOperands: true,
 	},
 	{
