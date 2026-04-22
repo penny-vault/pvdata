@@ -1352,6 +1352,40 @@ var FieldMappings = []FieldMapping{
 			"RentExpenseIncludedInCostOfRevenue",
 		},
 	},
+	// Sub-fields for deriveCostOfRevenueForFullCostEnergyFiler (BATL-style
+	// small E&P using the full-cost method). Sharadar splits BATL's income
+	// statement as:
+	//   cost_of_revenue    = LeaseOperating + Workover
+	//   operating_expenses = G&A + DD&A + AssetImpairment + ProductionTax
+	// Gathering/transportation is excluded from both. BATL mis-tags the
+	// "Lease operating" production-cost line under us-gaap:OperatingLeaseExpense
+	// (a concept normally reserved for ASC 842 rent expense); the override
+	// only reads this tag when the full-cost E&P gate is met.
+	{
+		FieldName: "_fcEnergyLeaseOperating", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"OperatingLeaseExpense"},
+	},
+	{
+		FieldName: "_fcEnergyWorkover", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"WorkOverAndOtherExpense"},
+	},
+	{
+		FieldName: "_fcEnergyProductionTax", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"ProductionTaxExpenseBenefit"},
+	},
+	{
+		// EquityMethodInvestmentOtherThanTemporaryImpairment appears here because
+		// BATL's 2024 10-K mis-tagged its "Impairment of contract asset" line
+		// under that concept. Only read by deriveCostOfRevenueForFullCostEnergyFiler,
+		// which gates on OilAndGasPropertyFullCostMethodNet; non-E&P filers that
+		// legitimately use the equity-method impairment tag (KO, BRK/B) never
+		// reach the override.
+		FieldName: "_fcEnergyAssetImpairment", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags: []string{
+			"AssetImpairmentCharges",
+			"EquityMethodInvestmentOtherThanTemporaryImpairment",
+		},
+	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
 	// CostOfRevenue; with CostOfRevenue absent (treated as 0), the derived

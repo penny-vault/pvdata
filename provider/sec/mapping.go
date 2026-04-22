@@ -2039,6 +2039,59 @@ func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
+// deriveCostOfRevenueForFullCostEnergyFiler handles BATL-style small E&P
+// companies reporting under the full-cost method. Their income statement
+// breaks production costs into Lease operating, Workover, Production taxes,
+// and Gathering/transportation, plus a separate G&A, DD&A (accretion), and
+// impairment section. Sharadar's split:
+//
+//	cost_of_revenue    = LeaseOperating + Workover
+//	operating_expenses = G&A + DD&A + AssetImpairment + ProductionTax
+//	operating_income   = Revenue - cost_of_revenue - operating_expenses
+//
+// Gathering/transportation is excluded from both buckets entirely (Sharadar
+// treats it as a pass-through revenue adjustment rather than an operating
+// cost), so this operating_income diverges from the filer's
+// OperatingIncomeLoss tag.
+//
+// The gate is presence of OilAndGasPropertyFullCostMethodNet on a recent
+// 10-Q — a balance-sheet tag filed only by full-cost E&P companies; none
+// of the regression tickers (AAPL, JPM, MSFT, NVDA, GS, LLY, UNH, AMZN, MCD,
+// TXRH, WMT, KO, CELH, XOM, BRK/B) file it.
+func deriveCostOfRevenueForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
+		return
+	}
+
+	revenues, okRev := fields["Revenues"]
+	if !okRev || revenues == 0 {
+		return
+	}
+
+	leaseOperating := fields["_fcEnergyLeaseOperating"]
+	workover := fields["_fcEnergyWorkover"]
+	productionTax := fields["_fcEnergyProductionTax"]
+	assetImpair := fields["_fcEnergyAssetImpairment"]
+	gna := fields["_generalAndAdministrativeExpense"]
+	dda := fields["DepreciationAmortizationAndAccretion"]
+
+	costOfRevenue := leaseOperating + workover
+	opEx := gna + dda + assetImpair + productionTax
+
+	if costOfRevenue == 0 && opEx == 0 {
+		return
+	}
+
+	grossProfit := revenues - costOfRevenue
+	opIncome := grossProfit - opEx
+
+	fields["CostOfRevenue"] = costOfRevenue
+	fields["OperatingExpenses"] = opEx
+	fields["GrossProfit"] = grossProfit
+	fields["OperatingIncome"] = opIncome
+	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
+}
+
 // overrideNCFBusinessAsResidualForReceivablesFiler computes NetCashFlowBusiness
 // as the residual of the investing-activities section for filers (XOM) that
 // don't tag explicit business-acquisition concepts and instead bundle
