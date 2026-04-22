@@ -640,7 +640,15 @@ var FieldMappings = []FieldMapping{
 		// WMT-style filers that report DeferredIncomeTaxesAndOther as a
 		// combined quarterly line use that tag instead; counting the
 		// 10-K note-level DeferredTaxLiabilities on top would double-count.
-		ExcludeIfQuarterly: []string{"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent"},
+		//
+		// Full-cost E&P filers (BATL) have DTA = DTL = 1,064 (fully offsetting)
+		// and report no deferred tax line on the balance sheet, but they
+		// still tag DeferredTaxLiabilities in footnotes. Excluding them via
+		// the E&P marker keeps tax_liabilities at 0 to match Sharadar.
+		ExcludeIfQuarterly: []string{
+			"DeferredIncomeTaxesAndOtherLiabilitiesNoncurrent",
+			"OilAndGasPropertyFullCostMethodNet",
+		},
 		XBRLTags: []string{
 			// Prefer the net liability-side tag (Sharadar's
 			// tax_liabilities uses this). KO files both
@@ -1426,6 +1434,18 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_fcEnergyInterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags:  []string{"InterestExpenseAndOtherNonoperatingIncomeExpense"},
 	},
+	// Small capex line items that BATL presents as separate rows inside the
+	// investing-activities section. _capexGross resolves from the
+	// PaymentsToExploreAndDevelop tag first-match and ignores these, so they
+	// must be added by the full-cost E&P capex-classification override.
+	{
+		FieldName: "_fcEnergyOtherProductiveAssets", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"PaymentsToAcquireOtherProductiveAssets"},
+	},
+	{
+		FieldName: "_fcEnergyOilGasPropertyAcq", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"PaymentsToAcquireOilAndGasProperty"},
+	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
 	// CostOfRevenue; with CostOfRevenue absent (treated as 0), the derived
@@ -2144,7 +2164,17 @@ var FieldMappings = []FieldMapping{
 	// includes in NCFDEBT.
 	{
 		FieldName: "_paymentsDebtIssuanceCosts", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"PaymentsOfDebtIssuanceCosts"},
+		// PaymentsOfFinancingCosts is the broader concept covering both
+		// issuance and refinancing costs. BATL tags debt-related financing
+		// costs under it on 10-Q comparatives ($129K Q1 2024, $175K Q3 YTD)
+		// but switches to PaymentsOfDebtIssuanceCosts on the 10-K ($8.4M FY
+		// 2024). Falling back to the broader tag catches the quarterly values
+		// that the narrower tag misses. None of the regression tickers file
+		// PaymentsOfFinancingCosts.
+		XBRLTags: []string{
+			"PaymentsOfDebtIssuanceCosts",
+			"PaymentsOfFinancingCosts",
+		},
 	},
 	{
 		FieldName: "_netShortTermDebt", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
@@ -2453,7 +2483,13 @@ var FieldMappings = []FieldMapping{
 	// selling its non-consolidated joint-venture stake).
 	{
 		FieldName: "_paymentsInvestEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags: []string{"PaymentsToAcquireEquityMethodInvestments"},
+		// Full-cost E&P filers (BATL) report equity-method-investment outflows
+		// under the investing-activities residual, not NCF_invest. Gate on
+		// OilAndGasPropertyFullCostMethodNet to keep the concept out of the
+		// NCF_invest derivation for those filers; MCD / BRK/B don't file the
+		// full-cost tag and keep their NCF_invest classification.
+		ExcludeIfQuarterly: []string{"OilAndGasPropertyFullCostMethodNet"},
+		XBRLTags:           []string{"PaymentsToAcquireEquityMethodInvestments"},
 	},
 	{
 		FieldName: "_proceedsBusinessEquityMethod", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",

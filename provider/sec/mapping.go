@@ -2169,6 +2169,57 @@ func overrideNCIForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float
 	fields["NetIncomeToNonControllingInterests"] = 0
 }
 
+// overrideInvestingClassificationForFullCostEnergyFiler reclassifies two
+// cash-flow items to match Sharadar's treatment for full-cost E&P filers:
+//
+//   - PaymentsToAcquireOtherProductiveAssets is moved from NetCashFlowBusiness
+//     into CapitalExpenditure. The general _paymentsOtherProductiveAssets
+//     operand routes to NCF_business, but Sharadar treats the concept as
+//     capex for E&P filers because it corresponds to the "Other operating
+//     property and equipment capital expenditures" income-statement line.
+//   - PaymentsToAcquireOilAndGasProperty is added to CapitalExpenditure.
+//     The general _capexGross resolves first-match and picks
+//     PaymentsToExploreAndDevelopOilAndGasProperties for full-cost filers,
+//     which excludes this smaller acquisition line.
+//
+// FreeCashFlow is recomputed against the updated CapitalExpenditure.
+// _paymentsInvestEquityMethod is gated off in mapping_config.go for this
+// filer pattern (Sharadar leaves the payment unclassified rather than
+// putting it into NCF_invest).
+//
+// Gate on OilAndGasPropertyFullCostMethodNet.
+func overrideInvestingClassificationForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
+		return
+	}
+
+	otherProductive := fields["_fcEnergyOtherProductiveAssets"]
+	ogAcq := fields["_fcEnergyOilGasPropertyAcq"]
+
+	if capex, ok := fields["CapitalExpenditure"]; ok {
+		fields["CapitalExpenditure"] = capex - otherProductive - ogAcq
+	}
+
+	if ncfBiz, ok := fields["NetCashFlowBusiness"]; ok {
+		// _paymentsOtherProductiveAssets was added to NCF_business with a -1
+		// coefficient; reverse that so the item only appears in capex.
+		fields["NetCashFlowBusiness"] = ncfBiz + otherProductive
+	}
+
+	// Recompute FreeCashFlow = NCF_ops + CapitalExpenditure (capex is signed
+	// negative for outflows) and downstream FreeCashFlowPerShare.
+	if ncfOps, ok := fields["NetCashFlowFromOperations"]; ok {
+		if capex, ok := fields["CapitalExpenditure"]; ok {
+			fcf := ncfOps + capex
+			fields["FreeCashFlow"] = fcf
+
+			if was, ok := fields["WeightedAverageShares"]; ok && was != 0 {
+				fields["FreeCashFlowPerShare"] = math.Round(fcf/was*1000) / 1000
+			}
+		}
+	}
+}
+
 // overrideInterestExpenseForFullCostEnergyFiler sets interest_expense from
 // the filer's income-statement "Interest expense and other" line rather
 // than the us-gaap:InterestExpense tag. BATL files the line under the
