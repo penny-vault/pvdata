@@ -1936,6 +1936,10 @@ var FieldMappings = []FieldMapping{
 			// plus vendor incentive reimbursements that reduce capex.
 			// Sharadar nets this against gross capex in the same way.
 			"ProceedsFromPropertyPlantAndEquipmentSalesAndIncentives",
+			// Full-cost E&P filers (BATL) net proceeds from oil and gas
+			// property sales against drilling capex. Tagged under the
+			// company-specific extension concept (bare local name).
+			"ProceedsPaymentsFromSaleOfOilAndGasPropertyAndEquipment",
 		},
 	},
 	// CapitalExpenditure = -(gross capex - proceeds from PP&E sale). Net of
