@@ -2144,6 +2144,20 @@ var FieldMappings = []FieldMapping{
 			"ProceedsFromStockPlans", // NVDA uses this instead of the above
 		},
 	},
+	// _proceedsIssuanceOrSaleOfEquity: CAT-style industrial-financial filers
+	// tag "Proceeds (payments) from sale of treasury stock for stock-based
+	// compensation" under us-gaap:ProceedsFromIssuanceOrSaleOfEquity (signed:
+	// negative values represent net treasury-stock-repurchase settlements
+	// for employee stock plans that exceed proceeds from option exercises).
+	// Sharadar folds the signed value into NCF_common. WMT also files this
+	// concept but Sharadar omits it from NCF_common; gate on
+	// OtherOperatingIncomeExpenseNet filed quarterly — a marker present for
+	// CAT but not for WMT.
+	{
+		FieldName: "_proceedsIssuanceOrSaleOfEquity", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		RequireIfQuarterly: []string{"OtherOperatingIncomeExpenseNet"},
+		XBRLTags:           []string{"ProceedsFromIssuanceOrSaleOfEquity"},
+	},
 	// Tax withholding for share-based compensation: some companies (NVDA)
 	// bundle this into the stock repurchase section of the cash flow
 	// statement when they start filing it on 10-Q. RequireQuarterly gates
@@ -2165,11 +2179,16 @@ var FieldMappings = []FieldMapping{
 	// bundle it (RequireQuarterly + RequireIfQuarterly gate). For annual
 	// dimensions (ARY/MRY), the sub-field is stripped before emission to
 	// prevent the 10-K value from being included (see emitFundamentals).
+	// _proceedsIssuanceOrSaleOfEquity is gated on OtherOperatingIncomeExpenseNet
+	// so only CAT-style industrial-financial filers pick it up.
 	{
 		FieldName: "NetCashFlowCommon", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
-		Op:               OpLinearCombination,
-		Operands:         []string{"_paymentsRepurchaseCommon", "_proceedsIssuanceCommon", "_taxWithholdingShareComp"},
-		Coefficients:     []float64{-1, 1, -1},
+		Op: OpLinearCombination,
+		Operands: []string{
+			"_paymentsRepurchaseCommon", "_proceedsIssuanceCommon",
+			"_taxWithholdingShareComp", "_proceedsIssuanceOrSaleOfEquity",
+		},
+		Coefficients:     []float64{-1, 1, -1, 1},
 		OptionalOperands: true,
 	},
 	// --- Internal sub-fields for NetCashFlowDebt derivation ---
