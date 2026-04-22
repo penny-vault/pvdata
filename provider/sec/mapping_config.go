@@ -1448,6 +1448,21 @@ var FieldMappings = []FieldMapping{
 		FieldName: "_fcEnergyOilGasPropertyAcq", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		XBRLTags:  []string{"PaymentsToAcquireOilAndGasProperty"},
 	},
+	// Sub-fields for deriveCostOfRevenueForIndustrialFinancialFiler (CAT-style).
+	// Industrial manufacturers with captive-finance arms report cost of goods
+	// sold under us-gaap:CostOfRevenue but also tag a tiny
+	// CostOfGoodsAndServicesSold as a minor income-statement slice, so the
+	// priority-ordered _cogsRaw picks the wrong (tiny) value. A separate
+	// direct-tag subfield lets the override recompute CoR from CostsAndExpenses
+	// and operating expenses without disturbing the default _cogsRaw path.
+	{
+		FieldName: "_costOfRevenueDirect", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"CostOfRevenue"},
+	},
+	{
+		FieldName: "_otherOperatingIncomeExpenseNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"OtherOperatingIncomeExpenseNet"},
+	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
 	// CostOfRevenue; with CostOfRevenue absent (treated as 0), the derived
@@ -1964,15 +1979,27 @@ var FieldMappings = []FieldMapping{
 			"ProceedsPaymentsFromSaleOfOilAndGasPropertyAndEquipment",
 		},
 	},
-	// CapitalExpenditure = -(gross capex - proceeds from PP&E sale). Net of
-	// proceeds so disposals reduce capex outflow. Sharadar matches this
-	// convention for filers that report proceeds (e.g. GS 2024: 2,091M gross,
-	// 1,613M proceeds → -478M net).
+	// Equipment purchased for customer lease. Industrial manufacturers with a
+	// captive-leasing business (Caterpillar Financial Services) buy equipment
+	// and place it on operating lease to customers; Sharadar counts these
+	// outlays in capital_expenditure alongside PP&E capex. Regression tickers
+	// (AAPL, JPM, MSFT, NVDA, GS, LLY, UNH, AMZN, MCD, TXRH, WMT, KO, CELH,
+	// XOM, BATL, BRK/B) do not file PaymentsToAcquireEquipmentOnLease, so this
+	// operand resolves to 0 for them and leaves CapEx unchanged.
+	{
+		FieldName: "_capexEquipmentOnLease", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
+		XBRLTags:  []string{"PaymentsToAcquireEquipmentOnLease"},
+	},
+	// CapitalExpenditure = -(gross capex + equipment-on-lease - proceeds from
+	// PP&E sale). Net of proceeds so disposals reduce capex outflow. Sharadar
+	// matches this convention for filers that report proceeds (e.g. GS 2024:
+	// 2,091M gross, 1,613M proceeds → -478M net). Equipment placed on customer
+	// operating lease (CAT-style captive finance) is added to gross capex.
 	{
 		FieldName: "CapitalExpenditure", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpLinearCombination,
-		Operands:         []string{"_capexGross", "_proceedsPPESale"},
-		Coefficients:     []float64{-1, 1},
+		Operands:         []string{"_capexGross", "_proceedsPPESale", "_capexEquipmentOnLease"},
+		Coefficients:     []float64{-1, 1, -1},
 		OptionalOperands: true,
 	},
 	// Sharadar reports 0 for share-based compensation for commercial banks

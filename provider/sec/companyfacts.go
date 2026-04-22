@@ -1077,6 +1077,7 @@ var singleSegmentAllowed = map[string]bool{
 	"ProceedsFromIssuanceOfLongTermDebt":                       true, // BRK: only Railroad segment issues LT debt
 	"AccountsAndOtherReceivablesNet":                           true, // BRK (brka:) extension: Railroad/Utilities trade receivables
 	"AircraftRepurchaseLiabilitiesAndDeferredRevenueLeasesNet": true, // BRK (brka:) NetJets deferred lease revenue
+	"InterestExpenseNonoperating":                              true, // CAT: only reported under AllOtherExcludingFinancialProducts segment (financial-products interest is above the line)
 }
 
 // extensionSynthesisConcepts lists extension (non-us-gaap) concept names that

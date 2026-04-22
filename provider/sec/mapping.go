@@ -542,8 +542,92 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	overrideRandDForEnergyFilers(cf, resolved, periodEnd, formType)
 	overrideCashAndEquivalentsIncludeRestrictedCash(cf, resolved, periodEnd, formType)
 	overrideDebtCurrentForSmallAmortization(cf, resolved, periodEnd, formType)
+	overrideBalanceSheetForIndustrialFinancialFiler(cf, resolved, periodEnd, formType)
 
 	return resolved
+}
+
+// isIndustrialFinancialFiler detects CAT-style industrial manufacturers with
+// a captive financial-services subsidiary. Their income statement groups MET
+// cost of goods sold + captive-finance interest expense + other operating
+// items under a single CostsAndExpenses subtotal, and the balance sheet
+// carries customer-finance notes and loans receivable alongside standard
+// trade receivables. Gate combines three distinctive quarterly concepts:
+// CostOfRevenue (primary CoGS line), OtherOperatingIncomeExpenseNet (other
+// operating net line), and CostsAndExpenses (aggregate subtotal). The energy
+// exclusion (ExplorationExpense) keeps XOM on its existing deriver.
+func isIndustrialFinancialFiler(cf *CompanyFacts) bool {
+	if !conceptFiledQuarterly(cf, []string{"CostOfRevenue"}) {
+		return false
+	}
+
+	if !conceptFiledQuarterly(cf, []string{"OtherOperatingIncomeExpenseNet"}) {
+		return false
+	}
+
+	if !conceptFiledQuarterly(cf, []string{"CostsAndExpenses"}) {
+		return false
+	}
+
+	if conceptFiledQuarterly(cf, []string{"ExplorationExpense"}) {
+		return false
+	}
+
+	return true
+}
+
+// overrideBalanceSheetForIndustrialFinancialFiler reclassifies CAT-style
+// balance-sheet line items to match Sharadar's treatment of captive-finance
+// assets and contract-liability deposits.
+//
+//   - Receivables = AccountsReceivableNetCurrent + AccountsReceivableNetNoncurrent
+//     + NotesAndLoansReceivableNetCurrent + NotesAndLoansReceivableNetNoncurrent.
+//     Sharadar sums all four because the captive-finance notes and loans are
+//     core operating receivables from customer equipment financing.
+//   - Investments = 0. CAT's AvailableForSaleSecuritiesDebtSecurities belongs
+//     to Caterpillar Insurance Services; Sharadar rolls it into other-current
+//     / other-noncurrent rather than a dedicated investments bucket.
+//   - Deposits gets the ContractWithCustomerLiabilityCurrent balance (customer
+//     advances/deposits under ASC 606) and DeferredRevenue zeros out — Sharadar
+//     classifies advance payments for long-lead machinery orders as deposits
+//     rather than deferred revenue for industrial OEMs.
+//   - TaxAssets = DeferredTaxAssetsNet (10-K-only annual disclosure flowed to
+//     each quarterly balance sheet). Sharadar reports this as tax_assets for
+//     industrials whose 10-Q does not tag DeferredIncomeTaxAssetsNet.
+func overrideBalanceSheetForIndustrialFinancialFiler(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time, formType string) {
+	if !isIndustrialFinancialFiler(cf) {
+		return
+	}
+
+	arC, _ := resolveInstantValue(cf, "AccountsReceivableNetCurrent", periodEnd, formType)
+	arNC, _ := resolveInstantValue(cf, "AccountsReceivableNetNoncurrent", periodEnd, formType)
+	notesC, _ := resolveInstantValue(cf, "NotesAndLoansReceivableNetCurrent", periodEnd, formType)
+	notesNC, _ := resolveInstantValue(cf, "NotesAndLoansReceivableNetNoncurrent", periodEnd, formType)
+
+	totalRecv := arC + arNC + notesC + notesNC
+	if totalRecv > 0 {
+		fields["Receivables"] = totalRecv
+	}
+
+	fields["Investments"] = 0
+	fields["InvestmentsCurrent"] = 0
+	fields["InvestmentsNonCurrent"] = 0
+
+	// Reclassify contract-liability deposits. Industrial OEMs collect customer
+	// advance payments for long-lead machinery orders under
+	// ContractWithCustomerLiabilityCurrent; Sharadar reports these as deposits,
+	// not deferred_revenue.
+	if contractLiab, ok := resolveInstantValue(cf, "ContractWithCustomerLiabilityCurrent", periodEnd, formType); ok && contractLiab > 0 {
+		fields["Deposits"] = contractLiab
+		fields["DeferredRevenue"] = 0
+	}
+
+	// DeferredTaxAssetsNet is filed only on 10-K; Sharadar copies the annual
+	// value across all four quarters of the fiscal year. The resolver returns
+	// the most recent filed fact via StmtPointInTime semantics.
+	if dta, ok := resolveInstantValue(cf, "DeferredTaxAssetsNet", periodEnd, formType); ok && dta > 0 {
+		fields["TaxAssets"] = dta
+	}
 }
 
 // overrideDebtCurrentForSmallAmortization zeros out a small
@@ -2089,6 +2173,77 @@ func deriveCostOfRevenueForFullCostEnergyFiler(cf *CompanyFacts, fields map[stri
 	fields["OperatingExpenses"] = opEx
 	fields["GrossProfit"] = grossProfit
 	fields["OperatingIncome"] = opIncome
+	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
+}
+
+// deriveCostOfRevenueForIndustrialFinancialFiler handles CAT-style industrial
+// manufacturers with a captive financial-services arm. CAT's income statement
+// groups five expense lines under a single CostsAndExpenses subtotal:
+//
+//	Cost of goods sold                         (us-gaap:CostOfRevenue)
+//	Selling, general, and administrative       (us-gaap:SGA)
+//	Research and development                   (us-gaap:R&D)
+//	Interest expense of Financial Products     (extension tag, not in companyfacts)
+//	Other operating (income) expenses          (us-gaap:OtherOperatingIncomeExpenseNet)
+//
+// The default _cogsRaw resolver picks CostOfGoodsAndServicesSold (a small
+// residual line filed alongside the main CostOfRevenue) as the CoR value,
+// yielding wildly wrong CoR/GrossProfit/OperatingExpenses. Sharadar's split:
+//
+//	operating_expenses = SGA + R&D + abs(OtherOperatingIncomeExpenseNet)
+//	cost_of_revenue    = CostsAndExpenses - operating_expenses
+//
+// Absolute value of OtherOperatingIncomeExpenseNet reflects Sharadar's
+// convention of treating the net other-operating line as an expense-side
+// component regardless of sign. Taking abs also absorbs the captive-finance
+// interest-expense extension into cost_of_revenue without naming it
+// explicitly, which is what Sharadar does for this filer shape.
+//
+// Gate: CostOfRevenue, CostsAndExpenses, and OtherOperatingIncomeExpenseNet
+// all filed quarterly. This triple-concept combination is distinctive to
+// industrial-financial hybrids. None of the regression tickers (AAPL, JPM,
+// MSFT, NVDA, GS, LLY, UNH, AMZN, MCD, TXRH, WMT, KO, CELH, XOM, BATL, BRK/B)
+// file all three.
+func deriveCostOfRevenueForIndustrialFinancialFiler(cf *CompanyFacts, fields map[string]float64) {
+	if !conceptFiledQuarterly(cf, []string{"CostOfRevenue"}) {
+		return
+	}
+
+	if !conceptFiledQuarterly(cf, []string{"OtherOperatingIncomeExpenseNet"}) {
+		return
+	}
+
+	if !conceptFiledQuarterly(cf, []string{"CostsAndExpenses"}) {
+		return
+	}
+
+	costsAndExpenses, okCE := fields["_costsAndExpensesRaw"]
+	revenues, okRev := fields["Revenues"]
+
+	if !okCE || !okRev || revenues == 0 {
+		return
+	}
+
+	sga := fields["SellingGeneralAndAdministrativeExpense"]
+	rnd := fields["RandDExpenses"]
+	otherOp := fields["_otherOperatingIncomeExpenseNet"]
+
+	if sga == 0 {
+		return
+	}
+
+	opEx := sga + rnd + math.Abs(otherOp)
+
+	costOfRevenue := costsAndExpenses - opEx
+	if costOfRevenue < 0 {
+		return
+	}
+
+	grossProfit := revenues - costOfRevenue
+
+	fields["CostOfRevenue"] = costOfRevenue
+	fields["OperatingExpenses"] = opEx
+	fields["GrossProfit"] = grossProfit
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
