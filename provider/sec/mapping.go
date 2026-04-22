@@ -2039,60 +2039,6 @@ func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
-// overrideWASForNoDilutedFiler replaces WeightedAverageShares with
-// SharesBasic (the EntityCommonStockSharesOutstanding DEI cover-page count)
-// for filers that have stopped filing
-// WeightedAverageNumberOfDilutedSharesOutstanding (XOM stopped in 2013).
-// Sharadar uses the cover-page share count as weighted_average_shares for
-// these filers rather than the XBRL WeightedAverageNumberOfSharesOutstanding
-// Basic that would otherwise resolve via our default mapping.
-//
-// Multi-class filers (BRK/B) are handled separately in EnrichMarketData where
-// share_factor scaling is applied; this override sets the same WAS=SharesBasic
-// value those filers already get, so it's a no-op for them.
-//
-// Called after Q4 synthesis so the synthesized Q4 WAS — which uses
-// day-weighted averaging that doesn't apply to point-in-time cover-page
-// counts — is replaced with the annual SharesBasic. Per-share derived
-// metrics that depend on WeightedAverageShares are recomputed from the
-// overridden value.
-func overrideWASForNoDilutedFiler(cf *CompanyFacts, fields map[string]float64) {
-	if conceptFiledQuarterly(cf, []string{"WeightedAverageNumberOfDilutedSharesOutstanding"}) {
-		return
-	}
-
-	sharesBasic, ok := fields["SharesBasic"]
-	if !ok || sharesBasic == 0 {
-		return
-	}
-
-	fields["WeightedAverageShares"] = sharesBasic
-
-	for _, m := range FieldMappings {
-		if m.Type != MappingDerived || m.StatementType != StmtMetric {
-			continue
-		}
-
-		usesWAS := false
-
-		for _, op := range m.Operands {
-			if op == "WeightedAverageShares" {
-				usesWAS = true
-
-				break
-			}
-		}
-
-		if !usesWAS {
-			continue
-		}
-
-		if val, ok := computeDerived(m, fields); ok {
-			fields[m.FieldName] = val
-		}
-	}
-}
-
 // overrideNCFBusinessAsResidualForReceivablesFiler computes NetCashFlowBusiness
 // as the residual of the investing-activities section for filers (XOM) that
 // don't tag explicit business-acquisition concepts and instead bundle

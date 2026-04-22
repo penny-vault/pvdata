@@ -1127,9 +1127,6 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			deriveCostOfRevenueForEnergyFiler(cf, a.mrEmit)
 		}
 
-		overrideWASForNoDilutedFiler(cf, a.arEmit)
-		overrideWASForNoDilutedFiler(cf, a.mrEmit)
-
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, a.arEmit)
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, a.mrEmit)
 
@@ -1264,9 +1261,6 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			deriveCostOfRevenueForEnergyFiler(cf, q.arEmit)
 			deriveCostOfRevenueForEnergyFiler(cf, q.mrEmit)
 		}
-
-		overrideWASForNoDilutedFiler(cf, q.arEmit)
-		overrideWASForNoDilutedFiler(cf, q.mrEmit)
 
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, q.arEmit)
 		overrideNCFBusinessAsResidualForReceivablesFiler(cf, q.mrEmit)
