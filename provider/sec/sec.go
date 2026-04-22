@@ -909,7 +909,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// data. Apply the override before annual averaging and emission so MRQ,
 	// MRT, and MRY all see the corrected value.
 	for i := range quarters {
-		if val, ok := resolveSharesBasicAsOf(cf, quarters[i].period.PeriodEnd); ok {
+		if val, ok := resolveSharesBasicForMR(cf, quarters[i].period.PeriodEnd); ok {
 			quarters[i].mrEmit["SharesBasic"] = val
 		}
 	}
@@ -1180,7 +1180,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		*numObservations++
 
 		// MRY — override SharesBasic for MR semantics (see quarterly override above).
-		if val, ok := resolveSharesBasicAsOf(cf, a.period.PeriodEnd); ok {
+		if val, ok := resolveSharesBasicForMR(cf, a.period.PeriodEnd); ok {
 			a.mrEmit["SharesBasic"] = val
 		}
 

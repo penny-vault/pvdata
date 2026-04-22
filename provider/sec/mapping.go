@@ -1584,6 +1584,104 @@ func resolveSharesBasicForAnnualAR(cf *CompanyFacts, arFiledDate, periodEnd time
 	return resolveSharesBasicAsOf(cf, arFiledDate)
 }
 
+// resolveSharesBasicForMR returns the shares outstanding value for MR
+// (most-recent) dimensions. When the latest-filed DEI is from a 10-K and its
+// end matches the 10-K's balance sheet date (i.e., fiscal year end), it
+// represents the balance sheet disclosure rather than the cover-page "shares
+// outstanding as of [recent date]" count. Sharadar's MR semantics use the
+// cover-page value as the current known shares count until the next 10-Q
+// refreshes it.
+//
+// Behavior:
+//  1. Find the latest-filed DEI at or before asOfDate (as in resolveSharesBasicAsOf).
+//  2. If that DEI is from a 10-K and its end matches a companion Assets fact
+//     filed on the same date (balance-sheet DEI), substitute the 10-K's
+//     cover-page value via resolveSharesBasicForAnnualAR.
+//  3. Otherwise return the latest-filed DEI value.
+func resolveSharesBasicForMR(cf *CompanyFacts, asOfDate time.Time) (float64, bool) {
+	staleThreshold := asOfDate.AddDate(-2, 0, 0)
+
+	var latestFact *Fact
+
+	var latestConcept string
+
+	for _, conceptName := range []string{
+		"EntityCommonStockSharesOutstanding",
+		"CommonStockSharesOutstanding",
+	} {
+		facts, ok := cf.Facts[conceptName]
+		if !ok {
+			continue
+		}
+
+		for i := range facts {
+			f := &facts[i]
+
+			if f.Form != "10-K" && f.Form != "10-Q" {
+				continue
+			}
+
+			if f.Filed.After(asOfDate) || f.Filed.Before(staleThreshold) {
+				continue
+			}
+
+			if latestFact == nil || f.Filed.After(latestFact.Filed) {
+				latestFact = f
+				latestConcept = conceptName
+			}
+		}
+	}
+
+	if latestFact == nil {
+		return 0, false
+	}
+
+	// Balance-sheet DEI check: if latest is from a 10-K and a companion
+	// Assets fact with the same filed date and end date exists, the DEI
+	// represents the fiscal-year-end financial-statement shares rather
+	// than the 10-K cover-page disclosure. Use the annual-AR resolver.
+	if latestFact.Form == "10-K" && isBalanceSheetDEI(cf, latestFact) {
+		if val, ok := resolveSharesBasicForAnnualAR(cf, latestFact.Filed, latestFact.End); ok {
+			return val, true
+		}
+	}
+
+	// Sum facts for multi-class filers (same concept + same filed date).
+	total := 0.0
+
+	for i := range cf.Facts[latestConcept] {
+		f := &cf.Facts[latestConcept][i]
+		if f.Filed.Equal(latestFact.Filed) && (f.Form == "10-K" || f.Form == "10-Q") {
+			total += f.Val
+		}
+	}
+
+	return total, true
+}
+
+// isBalanceSheetDEI returns true if a companion balance-sheet fact (Assets,
+// StockholdersEquity, or CashAndCashEquivalents) was filed on the same date
+// with the same end as the DEI fact. Such facts only coincide on the fiscal
+// year end balance sheet — cover-page DEIs (end dated weeks after period end)
+// have no matching balance-sheet companion.
+func isBalanceSheetDEI(cf *CompanyFacts, dei *Fact) bool {
+	for _, concept := range []string{"Assets", "StockholdersEquity", "Liabilities"} {
+		facts, ok := cf.Facts[concept]
+		if !ok {
+			continue
+		}
+
+		for i := range facts {
+			f := &facts[i]
+			if f.Filed.Equal(dei.Filed) && f.End.Equal(dei.End) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // resolveClassSharesAsOf returns the Class A and Class B raw cover-page share
 // counts from the most recently filed 10-K or 10-Q on or before asOfDate.
 // Returns (filed, classA, classB, true) when a filing with BOTH class values
