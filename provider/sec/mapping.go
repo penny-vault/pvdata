@@ -1075,6 +1075,32 @@ func resolveInstantValue(cf *CompanyFacts, concept string, periodEnd time.Time, 
 	}, periodEnd, formType)
 }
 
+// recomputeWavgDerived re-evaluates the per-share metrics that depend on
+// WeightedAverageShares (or WeightedAverageSharesDiluted) after the wavg
+// field has been overwritten post-synthesis. Keeps the metric values
+// consistent with the new denominator without rerunning the full derivation
+// pipeline.
+func recomputeWavgDerived(fields map[string]float64) {
+	for _, fieldName := range []string{
+		"FreeCashFlowPerShare",
+		"BookValuePerShare",
+		"SalesPerShare",
+		"TangibleAssetsBookValuePerShare",
+	} {
+		for _, m := range FieldMappings {
+			if m.FieldName != fieldName {
+				continue
+			}
+
+			if v, ok := computeDerived(m, fields); ok {
+				fields[m.FieldName] = v
+			}
+
+			break
+		}
+	}
+}
+
 // computeDerived evaluates a derived field's formula using already-resolved values.
 func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool) {
 	// When OptionalOperands is set, missing operands are treated as 0 and the

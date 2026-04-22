@@ -900,7 +900,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// FY weighted-average (no Q4-standalone tag), and Sharadar's ARQ for
 	// the 10-K period pins to that annual value rather than synthesizing a
 	// Q4-specific weighted average. Other filers continue to use the day-
-	// weighted synth.
+	// weighted synth. Recompute per-share metrics after overriding so the
+	// cascade (book_value_per_share, sales_per_share, free_cash_flow_per_share,
+	// tangible_assets_book_value_per_share) lands on the pinned wavg.
 	if isIndustrialFinancialFiler(cf) {
 		for i := range quarters {
 			for _, a := range annuals {
@@ -908,8 +910,11 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 					continue
 				}
 
+				changed := false
+
 				if v, ok := a.arFields["WeightedAverageShares"]; ok {
 					quarters[i].arEmit["WeightedAverageShares"] = v
+					changed = true
 				}
 
 				if v, ok := a.arFields["WeightedAverageSharesDiluted"]; ok {
@@ -918,10 +923,16 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 				if v, ok := a.mrFields["WeightedAverageShares"]; ok {
 					quarters[i].mrEmit["WeightedAverageShares"] = v
+					changed = true
 				}
 
 				if v, ok := a.mrFields["WeightedAverageSharesDiluted"]; ok {
 					quarters[i].mrEmit["WeightedAverageSharesDiluted"] = v
+				}
+
+				if changed {
+					recomputeWavgDerived(quarters[i].arEmit)
+					recomputeWavgDerived(quarters[i].mrEmit)
 				}
 
 				break
