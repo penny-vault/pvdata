@@ -1216,6 +1216,16 @@ func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool,
 		return
 	}
 
+	// CAT-style industrial-financial filers: Sharadar reports the declared
+	// per-share dividend from the 10-K (CommonStockDividendsPerShareDeclared
+	// FY value, 5.53 for CAT FY 2024) as the AR annual DPS, not the cash-paid
+	// ÷ wavg computation. At quarterly cadence Sharadar reverts to cash-paid
+	// / (prior-quarter-end shares) which is very close to cash-paid / wavg;
+	// we keep the existing cash-paid override for ARQ.
+	if !isMR && isAnnualView && isIndustrialFinancialFiler(cf) {
+		return
+	}
+
 	// When the cash-paid value comes from PaymentsOfDividends (no
 	// PaymentsOfDividendsCommonStock filed), gate the override on filer
 	// cadence and dimension/period.
