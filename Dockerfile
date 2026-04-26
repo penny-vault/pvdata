@@ -14,4 +14,4 @@ WORKDIR /home/pv
 
 COPY --from=builder /go/src/pvdata /home/pv
 ENTRYPOINT ["/home/pv/pvdata"]
-CMD ["run"]
+CMD ["serve"]
