@@ -1014,6 +1014,7 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 				// sub-components).
 				if !strings.HasPrefix(m.FieldName, "_") {
 					fallbackResolved := false
+
 					for _, tag := range m.FallbackTags {
 						if _, ok := cf.Facts[tag]; ok {
 							fallbackResolved = true

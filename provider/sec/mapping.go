@@ -445,7 +445,7 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		// cancelled when any of the listed concepts are also filed
 		// quarterly (see WMT TaxLiabilities retailer pattern).
 		if len(m.ExcludeIfQuarterly) > 0 && conceptFiledQuarterly(cf, m.ExcludeIfQuarterly) &&
-			!(len(m.ExcludeIfQuarterlyUnless) > 0 && conceptFiledQuarterly(cf, m.ExcludeIfQuarterlyUnless)) {
+			(len(m.ExcludeIfQuarterlyUnless) <= 0 || !conceptFiledQuarterly(cf, m.ExcludeIfQuarterlyUnless)) {
 			continue
 		}
 
@@ -581,7 +581,7 @@ func isIndustrialFinancialFiler(cf *CompanyFacts) bool {
 // assets and contract-liability deposits.
 //
 //   - Receivables = AccountsReceivableNetCurrent + AccountsReceivableNetNoncurrent
-//     + NotesAndLoansReceivableNetCurrent + NotesAndLoansReceivableNetNoncurrent.
+//   - NotesAndLoansReceivableNetCurrent + NotesAndLoansReceivableNetNoncurrent.
 //     Sharadar sums all four because the captive-finance notes and loans are
 //     core operating receivables from customer equipment financing.
 //   - Investments = 0. CAT's AvailableForSaleSecuritiesDebtSecurities belongs
@@ -1536,6 +1536,7 @@ func resolveSharesBasicForAnnualAR(cf *CompanyFacts, arFiledDate, periodEnd time
 
 	if postPeriodFound {
 		total := 0.0
+
 		for i := range cf.Facts[postPeriodConcept] {
 			f := &cf.Facts[postPeriodConcept][i]
 			if f.Filed.Equal(postPeriodFiled) && (f.Form == "10-K" || f.Form == "10-Q") && f.End.After(periodEnd) && !f.End.After(postPeriodEndWindow) {
@@ -1597,6 +1598,7 @@ func resolveSharesBasicForAnnualAR(cf *CompanyFacts, arFiledDate, periodEnd time
 
 	if q2Found {
 		total := 0.0
+
 		for i := range cf.Facts[q2Concept] {
 			f := &cf.Facts[q2Concept][i]
 			if f.Filed.Equal(q2Filed) && (f.Form == "10-K" || f.Form == "10-Q") {
@@ -2354,6 +2356,7 @@ func deriveCostOfRevenueForSegmentFiler(cf *CompanyFacts, fields map[string]floa
 	}
 
 	opEx := sga + segmentOther
+
 	costOfRevenue := costsAndExpenses - opEx
 	if costOfRevenue < 0 {
 		return
@@ -2797,6 +2800,7 @@ func deriveCostOfRevenueForRestaurantFiler(cf *CompanyFacts, fields map[string]f
 	impair := fields["_restaurantImpairmentProvisions"]
 
 	opEx := gna + depAmor + preOpen + impair + rent
+
 	costOfRevenue := costsAndExpenses - opEx
 	if costOfRevenue < 0 {
 		return

@@ -528,7 +528,7 @@ var FieldMappings = []FieldMapping{
 	// tickers file this concept.
 	{
 		FieldName: "_oilAndGasPropertyFullCost", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags:  []string{"OilAndGasPropertyFullCostMethodNet"},
+		XBRLTags: []string{"OilAndGasPropertyFullCostMethodNet"},
 	},
 	// PropertyPlantAndEquipmentNet: use the combined extension tag if
 	// available (JPM files a combined premises+equipment+ROU tag); otherwise
@@ -1379,15 +1379,15 @@ var FieldMappings = []FieldMapping{
 	// only reads this tag when the full-cost E&P gate is met.
 	{
 		FieldName: "_fcEnergyLeaseOperating", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"OperatingLeaseExpense"},
+		XBRLTags: []string{"OperatingLeaseExpense"},
 	},
 	{
 		FieldName: "_fcEnergyWorkover", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"WorkOverAndOtherExpense"},
+		XBRLTags: []string{"WorkOverAndOtherExpense"},
 	},
 	{
 		FieldName: "_fcEnergyProductionTax", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"ProductionTaxExpenseBenefit"},
+		XBRLTags: []string{"ProductionTaxExpenseBenefit"},
 	},
 	{
 		// Full-cost E&P filers roll impairment losses into operating expenses
@@ -1417,15 +1417,15 @@ var FieldMappings = []FieldMapping{
 	// which gates on OilAndGasPropertyFullCostMethodNet.
 	{
 		FieldName: "_fcEnergyARO", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags:  []string{"AssetRetirementObligationsNoncurrent"},
+		XBRLTags: []string{"AssetRetirementObligationsNoncurrent"},
 	},
 	{
 		FieldName: "_fcEnergyDerivLiabNC", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags:  []string{"DerivativeLiabilitiesNoncurrent"},
+		XBRLTags: []string{"DerivativeLiabilitiesNoncurrent"},
 	},
 	{
 		FieldName: "_fcEnergyTemporaryEquity", Type: MappingDirect, StatementType: StmtPointInTime, ValueType: "int64",
-		XBRLTags:  []string{"TemporaryEquityCarryingAmountAttributableToParent"},
+		XBRLTags: []string{"TemporaryEquityCarryingAmountAttributableToParent"},
 	},
 	// Full-cost E&P filers (BATL) tag "Interest expense and other" under the
 	// company-specific extension concept InterestExpenseAndOtherNonoperatingIncomeExpense
@@ -1434,7 +1434,7 @@ var FieldMappings = []FieldMapping{
 	// Only read by overrideInterestExpenseForFullCostEnergyFiler.
 	{
 		FieldName: "_fcEnergyInterestExpense", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"InterestExpenseAndOtherNonoperatingIncomeExpense"},
+		XBRLTags: []string{"InterestExpenseAndOtherNonoperatingIncomeExpense"},
 	},
 	// Small capex line items that BATL presents as separate rows inside the
 	// investing-activities section. _capexGross resolves from the
@@ -1442,11 +1442,11 @@ var FieldMappings = []FieldMapping{
 	// must be added by the full-cost E&P capex-classification override.
 	{
 		FieldName: "_fcEnergyOtherProductiveAssets", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"PaymentsToAcquireOtherProductiveAssets"},
+		XBRLTags: []string{"PaymentsToAcquireOtherProductiveAssets"},
 	},
 	{
 		FieldName: "_fcEnergyOilGasPropertyAcq", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"PaymentsToAcquireOilAndGasProperty"},
+		XBRLTags: []string{"PaymentsToAcquireOilAndGasProperty"},
 	},
 	// Sub-fields for deriveCostOfRevenueForIndustrialFinancialFiler (CAT-style).
 	// Industrial manufacturers with captive-finance arms report cost of goods
@@ -1457,11 +1457,11 @@ var FieldMappings = []FieldMapping{
 	// and operating expenses without disturbing the default _cogsRaw path.
 	{
 		FieldName: "_costOfRevenueDirect", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"CostOfRevenue"},
+		XBRLTags: []string{"CostOfRevenue"},
 	},
 	{
 		FieldName: "_otherOperatingIncomeExpenseNet", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"OtherOperatingIncomeExpenseNet"},
+		XBRLTags: []string{"OtherOperatingIncomeExpenseNet"},
 	},
 	// GrossProfit: use the direct tag if available; otherwise derive from
 	// Revenues − CostOfRevenue. Banks (JPM) do not report GrossProfit or
@@ -1988,7 +1988,7 @@ var FieldMappings = []FieldMapping{
 	// operand resolves to 0 for them and leaves CapEx unchanged.
 	{
 		FieldName: "_capexEquipmentOnLease", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"PaymentsToAcquireEquipmentOnLease"},
+		XBRLTags: []string{"PaymentsToAcquireEquipmentOnLease"},
 	},
 	// CapitalExpenditure = -(gross capex + equipment-on-lease - proceeds from
 	// PP&E sale). Net of proceeds so disposals reduce capex outflow. Sharadar
@@ -2593,7 +2593,7 @@ var FieldMappings = []FieldMapping{
 	// the same concept is filed quarterly.
 	{
 		FieldName: "_proceedsReceivablesCollection", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
-		XBRLTags:  []string{"ProceedsFromSaleAndCollectionOfReceivables"},
+		XBRLTags: []string{"ProceedsFromSaleAndCollectionOfReceivables"},
 	},
 	// Captive-finance receivables activity. CAT-style industrial manufacturers
 	// with a financing arm report originations and collections of customer

@@ -660,7 +660,6 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 					}
 				}
 			}
-
 		}
 
 		// Track all quarters regardless of since so TTM windows are complete.

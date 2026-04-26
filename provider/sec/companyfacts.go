@@ -660,23 +660,6 @@ func hasFactForPeriod(cf *CompanyFacts, conceptName string, end time.Time) bool 
 	return false
 }
 
-// hasFactForPeriodAndForm returns true if CompanyFacts already contains a fact
-// matching the concept, period end, and form type.
-func hasFactForPeriodAndForm(cf *CompanyFacts, conceptName string, end time.Time, formType string) bool {
-	facts, ok := cf.Facts[conceptName]
-	if !ok || len(facts) == 0 {
-		return false
-	}
-
-	for i := range facts {
-		if facts[i].End.Equal(end) && facts[i].Form == formType {
-			return true
-		}
-	}
-
-	return false
-}
-
 // latestFiledForConceptPeriodForm returns the latest Filed date among existing
 // facts for the given concept, period end, and form type. Returns the zero
 // time and false when no such fact exists. Used to allow synthesis of
@@ -1213,9 +1196,11 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			}
 		}
 
-		var sum float64
-		var count int
-		var start time.Time
+		var (
+			sum   float64
+			count int
+			start time.Time
+		)
 
 		for i, f := range facts {
 			if isChild[i] {
@@ -1336,6 +1321,7 @@ func parseXBRLContext(decoder *xml.Decoder, se *xml.StartElement, contexts map[s
 
 				// Capture the dimension axis name from the "dimension" attribute.
 				var dimAttr string
+
 				for _, attr := range t.Attr {
 					if attr.Name.Local == "dimension" {
 						dimAttr = attr.Value
