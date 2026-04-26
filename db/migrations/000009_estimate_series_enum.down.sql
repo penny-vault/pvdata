@@ -1,0 +1,2 @@
+-- Cannot drop estimate_series while subscription tables use it.
+-- To reverse: alter each subscription table's series column back to TEXT, then DROP TYPE estimate_series.

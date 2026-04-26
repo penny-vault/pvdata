@@ -217,7 +217,7 @@ EXECUTE PROCEDURE adj_close_default();`,
 	ticker         CHARACTER VARYING(10) NOT NULL,
 	composite_figi CHARACTER(12)         NOT NULL,
 	event_date     DATE                  NOT NULL,
-	series         TEXT                  NOT NULL,
+	series         estimate_series       NOT NULL,
 	value          REAL                  NOT NULL,
 	num_analysts   INT,
 	std_dev        REAL,
@@ -226,8 +226,10 @@ EXECUTE PROCEDURE adj_close_default();`,
 
 CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker, series);
 CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, series);`,
-		Migrations:    []string{},
-		Version:       0,
+		Migrations: []string{
+			`ALTER TABLE %[1]s ALTER COLUMN series TYPE estimate_series USING series::estimate_series;`,
+		},
+		Version:       1,
 		IsPartitioned: false,
 	},
 	IndexSnapshotKey: {
