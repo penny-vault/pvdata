@@ -1,0 +1,5 @@
+-- Cannot drop analyst_lookup while subscription rating_* tables hold FKs to it.
+-- To reverse: alter each subscription rating table's analyst_id back to a TEXT
+-- analyst column (UPDATE ... SET analyst = (SELECT analyst FROM analyst_lookup
+-- WHERE id = analyst_id)), drop analyst_id, restore the original primary key,
+-- then DROP TABLE analyst_lookup.

@@ -57,6 +57,15 @@ type Observation struct {
 	SubscriptionName string
 }
 
+// ViewGenerator produces the SELECT ... FROM <table> portion of a published-view
+// leg. When a DataType has a non-nil ViewGenerator, it is used in place of the
+// default "SELECT * FROM <table>" — required for types whose published columns
+// differ from the underlying storage (e.g. lookup-table foreign keys that must
+// be joined back to their textual values).
+type ViewGenerator interface {
+	SelectFrom(tableName string) string
+}
+
 type DataType struct {
 	Name          string
 	ViewName      string
@@ -64,6 +73,7 @@ type DataType struct {
 	Migrations    []string
 	Version       int
 	IsPartitioned bool
+	ViewGenerator ViewGenerator
 }
 
 const (
@@ -460,16 +470,27 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 	ticker         CHARACTER VARYING(10) NOT NULL,
 	composite_figi CHARACTER(12)         NOT NULL,
 	event_date     DATE                  NOT NULL,
-	analyst        TEXT                  NOT NULL,
+	analyst_id     SMALLINT              NOT NULL REFERENCES analyst_lookup(id),
 	rating         INT                   NOT NULL,
-	PRIMARY KEY (analyst, composite_figi, event_date)
+	PRIMARY KEY (analyst_id, composite_figi, event_date)
 );
 
 CREATE INDEX %[1]s_ticker_event_date_idx ON %[1]s(ticker, event_date DESC);
-CREATE INDEX %[1]s_analyst_date_idx ON %[1]s(analyst, event_date) INCLUDE (composite_figi, ticker, rating)`,
-		Migrations:    []string{},
-		Version:       0,
+CREATE INDEX %[1]s_analyst_id_date_idx ON %[1]s(analyst_id, event_date) INCLUDE (composite_figi, ticker, rating)`,
+		Migrations: []string{
+			`ALTER TABLE %[1]s ADD COLUMN analyst_id SMALLINT;
+UPDATE %[1]s SET analyst_id = analyst_lookup.id FROM analyst_lookup WHERE analyst_lookup.analyst = %[1]s.analyst;
+ALTER TABLE %[1]s ALTER COLUMN analyst_id SET NOT NULL;
+ALTER TABLE %[1]s DROP CONSTRAINT %[1]s_pkey;
+DROP INDEX %[1]s_analyst_date_idx;
+ALTER TABLE %[1]s DROP COLUMN analyst;
+ALTER TABLE %[1]s ADD PRIMARY KEY (analyst_id, composite_figi, event_date);
+CREATE INDEX %[1]s_analyst_id_date_idx ON %[1]s(analyst_id, event_date) INCLUDE (composite_figi, ticker, rating);
+ALTER TABLE %[1]s ADD CONSTRAINT %[1]s_analyst_id_fkey FOREIGN KEY (analyst_id) REFERENCES analyst_lookup(id);`,
+		},
+		Version:       1,
 		IsPartitioned: false,
+		ViewGenerator: ratingViewGenerator{},
 	},
 }
 

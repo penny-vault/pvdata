@@ -24,6 +24,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ratingViewGenerator joins the analyst foreign key back to its textual value
+// so consumers of the published view continue to see an "analyst" column
+// rather than the internal analyst_id.
+type ratingViewGenerator struct{}
+
+func (ratingViewGenerator) SelectFrom(tableName string) string {
+	return fmt.Sprintf(
+		"SELECT t.ticker, t.composite_figi, t.event_date, a.analyst, t.rating FROM %s t JOIN analyst_lookup a ON t.analyst_id = a.id",
+		tableName,
+	)
+}
+
 type AnalystRating struct {
 	Ticker        string    `db:"ticker"`
 	CompositeFigi string    `db:"composite_figi"`
@@ -55,10 +67,10 @@ func (rating *AnalystRating) SaveDB(ctx context.Context, tbl string, dbConn *pgx
 		"ticker",
 		"composite_figi",
 		"event_date",
-		"analyst",
+		"analyst_id",
 		"rating"
 	) VALUES (
-		$1, $2, $3, $4, $5
+		$1, $2, $3, (SELECT id FROM analyst_lookup WHERE analyst = $4), $5
 	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		rating = EXCLUDED.rating`, tbl)
 
@@ -75,7 +87,12 @@ func (rating *AnalystRating) SaveDB(ctx context.Context, tbl string, dbConn *pgx
 }
 
 func LatestRating(ctx context.Context, tbl string, dbConn *pgxpool.Conn, analyst string) *AnalystRating {
-	rows, err := dbConn.Query(ctx, "SELECT * FROM "+tbl+" WHERE analyst=$1 ORDER BY event_date DESC LIMIT 1", analyst)
+	rows, err := dbConn.Query(ctx,
+		"SELECT t.ticker, t.composite_figi, t.event_date, a.analyst, t.rating FROM "+tbl+
+			" t JOIN analyst_lookup a ON t.analyst_id = a.id WHERE a.analyst = $1"+
+			" ORDER BY t.event_date DESC LIMIT 1",
+		analyst,
+	)
 	if err != nil {
 		log.Error().Err(err).Msg("error querying for latest rating")
 		return nil

@@ -742,6 +742,45 @@ func copyMarketHolidays(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx
 	return nil
 }
 
+// loadAnalystIDs resolves textual analyst names to their analyst_lookup IDs.
+// Returns an error if any requested name is missing from the lookup table —
+// callers must register new analysts in analyst_lookup before importing.
+func loadAnalystIDs(ctx context.Context, tx pgx.Tx, names ...string) (map[string]int16, error) {
+	out := make(map[string]int16, len(names))
+
+	rows, err := tx.Query(ctx,
+		`SELECT analyst, id FROM analyst_lookup WHERE analyst = ANY($1)`, names)
+	if err != nil {
+		return nil, fmt.Errorf("query analyst_lookup: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			name string
+			id   int16
+		)
+
+		if err := rows.Scan(&name, &id); err != nil {
+			return nil, fmt.Errorf("scan analyst_lookup: %w", err)
+		}
+
+		out[name] = id
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate analyst_lookup: %w", err)
+	}
+
+	for _, name := range names {
+		if _, ok := out[name]; !ok {
+			return nil, fmt.Errorf("analyst %q not found in analyst_lookup", name)
+		}
+	}
+
+	return out, nil
+}
+
 func copyZacksRatings(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, sub *library.Subscription, progressCh chan<- progressMsg) error {
 	tbl := sub.DataTablesMap[data.RatingKey]
 	if tbl == "" {
@@ -765,6 +804,12 @@ func copyZacksRatings(ctx context.Context, sourceConn *pgxpool.Conn, tx pgx.Tx, 
 		"A": 1, "B": 2, "C": 3, "D": 4, "F": 5,
 	}
 
+	analystIDs, err := loadAnalystIDs(ctx, tx,
+		"zacks-rank", "zacks-value", "zacks-growth", "zacks-momentum", "zacks-vgm")
+	if err != nil {
+		return err
+	}
+
 	rows, err := sourceConn.Query(ctx,
 		`SELECT ticker, TRIM(composite_figi), event_date, zacks_rank,
   TRIM(value_score), TRIM(growth_score), TRIM(momentum_score), TRIM(vgm_score)
@@ -774,7 +819,7 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 	}
 	defer rows.Close()
 
-	ratingColumns := []string{"ticker", "composite_figi", "event_date", "analyst", "rating"}
+	ratingColumns := []string{"ticker", "composite_figi", "event_date", "analyst_id", "rating"}
 	batch := make([][]any, 0, copyBatchSize)
 
 	var copiedRows int64
@@ -811,7 +856,7 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 		}
 
 		if zacksRank != nil {
-			batch = append(batch, []any{ticker, figi, eventDate, "zacks-rank", *zacksRank})
+			batch = append(batch, []any{ticker, figi, eventDate, analystIDs["zacks-rank"], *zacksRank})
 		}
 
 		for _, pair := range []struct {
@@ -825,7 +870,7 @@ FROM zacks_financials WHERE LENGTH(TRIM(composite_figi)) = 12`)
 		} {
 			if pair.score != nil {
 				if val, ok := letterGradeToInt[*pair.score]; ok {
-					batch = append(batch, []any{ticker, figi, eventDate, pair.analyst, val})
+					batch = append(batch, []any{ticker, figi, eventDate, analystIDs[pair.analyst], val})
 				}
 			}
 		}

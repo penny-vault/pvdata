@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,38 +58,47 @@ type PublishedView struct {
 // published view. This returns a single CREATE OR REPLACE VIEW statement, or a
 // DROP VIEW IF EXISTS statement when there are zero sources.
 func (pv *PublishedView) GenerateViewSQL() []string {
-	return []string{generateUnionSQL(pv.ViewName, pv.Sources)}
+	var gen data.ViewGenerator
+	if dt, ok := data.DataTypes[pv.DataTypeKey]; ok && dt != nil {
+		gen = dt.ViewGenerator
+	}
+
+	return []string{generateUnionSQL(pv.ViewName, pv.Sources, gen)}
 }
 
 // generateUnionSQL builds a CREATE OR REPLACE VIEW or DROP VIEW statement.
-func generateUnionSQL(viewName string, sources []ViewSource) string {
+// When gen is non-nil, the SELECT/FROM portion of each leg is delegated to it
+// instead of using the default "SELECT * FROM <table>".
+func generateUnionSQL(viewName string, sources []ViewSource, gen data.ViewGenerator) string {
 	if len(sources) == 0 {
 		return fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName)
 	}
 
-	if len(sources) == 1 {
-		s := sources[0]
-
-		where := buildWhereClause(s)
-		if where == "" {
-			return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s", viewName, s.TableName)
-		}
-
-		return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS SELECT * FROM %s WHERE %s", viewName, s.TableName, where)
-	}
-
-	var legs []string
-
-	for _, s := range sources {
-		where := buildWhereClause(s)
-		if where == "" {
-			legs = append(legs, fmt.Sprintf("SELECT * FROM %s", s.TableName))
-		} else {
-			legs = append(legs, fmt.Sprintf("SELECT * FROM %s WHERE %s", s.TableName, where))
-		}
+	legs := make([]string, len(sources))
+	for i, s := range sources {
+		legs[i] = buildLeg(s, gen)
 	}
 
 	return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS %s", viewName, strings.Join(legs, " UNION ALL "))
+}
+
+// buildLeg renders one leg of a published view: the SELECT/FROM clause
+// (default or generator-supplied) followed by an optional WHERE filter
+// derived from the source's date bounds.
+func buildLeg(s ViewSource, gen data.ViewGenerator) string {
+	var sel string
+	if gen != nil {
+		sel = gen.SelectFrom(s.TableName)
+	} else {
+		sel = fmt.Sprintf("SELECT * FROM %s", s.TableName)
+	}
+
+	where := buildWhereClause(s)
+	if where == "" {
+		return sel
+	}
+
+	return sel + " WHERE " + where
 }
 
 // buildWhereClause produces the WHERE conditions for a single source based on

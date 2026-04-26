@@ -112,6 +112,53 @@ var _ = Describe("PublishedViews", func() {
 			Expect(sqls[0]).To(ContainSubstring("indices_changelog"))
 			Expect(sqls[0]).To(ContainSubstring("ishares_index_constituents_abc12_index_changelog"))
 		})
+
+		It("generates a join-based view for the rating data type with a single source", func() {
+			pv := &library.PublishedView{
+				ViewName:    "ratings",
+				DataTypeKey: "rating",
+				Sources: []library.ViewSource{
+					{TableName: "rating_zacks_abc12", SubscriptionID: "sub-1"},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).To(Equal(
+				"CREATE OR REPLACE VIEW ratings AS SELECT t.ticker, t.composite_figi, t.event_date, a.analyst, t.rating FROM rating_zacks_abc12 t JOIN analyst_lookup a ON t.analyst_id = a.id",
+			))
+		})
+
+		It("generates a join-based UNION ALL view for the rating data type with multiple sources", func() {
+			pv := &library.PublishedView{
+				ViewName:    "ratings",
+				DataTypeKey: "rating",
+				Sources: []library.ViewSource{
+					{TableName: "rating_zacks_abc12", SubscriptionID: "sub-1"},
+					{TableName: "rating_zacks_def34", SubscriptionID: "sub-2"},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).To(ContainSubstring("UNION ALL"))
+			Expect(sqls[0]).To(ContainSubstring("SELECT t.ticker, t.composite_figi, t.event_date, a.analyst, t.rating FROM rating_zacks_abc12 t JOIN analyst_lookup a ON t.analyst_id = a.id"))
+			Expect(sqls[0]).To(ContainSubstring("SELECT t.ticker, t.composite_figi, t.event_date, a.analyst, t.rating FROM rating_zacks_def34 t JOIN analyst_lookup a ON t.analyst_id = a.id"))
+		})
+
+		It("generates a join-based view for the rating data type with date filters", func() {
+			from := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+			pv := &library.PublishedView{
+				ViewName:    "ratings",
+				DataTypeKey: "rating",
+				Sources: []library.ViewSource{
+					{TableName: "rating_zacks_abc12", SubscriptionID: "sub-1", FromDate: &from},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).To(Equal(
+				"CREATE OR REPLACE VIEW ratings AS SELECT t.ticker, t.composite_figi, t.event_date, a.analyst, t.rating FROM rating_zacks_abc12 t JOIN analyst_lookup a ON t.analyst_id = a.id WHERE event_date >= '2023-01-01'",
+			))
+		})
 	})
 
 	Describe("ValidateSources", func() {
