@@ -18,6 +18,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -157,7 +158,7 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 		SetRetryWaitTime(5 * time.Second).
 		SetRetryMaxWaitTime(30 * time.Second).
 		AddRetryCondition(func(r *resty.Response, err error) bool {
-			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+			return err != nil || r.StatusCode() >= 500
 		}).
 		SetTimeout(60 * time.Second)
 	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
@@ -249,10 +250,17 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 
 		respContent := make([]*tiingoEod, 0)
 
-		resp, err := client.R().
-			SetQueryParam("startDate", startDateStr).
-			SetResult(&respContent).
-			Get(url)
+		resp, err := doWithRateLimit(ctx, func() (*resty.Response, error) {
+			return client.R().
+				SetQueryParam("startDate", startDateStr).
+				SetResult(&respContent).
+				Get(url)
+		})
+		if errors.Is(err, errDailyRateLimit) {
+			runSummary.Status = data.RunFailed
+			return
+		}
+
 		if err != nil {
 			logger.Error().Err(err).Msg("resty returned an error when querying eod prices")
 			return
@@ -340,12 +348,19 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 		SetRetryWaitTime(5 * time.Second).
 		SetRetryMaxWaitTime(30 * time.Second).
 		AddRetryCondition(func(r *resty.Response, err error) bool {
-			return err != nil || r.StatusCode() == 429 || r.StatusCode() >= 500
+			return err != nil || r.StatusCode() >= 500
 		}).
 		SetTimeout(60 * time.Second)
 	assets := []*tiingoAsset{}
 
-	resp, err := client.R().Get(tickerUrl)
+	resp, err := doWithRateLimit(ctx, func() (*resty.Response, error) {
+		return client.R().Get(tickerUrl)
+	})
+	if errors.Is(err, errDailyRateLimit) {
+		runSummary.Status = data.RunFailed
+		return
+	}
+
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to download tickers")
 	}
