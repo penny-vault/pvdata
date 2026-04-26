@@ -6,9 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-26
+
+### Added
+
+- New `rating`, `estimate`, and `consensus` subscriptions are partitioned by 5-year ranges of `event_date`; new `quote` subscriptions are partitioned monthly. Queries that filter by date prune to the relevant partitions, and partition-level VACUUM / REINDEX is much faster than rewriting the whole table.
+
 ### Changed
 
 - Ratings queries are faster due to the `analyst` column being stored as a foreign-key reference to a lookup table
+- `pvdata migrate` now reports the actual schema version it advanced to (previously always logged "version 8") and also runs per-subscription table migrations, so dormant subscriptions catch up without needing a manual run
+- Tiingo provider now waits through rate-limit windows on HTTP 429 rather than failing the import; aborts only when the daily quota is exhausted
 
 ## [0.1.0] - 2026-04-26
 
@@ -44,5 +52,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/penny-vault/pvdata/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/penny-vault/pvdata/releases/tag/v0.1.0
