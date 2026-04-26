@@ -104,11 +104,10 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 		}
 	}()
 
-	tables := subscription.PartitionTables()
-	tables = append(tables, subscription.DataTables...)
-
-	// delete tables
-	for _, tblName := range tables {
+	// DROP TABLE on a partitioned parent automatically drops its child
+	// partitions, so iterating the parent tables is sufficient for both
+	// partitioned and non-partitioned data types.
+	for _, tblName := range subscription.DataTables {
 		log.Info().Str("TableName", tblName).Msg("delete table")
 
 		_, err := tx.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s;", tblName))
@@ -337,46 +336,17 @@ func (subscription *Subscription) managePartitionsWithTransaction(ctx context.Co
 		dataType := data.DataTypes[dataTypeName]
 		dataTable := subscription.DataTables[idx]
 
-		// if table is not partitioned skip to next dataType
 		if !dataType.IsPartitioned {
 			continue
 		}
 
-		// construct a list of date ranges
-		dates := []dateRange{
-			{
-				Start: 1900,
-				End:   2000,
-			},
-			{
-				Start: 2000,
-				End:   2005,
-			},
-			{
-				Start: 2005,
-				End:   2010,
-			},
-			{
-				Start: 2010,
-				End:   2015,
-			},
-		}
-
-		today := time.Now()
-		year := today.Year() + 1
-
-		for ii := 2015; ii < year; ii += 5 {
-			dates = append(dates, dateRange{Start: ii, End: ii + 5})
-		}
-
-		// create tables for expected date ranges
-		for _, dt := range dates {
-			tableName := fmt.Sprintf("%s_%d_%d", dataTable, dt.Start, dt.End)
-			sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%d-01-01') TO ('%d-01-01');",
-				tableName, dataTable, dt.Start, dt.End)
-			log.Debug().Str("SQL", sql).Msg("creating partition table")
-
-			if _, err := tx.Exec(ctx, sql); err != nil {
+		switch dataType.PartitionInterval {
+		case data.PartitionIntervalMonthly:
+			if err := createMonthlyPartitions(ctx, tx, dataTable); err != nil {
+				return err
+			}
+		default:
+			if err := create5YearPartitions(ctx, tx, dataTable); err != nil {
 				return err
 			}
 		}
@@ -385,67 +355,73 @@ func (subscription *Subscription) managePartitionsWithTransaction(ctx context.Co
 	return nil
 }
 
-// PartitionTables returns the table names for all paritions in the set
-func (subscription *Subscription) PartitionTables() []string {
-	tables := make([]string, 0, 10)
+func create5YearPartitions(ctx context.Context, tx pgx.Tx, dataTable string) error {
+	dates := []dateRange{
+		{Start: 1900, End: 2000},
+		{Start: 2000, End: 2005},
+		{Start: 2005, End: 2010},
+		{Start: 2010, End: 2015},
+	}
 
-	for idx, dataTypeName := range subscription.DataTypes {
-		dataType := data.DataTypes[dataTypeName]
-		dataTable := subscription.DataTables[idx]
+	year := time.Now().Year() + 1
+	for ii := 2015; ii < year; ii += 5 {
+		dates = append(dates, dateRange{Start: ii, End: ii + 5})
+	}
 
-		// if table is not partitioned skip to next dataType
-		if !dataType.IsPartitioned {
-			continue
-		}
+	for _, dt := range dates {
+		tableName := fmt.Sprintf("%s_%d_%d", dataTable, dt.Start, dt.End)
+		sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%d-01-01') TO ('%d-01-01');",
+			tableName, dataTable, dt.Start, dt.End)
+		log.Debug().Str("SQL", sql).Msg("creating partition table")
 
-		// construct a list of date ranges
-		dates := []dateRange{
-			{
-				Start: 1900,
-				End:   2000,
-			},
-			{
-				Start: 2000,
-				End:   2005,
-			},
-			{
-				Start: 2005,
-				End:   2010,
-			},
-			{
-				Start: 2010,
-				End:   2015,
-			},
-		}
-
-		today := time.Now()
-		year := today.Year() + 1
-
-		for ii := 2015; ii < year; ii++ {
-			dates = append(dates, dateRange{Start: ii, End: ii + 1})
-		}
-
-		// create tables for expected date ranges
-		for _, dt := range dates {
-			tableName := fmt.Sprintf("%s_%d_%d", dataTable, dt.Start, dt.End)
-			tables = append(tables, tableName)
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			return err
 		}
 	}
 
-	return tables
+	return nil
 }
 
-// RunMigrations applies any pending schema migrations for the subscription's data types
-func (subscription *Subscription) RunMigrations(ctx context.Context) error {
-	conn, err := subscription.Library.Pool.Acquire(ctx)
-	if err != nil {
-		return err
+// monthlyPartitionStartYear is the earliest year covered by monthly partitions.
+// Monthly intervals are reserved for high-cadence data (e.g. intraday quotes),
+// so we don't pre-create the long historical tail used by 5-year partitioning.
+const monthlyPartitionStartYear = 2020
+
+// monthlyPartitionLookahead is how many months of future partitions to create
+// ahead of "today" so writes near month boundaries don't fail.
+const monthlyPartitionLookahead = 3
+
+func createMonthlyPartitions(ctx context.Context, tx pgx.Tx, dataTable string) error {
+	loc := time.UTC
+	start := time.Date(monthlyPartitionStartYear, time.January, 1, 0, 0, 0, 0, loc)
+	end := time.Now().In(loc).AddDate(0, monthlyPartitionLookahead, 0)
+	endBound := time.Date(end.Year(), end.Month(), 1, 0, 0, 0, 0, loc).AddDate(0, 1, 0)
+
+	for cur := start; cur.Before(endBound); cur = cur.AddDate(0, 1, 0) {
+		next := cur.AddDate(0, 1, 0)
+		tableName := fmt.Sprintf("%s_%04d_%02d", dataTable, cur.Year(), cur.Month())
+		sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s');",
+			tableName, dataTable, cur.Format("2006-01-02"), next.Format("2006-01-02"))
+		log.Debug().Str("SQL", sql).Msg("creating monthly partition table")
+
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			return err
+		}
 	}
-	defer conn.Release()
 
+	return nil
+}
+
+// RunMigrations applies any pending schema migrations for the subscription's
+// data types. Published views that reference the subscription's tables are
+// dropped before migration and re-applied afterwards so column-altering
+// migrations (which would otherwise be blocked by view dependencies) can
+// proceed and the rebuilt views pick up any updated ViewGenerator output.
+func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 	maxVersion := 0
+	hasPending := false
 
-	for idx, dataTypeName := range subscription.DataTypes {
+	for _, dataTypeName := range subscription.DataTypes {
 		dataType := data.DataTypes[dataTypeName]
 		if dataType == nil {
 			continue
@@ -453,6 +429,61 @@ func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 
 		if dataType.Version > maxVersion {
 			maxVersion = dataType.Version
+		}
+
+		if subscription.SchemaVersion < dataType.Version {
+			hasPending = true
+		}
+	}
+
+	if !hasPending && maxVersion <= subscription.SchemaVersion {
+		return nil
+	}
+
+	tableSet := make(map[string]struct{}, len(subscription.DataTables))
+	for _, t := range subscription.DataTables {
+		tableSet[t] = struct{}{}
+	}
+
+	conn, err := subscription.Library.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	allViews, err := LoadPublishedViews(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("load published views: %w", err)
+	}
+
+	var affectedViews []*PublishedView
+
+	for _, pv := range allViews {
+		for _, src := range pv.Sources {
+			if _, ok := tableSet[src.TableName]; ok {
+				affectedViews = append(affectedViews, pv)
+				break
+			}
+		}
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration tx: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	for _, pv := range affectedViews {
+		if _, err := tx.Exec(ctx, fmt.Sprintf("DROP VIEW IF EXISTS %s", pv.ViewName)); err != nil {
+			return fmt.Errorf("drop published view %s: %w", pv.ViewName, err)
+		}
+	}
+
+	for idx, dataTypeName := range subscription.DataTypes {
+		dataType := data.DataTypes[dataTypeName]
+		if dataType == nil {
+			continue
 		}
 
 		if subscription.SchemaVersion >= dataType.Version {
@@ -466,18 +497,32 @@ func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 				migrationSQL := fmt.Sprintf(dataType.Migrations[i], dataTable)
 				log.Info().Str("Table", dataTable).Int("Migration", i).Msg("running migration")
 
-				if _, err := conn.Exec(ctx, migrationSQL); err != nil {
+				if _, err := tx.Exec(ctx, migrationSQL); err != nil {
 					return fmt.Errorf("migration %d for %s failed: %w", i, dataTable, err)
 				}
 			}
 		}
 	}
 
+	for _, pv := range affectedViews {
+		for _, sql := range pv.GenerateViewSQL() {
+			if _, err := tx.Exec(ctx, sql); err != nil {
+				return fmt.Errorf("rebuild published view %s: %w", pv.ViewName, err)
+			}
+		}
+	}
+
 	if maxVersion > subscription.SchemaVersion {
-		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET schema_version=$1 WHERE id=$2", maxVersion, subscription.ID); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE subscriptions SET schema_version=$1 WHERE id=$2", maxVersion, subscription.ID); err != nil {
 			return fmt.Errorf("failed to update schema version: %w", err)
 		}
+	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migration tx: %w", err)
+	}
+
+	if maxVersion > subscription.SchemaVersion {
 		subscription.SchemaVersion = maxVersion
 	}
 
