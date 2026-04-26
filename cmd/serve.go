@@ -49,7 +49,7 @@ The server runs until interrupted with Ctrl+C.`,
 
 		// Run any pending database migrations
 		migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
-		if err := db.Migrate(migrateURL); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		if _, err := db.Migrate(migrateURL); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			log.Fatal().Err(err).Msg("database migration failed")
 		}
 

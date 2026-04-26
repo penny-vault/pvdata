@@ -98,7 +98,7 @@ var initCmd = &cobra.Command{
 		// run migration
 		migrateURL := strings.ReplaceAll(myLibrary.DBUrl, "postgres://", "pgx5://")
 
-		if err := db.Migrate(migrateURL); err != nil {
+		if _, err := db.Migrate(migrateURL); err != nil {
 			log.Fatal().Err(err).Msg("error running database migration")
 		}
 

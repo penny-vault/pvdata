@@ -15,9 +15,13 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"strings"
 
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/penny-vault/pvdata/db"
+	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -34,16 +38,62 @@ var migrateCmd = &cobra.Command{
 
 		migrateURL := strings.ReplaceAll(dbURL, "postgres://", "pgx5://")
 
-		if err := db.Migrate(migrateURL); err != nil {
-			if err.Error() == "no change" {
-				log.Info().Uint("version", db.RequiredVersion).Msg("database is already up to date")
-				return
-			}
-
-			log.Fatal().Err(err).Msg("migration failed")
+		current, err := db.CurrentVersion(migrateURL)
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not read current migration version")
 		}
 
-		log.Info().Uint("version", db.RequiredVersion).Msg("migrations applied successfully")
+		latest, err := db.LatestVersion()
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not determine latest migration version")
+		}
+
+		if current < latest {
+			log.Info().Uint("from", current).Uint("to", latest).Msg("applying migrations")
+		}
+
+		version, err := db.Migrate(migrateURL)
+		if err != nil {
+			if errors.Is(err, migrate.ErrNoChange) {
+				log.Info().Uint("version", version).Msg("database is already up to date")
+			} else {
+				log.Fatal().Err(err).Msg("migration failed")
+			}
+		} else {
+			log.Info().Uint("version", version).Msg("migrations applied successfully")
+		}
+
+		ctx := context.Background()
+
+		myLibrary, err := library.NewFromDB(ctx, dbURL)
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not connect to library")
+		}
+		defer myLibrary.Close()
+
+		subs, err := myLibrary.Subscriptions(ctx)
+		if err != nil {
+			log.Fatal().Err(err).Msg("could not load subscriptions")
+		}
+
+		var migrated int
+
+		for _, sub := range subs {
+			before := sub.SchemaVersion
+
+			if err := sub.RunMigrations(ctx); err != nil {
+				log.Error().Err(err).Str("subscription", sub.Name).Msg("subscription migration failed")
+				continue
+			}
+
+			if sub.SchemaVersion != before {
+				log.Info().Str("subscription", sub.Name).Int("from", before).Int("to", sub.SchemaVersion).Msg("migrated subscription tables")
+
+				migrated++
+			}
+		}
+
+		log.Info().Int("migrated", migrated).Int("checked", len(subs)).Msg("subscription migrations complete")
 	},
 }
 

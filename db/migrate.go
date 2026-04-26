@@ -17,6 +17,8 @@ package db
 import (
 	"embed"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -27,23 +29,90 @@ import (
 var migrationFS embed.FS
 
 // RequiredVersion is the migration version that the application expects.
-const RequiredVersion uint = 8
+const RequiredVersion uint = 10
 
-// Migrate runs database migrations for a data library
-func Migrate(databaseURL string) error {
+// Migrate runs database migrations for a data library and returns the
+// resulting schema version. If migrations are already up to date, the
+// returned error wraps migrate.ErrNoChange and the version reflects
+// the current state of the database.
+func Migrate(databaseURL string) (uint, error) {
 	migrationDir, err := iofs.New(migrationFS, "migrations")
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	migration, err := migrate.NewWithSourceInstance("iofs", migrationDir, databaseURL)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	err = migration.Up()
+	upErr := migration.Up()
 
-	return err
+	version, _, vErr := migration.Version()
+	if vErr != nil {
+		return 0, vErr
+	}
+
+	return version, upErr
+}
+
+// CurrentVersion returns the schema version currently recorded in the
+// database, or 0 if no migrations have been applied yet.
+func CurrentVersion(databaseURL string) (uint, error) {
+	migrationDir, err := iofs.New(migrationFS, "migrations")
+	if err != nil {
+		return 0, err
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", migrationDir, databaseURL)
+	if err != nil {
+		return 0, err
+	}
+
+	version, _, err := m.Version()
+	if err != nil {
+		if err == migrate.ErrNilVersion {
+			return 0, nil
+		}
+
+		return 0, err
+	}
+
+	return version, nil
+}
+
+// LatestVersion returns the highest migration version available in the
+// embedded migrations directory.
+func LatestVersion() (uint, error) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return 0, err
+	}
+
+	var latest uint
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".up.sql") {
+			continue
+		}
+
+		prefix, _, ok := strings.Cut(name, "_")
+		if !ok {
+			continue
+		}
+
+		n, err := strconv.ParseUint(prefix, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if uint(n) > latest {
+			latest = uint(n)
+		}
+	}
+
+	return latest, nil
 }
 
 // CheckVersion verifies the database is at the required migration version.
