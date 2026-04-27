@@ -17,24 +17,29 @@ package web
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/penny-vault/pvdata/checks"
-	"github.com/penny-vault/pvdata/data"
-	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
-	"github.com/rs/zerolog/log"
 )
 
 // getRegistry retrieves the RunRegistry from request context.
 func getRegistry(c *fiber.Ctx) *RunRegistry {
 	return c.Locals("registry").(*RunRegistry)
+}
+
+// getLogCapture retrieves the LogCapture sink from request context. Returns
+// nil if log capture is not configured (e.g. tests).
+func getLogCapture(c *fiber.Ctx) *LogCapture {
+	v := c.Locals("logCapture")
+	if v == nil {
+		return nil
+	}
+
+	return v.(*LogCapture)
 }
 
 // TriggerRun starts an on-demand run for a subscription.
@@ -50,16 +55,6 @@ func TriggerRun(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(HttpError{
 			Code:    "404",
 			Message: "subscription not found",
-		})
-	}
-
-	subID := sub.ID.String()
-
-	// Reject if already running
-	if _, ok := registry.Load(subID); ok {
-		return c.Status(fiber.StatusConflict).JSON(HttpError{
-			Code:    "409",
-			Message: "a run is already in progress for this subscription",
 		})
 	}
 
@@ -94,17 +89,45 @@ func TriggerRun(c *fiber.Ctx) error {
 		})
 	}
 
-	// Create registry entry with buffered channels
-	run := &activeRun{
-		events: make(chan sseEvent, 1000),
-		done:   make(chan struct{}),
-	}
-	registry.Store(subID, run)
+	subID := sub.ID.String()
 
-	// Launch the run in a background goroutine
-	go executeRun(myLibrary, sub, run, registry, lookback)
+	run, ok := registry.TryReserve(subID)
+	if !ok {
+		return c.Status(fiber.StatusConflict).JSON(HttpError{
+			Code:    "409",
+			Message: "a run is already in progress for this subscription",
+		})
+	}
+
+	go RunSubscription(context.Background(), myLibrary, sub, RunOptions{
+		Run:        run,
+		Lookback:   lookback,
+		Source:     RunSourceManual,
+		LogCapture: getLogCapture(c),
+	})
 
 	return c.JSON(fiber.Map{"status": "started"})
+}
+
+// RunStatus reports whether a run is currently active for a subscription.
+// Used by the UI to auto-attach SSE on page load if a run started elsewhere
+// (e.g. by the scheduler).
+func RunStatus(c *fiber.Ctx) error {
+	id := c.Params("id")
+	myLibrary := getLibrary(c)
+	registry := getRegistry(c)
+
+	sub, err := myLibrary.SubscriptionFromID(c.UserContext(), id)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"active": registry.IsActive(sub.ID.String()),
+	})
 }
 
 // parseLookback parses a human-friendly duration string with suffixes:
@@ -144,118 +167,6 @@ func parseLookback(s string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("unknown lookback suffix %q; use d (days), w (weeks), m (months), or y (years)", suffix)
 	}
-}
-
-// executeRun runs the subscription fetch and feeds events into the activeRun channels.
-func executeRun(myLibrary *library.Library, sub *library.Subscription, run *activeRun, registry *RunRegistry, lookback time.Duration) {
-	subID := sub.ID.String()
-
-	defer func() {
-		close(run.done)
-		// Grace period so SSE clients can read the final event
-		time.Sleep(5 * time.Second)
-		registry.Delete(subID)
-		close(run.events)
-	}()
-
-	ctx := context.Background()
-
-	// Manage partitions and migrations
-	if err := sub.ManagePartitions(ctx); err != nil {
-		log.Error().Err(err).Msg("ManagePartitions failed during on-demand run")
-	}
-
-	if err := sub.RunMigrations(ctx); err != nil {
-		log.Error().Err(err).Msg("RunMigrations failed during on-demand run")
-	}
-
-	subProvider := provider.Map[sub.Provider]
-	subDataset := subProvider.Datasets()[sub.Dataset]
-
-	// Channels for data flow
-	observeChan := make(chan *data.Observation, 1000)
-	saveChan := make(chan *data.Observation, 1000)
-	exitChan := make(chan data.RunSummary, 1)
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-
-	go myLibrary.SaveObservations(saveChan, &wg, checks.NewInlineValidator(checks.InlineChecks()))
-
-	// Send started event
-	startedData, _ := json.Marshal(map[string]string{
-		"subscription_id": sub.ID.String(),
-		"name":            sub.Name,
-	})
-	run.events <- sseEvent{Event: "started", Data: string(startedData)}
-
-	// Observation interceptor: summarize each record and forward to saveChan
-	go func() {
-		count := 0
-
-		for obs := range observeChan {
-			count++
-
-			typ, summary := summarizeObservation(obs)
-
-			d, _ := json.Marshal(map[string]interface{}{
-				"count":   count,
-				"type":    typ,
-				"summary": summary,
-			})
-			run.events <- sseEvent{Event: "record", Data: string(d)}
-
-			saveChan <- obs
-		}
-
-		close(saveChan)
-	}()
-
-	// Run the fetch with lookback injected into context
-	fetchCtx := context.WithValue(ctx, provider.LookbackKey, lookback)
-	fetchLogger := log.With().Str("SubscriptionID", sub.ID.String()).Logger()
-	fetchCtx = fetchLogger.WithContext(fetchCtx)
-
-	subDataset.Fetch(fetchCtx, sub, observeChan, exitChan)
-
-	// Wait for fetch to complete
-	summary := <-exitChan
-
-	close(observeChan)
-
-	// Persist run history
-	if err := myLibrary.SaveRunHistory(ctx, summary); err != nil {
-		log.Error().Err(err).Str("Subscription", sub.Name).Msg("failed to save run history")
-	}
-
-	// Run post-fetch hooks
-	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
-		for _, hook := range subDataset.PostFetch {
-			if err := hook(ctx, sub); err != nil {
-				log.Error().Err(err).Str("Subscription", sub.Name).Msg("post-fetch hook failed")
-
-				break
-			}
-		}
-	}
-
-	// Emit final event
-	if summary.Status == data.RunFailed {
-		d, _ := json.Marshal(map[string]interface{}{
-			"count": summary.NumObservations,
-			"error": "run failed",
-		})
-		run.events <- sseEvent{Event: "failed", Data: string(d)}
-	} else {
-		d, _ := json.Marshal(map[string]interface{}{
-			"count":  summary.NumObservations,
-			"status": "success",
-		})
-		run.events <- sseEvent{Event: "completed", Data: string(d)}
-	}
-
-	wg.Wait()
 }
 
 // RunEvents streams Server-Sent Events for an active subscription run.

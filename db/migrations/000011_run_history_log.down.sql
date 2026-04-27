@@ -1,0 +1,1 @@
+ALTER TABLE run_history DROP COLUMN IF EXISTS log;

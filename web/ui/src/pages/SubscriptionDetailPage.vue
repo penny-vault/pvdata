@@ -5,8 +5,11 @@ import {
   getSubscription, getRunHistory,
   activateSubscription, deactivateSubscription, deleteSubscription,
   runSubscription, subscribeRunEvents,
+  getRunStatus, getRunLog,
 } from '@/lib/api'
 import RevoGrid from '@revolist/vue3-datagrid'
+import DataTable from 'primevue/datatable'
+import Column from 'primevue/column'
 import Tag from 'primevue/tag'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -24,6 +27,7 @@ import Menu from 'primevue/menu'
 import RunHistoryChart from '@/components/RunHistoryChart.vue'
 import DataBrowser from '@/components/DataBrowser.vue'
 import SubscriptionForm from '@/components/SubscriptionForm.vue'
+import LogViewer from '@/components/LogViewer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -48,6 +52,38 @@ const runRecords = ref<{ type: string; summary: string }[]>([])
 const maxRunRecords = 200
 const runLookback = ref('14d')
 const runLogRef = ref<HTMLElement | null>(null)
+const runPanelTab = ref<'records' | 'logs'>('records')
+
+interface LogEntry {
+  raw: string
+  time: string
+  level: string
+  message: string
+  fields: Record<string, any>
+}
+
+const liveLogs = ref<LogEntry[]>([])
+const maxLiveLogs = 5000
+
+function parseLogLine(line: string): LogEntry {
+  try {
+    const obj = JSON.parse(line)
+    return {
+      raw: line,
+      time: obj.time || obj.timestamp || '',
+      level: (obj.level || '').toLowerCase(),
+      message: obj.message || obj.msg || '',
+      fields: obj,
+    }
+  } catch {
+    return { raw: line, time: '', level: '', message: line, fields: {} }
+  }
+}
+
+const showRunLogDialog = ref(false)
+const selectedRunLog = ref('')
+const selectedRunMeta = ref<{ start: string; status: string } | null>(null)
+const loadingRunLog = ref(false)
 const runMenuRef = ref()
 const showCustomLookback = ref(false)
 const customLookbackInput = ref('')
@@ -112,15 +148,10 @@ function formatDuration(start: string, end: string | null): string {
   return `${(ms / 60000).toFixed(1)}m`
 }
 
-const runHistoryColumns = [
-  { prop: 'date', name: 'Date', sortable: true, size: 200 },
-  { prop: 'status', name: 'Status', sortable: true, size: 120 },
-  { prop: 'records', name: 'Records', sortable: true, size: 120 },
-  { prop: 'duration', name: 'Duration', sortable: true, size: 120 },
-]
-
 const runHistoryRows = computed(() =>
   runs.value.map(run => ({
+    id: run.id,
+    raw: run,
     date: formatDate(run.start_time),
     status: run.status || 'unknown',
     records: formatNumber(run.num_observations),
@@ -169,62 +200,105 @@ function openSqlConsole() {
   router.push({ path: '/sql', query: { q: `SELECT * FROM ${table} LIMIT 100` } })
 }
 
+async function attachEventSource() {
+  eventSource = await subscribeRunEvents(id.value)
+
+  eventSource.addEventListener('started', () => {
+    runStatus.value = 'running'
+  })
+
+  eventSource.addEventListener('record', (e: MessageEvent) => {
+    const data = JSON.parse(e.data)
+    runRecordCount.value = data.count
+    runRecords.value.push({ type: data.type, summary: data.summary })
+    if (runRecords.value.length > maxRunRecords) {
+      runRecords.value = runRecords.value.slice(-maxRunRecords)
+    }
+  })
+
+  eventSource.addEventListener('log', (e: MessageEvent) => {
+    const entry = parseLogLine(e.data)
+    liveLogs.value.push(entry)
+    if (liveLogs.value.length > maxLiveLogs) {
+      liveLogs.value = liveLogs.value.slice(-maxLiveLogs)
+    }
+  })
+
+  eventSource.addEventListener('completed', (e: MessageEvent) => {
+    const data = JSON.parse(e.data)
+    runRecordCount.value = data.count
+    runStatus.value = 'completed'
+    eventSource?.close()
+    eventSource = null
+    loadSubscription()
+    loadRuns()
+  })
+
+  eventSource.addEventListener('failed', (e: MessageEvent) => {
+    const data = JSON.parse(e.data)
+    runRecordCount.value = data.count
+    runStatus.value = 'failed'
+    error.value = data.error || 'Run failed'
+    eventSource?.close()
+    eventSource = null
+    loadSubscription()
+    loadRuns()
+  })
+
+  eventSource.onerror = () => {
+    if (runStatus.value === 'running') {
+      runStatus.value = 'failed'
+      error.value = 'Lost connection to run event stream'
+    }
+    eventSource?.close()
+    eventSource = null
+  }
+}
+
 async function triggerRun() {
   try {
     runStatus.value = 'running'
     runRecordCount.value = 0
     runRecords.value = []
+    liveLogs.value = []
     error.value = ''
 
     await runSubscription(id.value, runLookback.value)
 
-    eventSource = await subscribeRunEvents(id.value)
-
-    eventSource.addEventListener('started', () => {
-      runStatus.value = 'running'
-    })
-
-    eventSource.addEventListener('record', (e: MessageEvent) => {
-      const data = JSON.parse(e.data)
-      runRecordCount.value = data.count
-      runRecords.value.push({ type: data.type, summary: data.summary })
-      if (runRecords.value.length > maxRunRecords) {
-        runRecords.value = runRecords.value.slice(-maxRunRecords)
-      }
-    })
-
-    eventSource.addEventListener('completed', (e: MessageEvent) => {
-      const data = JSON.parse(e.data)
-      runRecordCount.value = data.count
-      runStatus.value = 'completed'
-      eventSource?.close()
-      eventSource = null
-      loadSubscription()
-      loadRuns()
-    })
-
-    eventSource.addEventListener('failed', (e: MessageEvent) => {
-      const data = JSON.parse(e.data)
-      runRecordCount.value = data.count
-      runStatus.value = 'failed'
-      error.value = data.error || 'Run failed'
-      eventSource?.close()
-      eventSource = null
-      loadSubscription()
-      loadRuns()
-    })
-
-    eventSource.onerror = () => {
-      if (runStatus.value === 'running') {
-        runStatus.value = 'failed'
-        error.value = 'Lost connection to run event stream'
-      }
-      eventSource?.close()
-      eventSource = null
-    }
+    await attachEventSource()
   } catch (e: any) {
     runStatus.value = 'failed'
     error.value = e.message || 'Failed to start run'
+  }
+}
+
+async function checkAndAttach() {
+  try {
+    const status = await getRunStatus(id.value)
+    if (status.active) {
+      runStatus.value = 'running'
+      runRecordCount.value = 0
+      runRecords.value = []
+      liveLogs.value = []
+      await attachEventSource()
+    }
+  } catch {
+    // status endpoint missing or no run; ignore
+  }
+}
+
+async function viewRunLog(runID: string, meta: { start: string; status: string }) {
+  selectedRunMeta.value = meta
+  selectedRunLog.value = ''
+  loadingRunLog.value = true
+  showRunLogDialog.value = true
+  try {
+    selectedRunLog.value = await getRunLog(id.value, runID)
+  } catch (e: any) {
+    error.value = e.message || 'Failed to load run log'
+    showRunLogDialog.value = false
+  } finally {
+    loadingRunLog.value = false
   }
 }
 
@@ -242,7 +316,7 @@ watch(runRecords, () => {
   })
 }, { deep: true })
 
-onMounted(() => { loadSubscription(); loadRuns() })
+onMounted(() => { loadSubscription(); loadRuns(); checkAndAttach() })
 
 onUnmounted(() => {
   eventSource?.close()
@@ -332,13 +406,36 @@ onUnmounted(() => {
         <div v-if="runStatus === 'running'" style="height: 2px">
           <ProgressBar mode="indeterminate" style="height: 2px" />
         </div>
-        <div ref="runLogRef" style="max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; padding: 0.5rem; background: var(--p-surface-900)">
+        <div style="display: flex; gap: 0.25rem; padding: 0.4rem 0.6rem 0; background: var(--p-surface-900)">
+          <Button :text="runPanelTab !== 'records'" :outlined="runPanelTab === 'records'" size="small" label="Records" @click="runPanelTab = 'records'" />
+          <Button :text="runPanelTab !== 'logs'" :outlined="runPanelTab === 'logs'" size="small" :label="`Logs${liveLogs.length ? ' (' + liveLogs.length + ')' : ''}`" @click="runPanelTab = 'logs'" />
+        </div>
+        <div v-show="runPanelTab === 'records'" ref="runLogRef" style="max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; padding: 0.5rem; background: var(--p-surface-900)">
           <div v-for="(rec, i) in runRecords" :key="i" style="padding: 1px 0; white-space: nowrap">
             <span style="opacity: 0.5; margin-right: 0.5rem">{{ rec.type }}</span>
             <span>{{ rec.summary }}</span>
           </div>
         </div>
+        <div v-show="runPanelTab === 'logs'" style="padding: 0.5rem; background: var(--p-surface-900)">
+          <LogViewer :entries="liveLogs" />
+        </div>
       </div>
+
+      <Dialog v-model:visible="showRunLogDialog" :modal="true" :style="{ width: '80vw', maxWidth: '1200px' }">
+        <template #header>
+          <div>
+            <div style="font-weight: 600">Run Log</div>
+            <div v-if="selectedRunMeta" style="font-size: 12px; opacity: 0.7">
+              {{ selectedRunMeta.start }} &middot; {{ selectedRunMeta.status }}
+            </div>
+          </div>
+        </template>
+        <div v-if="loadingRunLog" style="display: flex; justify-content: center; padding: 2rem"><ProgressSpinner /></div>
+        <div v-else-if="!selectedRunLog" style="padding: 2rem; text-align: center; opacity: 0.7">
+          No log was captured for this run, or the 30-day retention has cleared it.
+        </div>
+        <LogViewer v-else :text="selectedRunLog" :compact="true" />
+      </Dialog>
 
       <div v-if="!editing" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem">
         <Card><template #content><small>TOTAL RECORDS</small><h3>{{ formatNumber(subscription.total_records) }}</h3></template></Card>
@@ -356,12 +453,27 @@ onUnmounted(() => {
           <TabPanels>
             <TabPanel value="0">
               <RunHistoryChart :runs="runs" />
-              <RevoGrid
-                :columns="runHistoryColumns"
-                :source="runHistoryRows"
-                theme="darkCompact"
-                style="height: 400px; margin-top: 1rem"
-              />
+              <DataTable
+                :value="runHistoryRows"
+                :sort-field="'date'"
+                :sort-order="-1"
+                size="small"
+                style="margin-top: 1rem"
+              >
+                <Column field="date" header="Date" sortable />
+                <Column field="status" header="Status" sortable>
+                  <template #body="{ data }">
+                    <Tag :value="data.status" :severity="data.status === 'success' ? 'success' : data.status === 'failed' ? 'danger' : 'secondary'" />
+                  </template>
+                </Column>
+                <Column field="records" header="Records" sortable />
+                <Column field="duration" header="Duration" sortable />
+                <Column header="" style="width: 6rem">
+                  <template #body="{ data }">
+                    <Button label="Log" icon="pi pi-file" size="small" text @click="viewRunLog(data.id, { start: data.date, status: data.status })" />
+                  </template>
+                </Column>
+              </DataTable>
               <p v-if="runs.length === 0 && !loadingRuns">No runs recorded yet.</p>
               <div v-if="runs.length < runsTotal && !loadingRuns" style="display: flex; justify-content: center; padding: 0.5rem 0">
                 <Button label="Load more" text @click="runsOffset = runs.length; loadRuns(true)" />

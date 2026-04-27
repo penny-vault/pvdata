@@ -90,6 +90,17 @@ export async function getSparkline(subscriptionId: string) {
   return handleResponse<any[]>(res)
 }
 
+export async function getRunLog(subscriptionId: string, runId: string): Promise<string> {
+  const res = await authFetch(`/subscriptions/${subscriptionId}/runs/${runId}/log`)
+  const body = await handleResponse<{ log: string }>(res)
+  return body.log || ''
+}
+
+export async function getRunStatus(subscriptionId: string): Promise<{ active: boolean }> {
+  const res = await authFetch(`/subscriptions/${subscriptionId}/run/status`)
+  return handleResponse<{ active: boolean }>(res)
+}
+
 // ---------- Data ----------
 
 export async function getData(

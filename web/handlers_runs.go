@@ -44,6 +44,34 @@ func GetRunHistory(c *fiber.Ctx) error {
 	})
 }
 
+// GetRunLog returns the captured log text for a specific run_history row.
+// Returns 200 with `{"log": "..."}`. The log is empty if it was never
+// captured or has been cleared by the 30-day retention sweep.
+func GetRunLog(c *fiber.Ctx) error {
+	id := c.Params("id")
+	runID := c.Params("runID")
+	myLibrary := getLibrary(c)
+
+	if _, err := myLibrary.SubscriptionFromID(c.UserContext(), id); err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	runLog, err := myLibrary.RunHistoryLog(c.UserContext(), runID)
+	if err != nil {
+		log.Error().Err(err).Str("runID", runID).Msg("could not load run log")
+
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not load run log",
+		})
+	}
+
+	return c.JSON(fiber.Map{"log": runLog})
+}
+
 // GetRunSparkline returns daily aggregated observation counts for sparkline display.
 func GetRunSparkline(c *fiber.Ctx) error {
 	id := c.Params("id")

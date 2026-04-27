@@ -19,6 +19,8 @@ const searchQuery = ref('')
 const searchField = ref('')
 const offset = ref(0)
 const limit = 50
+const sortField = ref('')
+const sortOrder = ref<'asc' | 'desc'>('desc')
 
 async function fetchData(append = false) {
   if (append) loadingMore.value = true; else { loading.value = true; offset.value = 0 }
@@ -28,6 +30,10 @@ async function fetchData(append = false) {
       params.q = searchQuery.value
       params.search_col = searchField.value
     }
+    if (sortField.value) {
+      params.sort = sortField.value
+      params.order = sortOrder.value
+    }
     const result = await getData(props.subscriptionId, props.datatype, params)
     if (result.columns) columns.value = result.columns
     if (result.search_columns) {
@@ -36,10 +42,22 @@ async function fetchData(append = false) {
         searchField.value = result.search_columns[0]
       }
     }
+    if (result.sort && !sortField.value) sortField.value = result.sort
+    if (result.order && !sortOrder.value) sortOrder.value = result.order
     rows.value = append ? [...rows.value, ...(result.data || [])] : (result.data || [])
     total.value = result.total || rows.value.length
   } catch (e) { console.error('Failed to fetch data:', e) }
   finally { loading.value = false; loadingMore.value = false }
+}
+
+function changeSort(col: string) {
+  if (sortField.value === col) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortField.value = col
+    sortOrder.value = 'asc'
+  }
+  fetchData(false)
 }
 
 function formatCell(value: any): string {
@@ -61,7 +79,8 @@ const gridColumns = computed(() =>
     else if (col === 'ticker' || col === 'series') size = 100
     else if (col === 'name' || col === 'description') size = 250
     else if (col.length > 12) size = col.length * 10
-    return { prop: col, name: col, sortable: true, size }
+    const indicator = sortField.value === col ? (sortOrder.value === 'asc' ? ' ↑' : ' ↓') : ''
+    return { prop: col, name: col + indicator, size }
   })
 )
 
@@ -109,7 +128,26 @@ watch(() => [props.subscriptionId, props.datatype], () => { searchQuery.value = 
         <Button icon="pi pi-search" size="small" @click="doSearch" />
         <Button v-if="searchQuery" icon="pi pi-times" severity="secondary" text size="small" @click="clearSearch" />
       </div>
-      <span>{{ rows.length.toLocaleString() }} of {{ total.toLocaleString() }} rows</span>
+      <div style="display: flex; align-items: center; gap: 0.5rem">
+        <Select
+          v-if="columns.length > 0"
+          v-model="sortField"
+          :options="columns"
+          placeholder="Sort by"
+          size="small"
+          style="width: 180px"
+          @update:model-value="fetchData(false)"
+        />
+        <Button
+          v-if="sortField"
+          :icon="sortOrder === 'asc' ? 'pi pi-sort-amount-up' : 'pi pi-sort-amount-down'"
+          size="small"
+          severity="secondary"
+          text
+          @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'; fetchData(false)"
+        />
+        <span>{{ rows.length.toLocaleString() }} of {{ total.toLocaleString() }} rows</span>
+      </div>
     </div>
 
     <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem 0"><ProgressSpinner /></div>

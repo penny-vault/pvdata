@@ -32,12 +32,14 @@ func SetupRoutes(app *fiber.App) {
 	api.Post("/subscriptions/:id/deactivate", DeactivateSubscription)
 
 	api.Post("/subscriptions/:id/run", TriggerRun)
+	api.Get("/subscriptions/:id/run/status", RunStatus)
 	api.Get("/subscriptions/:id/run/events", RunEvents)
 
 	api.Get("/providers", GetProviders)
 
 	api.Get("/subscriptions/:id/runs", GetRunHistory)
 	api.Get("/subscriptions/:id/runs/sparkline", GetRunSparkline)
+	api.Get("/subscriptions/:id/runs/:runID/log", GetRunLog)
 
 	api.Get("/subscriptions/:id/data/:datatype", GetSubscriptionData)
 

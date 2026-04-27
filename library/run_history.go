@@ -17,6 +17,7 @@ package library
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
@@ -53,16 +54,28 @@ type SparklineData struct {
 // the subscription's stats (last_run, num_records_last_import, total_records,
 // first_obs_date, last_obs_date).
 func (myLibrary *Library) SaveRunHistory(ctx context.Context, summary data.RunSummary) error {
+	return myLibrary.SaveRunHistoryWithLog(ctx, summary, "")
+}
+
+// SaveRunHistoryWithLog persists a RunSummary to run_history along with the
+// captured log output for retrospection. Pass "" for runLog to omit the log.
+func (myLibrary *Library) SaveRunHistoryWithLog(ctx context.Context, summary data.RunSummary, runLog string) error {
 	conn, err := myLibrary.Pool.Acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Release()
 
+	var logArg any
+	if runLog != "" {
+		logArg = runLog
+	}
+
 	_, err = conn.Exec(ctx,
-		`INSERT INTO run_history (subscription_id, start_time, end_time, num_observations, status)
-		VALUES ($1, $2, $3, $4, $5)`,
-		summary.SubscriptionID, summary.StartTime, summary.EndTime, summary.NumObservations, StatusToString(summary.Status),
+		`INSERT INTO run_history (subscription_id, start_time, end_time, num_observations, status, log)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		summary.SubscriptionID, summary.StartTime, summary.EndTime, summary.NumObservations,
+		StatusToString(summary.Status), logArg,
 	)
 	if err != nil {
 		return err
@@ -179,6 +192,57 @@ func (myLibrary *Library) RunHistory(ctx context.Context, subscriptionID string,
 	}
 
 	return entries, total, nil
+}
+
+// RunHistoryLog returns the captured log text for a single run_history row,
+// addressed by its UUID. An empty string is returned when no log is stored
+// (either the run pre-dates the log column or the 30-day retention has
+// already cleared it).
+func (myLibrary *Library) RunHistoryLog(ctx context.Context, runID string) (string, error) {
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Release()
+
+	var runLog *string
+
+	err = conn.QueryRow(ctx,
+		`SELECT log FROM run_history WHERE id = $1`,
+		runID,
+	).Scan(&runLog)
+	if err != nil {
+		return "", err
+	}
+
+	if runLog == nil {
+		return "", nil
+	}
+
+	return *runLog, nil
+}
+
+// SweepRunLogs nulls out captured log text on run_history rows older than
+// retention. Returns the number of rows whose log was cleared.
+func (myLibrary *Library) SweepRunLogs(ctx context.Context, retention time.Duration) (int64, error) {
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Release()
+
+	cutoff := time.Now().Add(-retention)
+
+	tag, err := conn.Exec(ctx,
+		`UPDATE run_history SET log = NULL
+		 WHERE log IS NOT NULL AND created_on < $1`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return tag.RowsAffected(), nil
 }
 
 // RunHistorySparkline returns daily aggregated observation counts for the last 30 days.

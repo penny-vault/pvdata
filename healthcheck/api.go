@@ -142,3 +142,42 @@ func Resume(id string) error {
 
 	return nil
 }
+
+// PingKind selects which ping endpoint to hit on healthchecks.io.
+type PingKind string
+
+const (
+	PingStart   PingKind = "start"
+	PingSuccess PingKind = ""
+	PingFail    PingKind = "fail"
+)
+
+// Ping records a run state on healthchecks.io. The body is shown in the
+// dashboard as the ping's log; pass a short human-readable summary.
+//
+// Failures to reach healthchecks.io are returned to the caller; subscription
+// runs treat them as warnings rather than fatal errors.
+func Ping(id string, kind PingKind, body string) error {
+	if id == "" {
+		return nil
+	}
+
+	url := fmt.Sprintf("https://hc-ping.com/%s", id)
+	if kind != PingSuccess {
+		url = fmt.Sprintf("%s/%s", url, kind)
+	}
+
+	resp, err := resty.New().R().
+		SetHeader("Content-Type", "text/plain").
+		SetBody(body).
+		Post(url)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode() >= 300 {
+		return fmt.Errorf("%w: %d", ErrStatus, resp.StatusCode())
+	}
+
+	return nil
+}

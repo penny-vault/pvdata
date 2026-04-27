@@ -27,17 +27,26 @@ var _ = Describe("RunRegistry", func() {
 		registry = NewRunRegistry()
 	})
 
-	It("registers and retrieves an active run", func() {
+	It("reserves and retrieves an active run", func() {
 		id := uuid.New().String()
-		run := &activeRun{
-			events: make(chan sseEvent, 10),
-			done:   make(chan struct{}),
-		}
-		registry.Store(id, run)
 
-		got, ok := registry.Load(id)
+		run, ok := registry.TryReserve(id)
 		Expect(ok).To(BeTrue())
+		Expect(run).NotTo(BeNil())
+
+		got, found := registry.Load(id)
+		Expect(found).To(BeTrue())
 		Expect(got).To(Equal(run))
+	})
+
+	It("rejects a second reservation for the same subscription", func() {
+		id := uuid.New().String()
+
+		_, ok := registry.TryReserve(id)
+		Expect(ok).To(BeTrue())
+
+		_, ok = registry.TryReserve(id)
+		Expect(ok).To(BeFalse())
 	})
 
 	It("returns false for unknown subscription", func() {
@@ -45,13 +54,21 @@ var _ = Describe("RunRegistry", func() {
 		Expect(ok).To(BeFalse())
 	})
 
+	It("reports active subscriptions", func() {
+		id := uuid.New().String()
+		Expect(registry.IsActive(id)).To(BeFalse())
+
+		_, _ = registry.TryReserve(id)
+		Expect(registry.IsActive(id)).To(BeTrue())
+
+		registry.Delete(id)
+		Expect(registry.IsActive(id)).To(BeFalse())
+	})
+
 	It("removes a run", func() {
 		id := uuid.New().String()
-		run := &activeRun{
-			events: make(chan sseEvent, 10),
-			done:   make(chan struct{}),
-		}
-		registry.Store(id, run)
+
+		_, _ = registry.TryReserve(id)
 		registry.Delete(id)
 
 		_, ok := registry.Load(id)

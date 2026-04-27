@@ -25,6 +25,22 @@ import (
 
 var validTableName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
+// defaultSortForDataType returns the column the values view should sort by
+// when the client hasn't asked for a specific sort. Time-series data types
+// default to event_date / snapshot_date descending so the most recent rows
+// surface first.
+func defaultSortForDataType(datatype string) string {
+	switch datatype {
+	case "eod", "fundamental", "metric", "rating", "consensus", "estimate",
+		"custom", "economic-indicator", "index-changelog", "market-holidays":
+		return "event_date"
+	case "index-snapshot":
+		return "snapshot_date"
+	default:
+		return ""
+	}
+}
+
 // indexedColumnsForDataType returns the columns that have indexes for a given
 // data type, suitable for exact-match filtering.
 func indexedColumnsForDataType(datatype string) []string {
@@ -97,7 +113,19 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 	offset := c.QueryInt("offset", 0)
 	search := c.Query("q")
 	sort := c.Query("sort", "")
-	order := c.Query("order", "asc")
+	order := c.Query("order", "")
+
+	// Apply data-type-aware defaults so the UI sees the most recent data first.
+	if sort == "" {
+		sort = defaultSortForDataType(datatype)
+		if sort != "" && order == "" {
+			order = "desc"
+		}
+	}
+
+	if order == "" {
+		order = "asc"
+	}
 
 	// The frontend sends which column to search via search_col param.
 	// We validate it against the known indexed columns for this data type.
@@ -198,6 +226,8 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 			"total":          total,
 			"limit":          limit,
 			"offset":         offset,
+			"sort":           sort,
+			"order":          order,
 			"search_columns": indexedCols,
 		})
 	}
@@ -241,6 +271,8 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 		"total":          total,
 		"limit":          limit,
 		"offset":         offset,
+		"sort":           sort,
+		"order":          order,
 		"search_columns": indexedCols,
 	})
 }

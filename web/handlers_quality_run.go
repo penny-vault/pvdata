@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -35,20 +34,15 @@ func TriggerQualityCheck(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	registry := getRegistry(c)
 
-	if _, ok := registry.Load(qualityCheckKey); ok {
+	run, ok := registry.TryReserve(qualityCheckKey)
+	if !ok {
 		return c.Status(fiber.StatusConflict).JSON(HttpError{
 			Code:    "409",
 			Message: "a quality check is already in progress",
 		})
 	}
 
-	run := &activeRun{
-		events: make(chan sseEvent, 1000),
-		done:   make(chan struct{}),
-	}
-	registry.Store(qualityCheckKey, run)
-
-	go executeQualityCheck(myLibrary, run, registry)
+	go executeQualityCheck(myLibrary, run)
 
 	return c.JSON(fiber.Map{"status": "started"})
 }
@@ -104,13 +98,8 @@ func QualityCheckEvents(c *fiber.Ctx) error {
 	return nil
 }
 
-func executeQualityCheck(myLibrary *library.Library, run *activeRun, registry *RunRegistry) {
-	defer func() {
-		close(run.done)
-		time.Sleep(5 * time.Second)
-		registry.Delete(qualityCheckKey)
-		close(run.events)
-	}()
+func executeQualityCheck(myLibrary *library.Library, run *activeRun) {
+	defer run.finish()
 
 	ctx := context.Background()
 
@@ -189,5 +178,5 @@ func executeQualityCheck(myLibrary *library.Library, run *activeRun, registry *R
 
 func emitQualityEvent(run *activeRun, event string, payload interface{}) {
 	d, _ := json.Marshal(payload)
-	run.events <- sseEvent{Event: event, Data: string(d)}
+	run.publish(sseEvent{Event: event, Data: string(d)})
 }
