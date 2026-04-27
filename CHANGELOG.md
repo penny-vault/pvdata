@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-04-27
+
+### Added
+
+- `pvdata subscriptions export` and `pvdata subscriptions import` commands round-trip subscription configurations to/from a TOML file, so a fresh install can be brought up against an existing setup without re-entering each provider config in the TUI.
+
+### Changed
+
+- FRED imports now run incrementally. The provider passes `observation_start` to the FRED API and defaults to a 60-day window when no `--lookback` is provided, instead of refetching the full series history every run. Saves remain idempotent (`ON CONFLICT DO UPDATE`), so revisions within the 60-day window still overwrite the stored value.
+
+### Fixed
+
+- The web UI's run log now shows useful detail for every observation type. FRED, Zacks (ratings, metrics, consensus, estimates), Massive asset records, custom values, and market holidays previously rendered as "observation observation" in the streaming log; they now show ticker, value, and date.
+- Massive Stock Tickers and Market Holidays subscriptions now report accurate observation counts and the correct "Completed" / "Failed" status. Previous runs always reported "0 records" and "Failed" because the count tracked an unused slice and the success status was never set on the happy path -- the data was being saved correctly the whole time.
+
 ## [0.4.1] - 2026-04-27
 
 ### Fixed
@@ -89,7 +104,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/penny-vault/pvdata/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/penny-vault/pvdata/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/penny-vault/pvdata/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/penny-vault/pvdata/compare/v0.2.0...v0.3.0
