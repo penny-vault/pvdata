@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-04-27
+
+### Added
+
+- The web UI now reflects scheduled subscription runs in real time. Open the subscription detail page while a scheduled run is in flight and the run panel auto-attaches to the live event stream — no need to have triggered the run yourself.
+- Per-run log capture. Every run's zerolog output is saved as newline-delimited JSON on the `run_history` row and can be reviewed later by clicking the new "Log" button on any row in the run history table. The log viewer parses each line as structured JSON and offers a free-text search, a level filter (info/warn/error/debug), and column-based sort on time, level, or message. Captured logs are retained for 30 days and then cleared automatically by a daily 03:00 NYC sweep.
+- Live log streaming. While a run is active, the run panel's new "Logs" tab streams the same structured lines as they are emitted, in addition to the existing per-record summary view.
+- Healthchecks.io pings for subscription runs. Subscriptions configured with a `health_check_id` now ping `/start` at the beginning of each run and `/` (success) or `/fail` (failure) at the end, with a one-line body summarizing the source (scheduled/manual), subscription name, observation count, and duration.
+
+### Changed
+
+- The subscription values view (per-data-type tab) now defaults to sorting by `event_date` (or `snapshot_date` for index snapshots) descending, so the most recent rows appear first. Sorting is executed by the database; a new sort-column dropdown and direction toggle in the toolbar let you change column or order without reloading the page client-side.
+- Run history is now rendered as a sortable native table with a per-row "Log" action, replacing the previous read-only grid.
+
 ## [0.4.2] - 2026-04-27
 
 ### Added
@@ -104,7 +118,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/penny-vault/pvdata/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/penny-vault/pvdata/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/penny-vault/pvdata/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/penny-vault/pvdata/compare/v0.3.0...v0.4.0
