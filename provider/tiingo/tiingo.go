@@ -59,8 +59,9 @@ func (tiingo *Tiingo) Name() string {
 
 func (tiingo *Tiingo) ConfigDescription() map[string]string {
 	return map[string]string{
-		"apiKey":    "Enter your tiingo API key:",
-		"rateLimit": "What is the maximum number of requests per minute?",
+		"apiKey":     "Enter your tiingo API key:",
+		"rateLimit":  "What is the maximum number of requests per minute?",
+		"assetTypes": "Comma-separated asset types to include for EOD (e.g. CS,PS,ETF,ETN,CEF,ADRC,MF). Leave blank for all.",
 	}
 }
 
@@ -193,6 +194,20 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 	}
 
 	log.Debug().Int("NumAssets", len(assets)).Msg("downloading EOD quotes from Tiingo")
+
+	if assetTypeFilter := parseAssetTypeFilter(subscription.Config["assetTypes"]); len(assetTypeFilter) > 0 {
+		filtered := make([]*data.Asset, 0, len(assets))
+
+		for _, asset := range assets {
+			if _, ok := assetTypeFilter[asset.AssetType]; ok {
+				filtered = append(filtered, asset)
+			}
+		}
+
+		log.Info().Int("before", len(assets)).Int("after", len(filtered)).Strs("asset_types", assetTypeFilterKeys(assetTypeFilter)).Msg("applied asset type filter")
+
+		assets = filtered
+	}
 
 	// Apply ticker/FIGI filter if set
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
@@ -543,6 +558,39 @@ func tiingoIgnoreTicker(ticker string) bool {
 	ignore = ignore || matcher.Match([]byte(ticker))
 
 	return ignore
+}
+
+func parseAssetTypeFilter(raw string) map[data.AssetType]struct{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	out := make(map[data.AssetType]struct{})
+
+	for part := range strings.SplitSeq(raw, ",") {
+		code := strings.ToUpper(strings.TrimSpace(part))
+		if code == "" {
+			continue
+		}
+
+		out[data.AssetType(code)] = struct{}{}
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+
+	return out
+}
+
+func assetTypeFilterKeys(m map[data.AssetType]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, string(k))
+	}
+
+	return keys
 }
 
 func readZipFile(zf *zip.File) ([]byte, error) {
