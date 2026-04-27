@@ -17,6 +17,10 @@ package web
 import "github.com/gofiber/fiber/v2"
 
 func SetupRoutes(app *fiber.App) {
+	// Public endpoints (no auth) — must be registered before SetupSPA
+	// so the SPA filesystem middleware doesn't shadow them.
+	app.Get("/config.json", GetPublicConfig)
+
 	api := app.Group("/api/v1", NewAuthMiddleware())
 
 	api.Get("/subscriptions", GetSubscriptions)

@@ -6,21 +6,20 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = ref(false)
   const isLoading = ref(true)
   const userName = ref('')
-
-  const mgr = getUserManager()
-
-  /** True when OIDC is configured via env vars */
-  const authEnabled = mgr !== null
+  const authEnabled = ref(false)
 
   async function init() {
+    isLoading.value = true
+
+    const mgr = await getUserManager()
+    authEnabled.value = mgr !== null
+
     if (!mgr) {
       // Auth not configured -- allow access without login
       isLoading.value = false
       isAuthenticated.value = true
       return
     }
-
-    isLoading.value = true
 
     try {
       // Handle redirect callback
@@ -46,11 +45,13 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login() {
+    const mgr = await getUserManager()
     if (!mgr) return
     await mgr.signinRedirect()
   }
 
   async function logout() {
+    const mgr = await getUserManager()
     if (!mgr) return
     await mgr.signoutRedirect()
   }

@@ -1,32 +1,55 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
 
-const authDomain = import.meta.env.VITE_AUTH_DOMAIN || ''
-const clientId = import.meta.env.VITE_AUTH_CLIENT_ID || ''
+interface PublicConfig {
+  auth_issuer: string
+  auth_client_id: string
+  auth_audience: string
+}
 
-const settings = {
-  authority: authDomain ? `https://${authDomain}` : '',
-  client_id: clientId,
-  redirect_uri: `${window.location.origin}/auth/callback`,
-  post_logout_redirect_uri: window.location.origin,
-  response_type: 'code',
-  scope: 'openid profile email',
-  userStore: new WebStorageStateStore({ store: window.localStorage }),
+let configPromise: Promise<PublicConfig> | null = null
+
+function loadConfig(): Promise<PublicConfig> {
+  if (!configPromise) {
+    configPromise = fetch('/config.json')
+      .then((r) => (r.ok ? r.json() : { auth_issuer: '', auth_client_id: '', auth_audience: '' }))
+      .catch(() => ({ auth_issuer: '', auth_client_id: '', auth_audience: '' }))
+  }
+
+  return configPromise
 }
 
 let userManager: UserManager | null = null
+let userManagerInitialized = false
 
-export function getUserManager(): UserManager | null {
-  if (!authDomain || !clientId) {
+export async function getUserManager(): Promise<UserManager | null> {
+  if (userManagerInitialized) {
+    return userManager
+  }
+
+  const cfg = await loadConfig()
+
+  if (!cfg.auth_issuer || !cfg.auth_client_id) {
+    userManagerInitialized = true
     return null
   }
-  if (!userManager) {
-    userManager = new UserManager(settings)
-  }
+
+  userManager = new UserManager({
+    authority: cfg.auth_issuer,
+    client_id: cfg.auth_client_id,
+    redirect_uri: `${window.location.origin}/auth/callback`,
+    post_logout_redirect_uri: window.location.origin,
+    response_type: 'code',
+    scope: 'openid profile email',
+    userStore: new WebStorageStateStore({ store: window.localStorage }),
+    extraQueryParams: cfg.auth_audience ? { audience: cfg.auth_audience } : undefined,
+  })
+  userManagerInitialized = true
+
   return userManager
 }
 
 export async function getAccessToken(): Promise<string | null> {
-  const mgr = getUserManager()
+  const mgr = await getUserManager()
   if (!mgr) return null
 
   const user = await mgr.getUser()

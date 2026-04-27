@@ -16,7 +16,6 @@ package web
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/MicahParks/keyfunc/v3"
@@ -26,28 +25,38 @@ import (
 	"github.com/spf13/viper"
 )
 
-// NewAuthMiddleware returns a Fiber handler that validates Zitadel JWTs.
-// When auth.domain is empty, it returns a pass-through middleware for dev mode.
+// NewAuthMiddleware returns a Fiber handler that validates RS256 JWTs against
+// the configured OIDC issuer. Works with any provider (Auth0, Zitadel, etc.)
+// that publishes a JWKS and issues RS256-signed tokens.
+//
+// Required config keys:
+//
+//	auth.issuer    — full issuer URL exactly as it appears in the token's iss claim
+//	auth.jwks_url  — full JWKS URL
+//	auth.audience  — expected audience claim
+//
+// When auth.issuer is empty, it returns a pass-through middleware for dev mode.
 func NewAuthMiddleware() fiber.Handler {
-	domain := viper.GetString("auth.domain")
-	clientID := viper.GetString("auth.client_id")
+	issuer := viper.GetString("auth.issuer")
+	jwksURL := viper.GetString("auth.jwks_url")
+	audience := viper.GetString("auth.audience")
 
-	if domain == "" {
-		log.Warn().Msg("auth.domain not configured, authentication disabled")
+	if issuer == "" {
+		log.Warn().Msg("auth.issuer not configured, authentication disabled")
 
 		return func(c *fiber.Ctx) error {
 			return c.Next()
 		}
 	}
 
-	jwksURL := fmt.Sprintf("https://%s/oauth/v2/keys", domain)
+	if jwksURL == "" {
+		log.Fatal().Msg("auth.jwks_url is required when auth.issuer is set")
+	}
 
 	k, err := keyfunc.NewDefault([]string{jwksURL})
 	if err != nil {
 		log.Fatal().Err(err).Str("JwksURL", jwksURL).Msg("failed to create JWKS keyfunc")
 	}
-
-	issuer := fmt.Sprintf("https://%s", domain)
 
 	return func(c *fiber.Ctx) error {
 		// Check Authorization header first, then fall back to ?token= query param (for SSE)
@@ -77,8 +86,8 @@ func NewAuthMiddleware() fiber.Handler {
 			jwt.WithIssuer(issuer),
 		}
 
-		if clientID != "" {
-			parserOpts = append(parserOpts, jwt.WithAudience(clientID))
+		if audience != "" {
+			parserOpts = append(parserOpts, jwt.WithAudience(audience))
 		}
 
 		token, err := jwt.Parse(tokenString, k.KeyfuncCtx(context.Background()), parserOpts...)
