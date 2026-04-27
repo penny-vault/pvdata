@@ -106,20 +106,8 @@ func (myLibrary *Library) Summary(ctx context.Context) (string, error) {
 			continue
 		}
 
-		lastDate := "present"
-		if time.Until(subscription.LastObsDate) < (-30 * 24 * time.Hour) {
-			lastDate = subscription.LastObsDate.Format("Jan 2006")
-		}
-
-		if _, err := builder.WriteString(p.Sprintf("  * %s %s (%s - %s) [%s]\n", subscription.Provider,
-			subscription.Dataset, subscription.FirstObsDate.Format("Jan 2006"), lastDate, subscription.ID.String()[:6])); err != nil {
+		if err := writeActiveSubscription(&builder, p, subscription); err != nil {
 			return "", err
-		}
-
-		for _, dataType := range subscription.DataTypes {
-			if _, err := builder.WriteString(p.Sprintf("    * %s\n", dataType)); err != nil {
-				return "", err
-			}
 		}
 	}
 
@@ -132,11 +120,62 @@ func (myLibrary *Library) Summary(ctx context.Context) (string, error) {
 			continue
 		}
 
-		if _, err := builder.WriteString(p.Sprintf("  * %s %s [%s]\n", subscription.Provider,
+		if _, err := builder.WriteString(p.Sprintf("  * %s — %s / %s [`%s`]\n", subscription.Name, subscription.Provider,
 			subscription.Dataset, subscription.ID.String()[:6])); err != nil {
 			return "", err
 		}
 	}
 
 	return builder.String(), nil
+}
+
+func writeActiveSubscription(builder *strings.Builder, p *message.Printer, subscription *Subscription) error {
+	if _, err := fmt.Fprintf(builder, "### %s — `%s`\n", subscription.Name, subscription.ID.String()[:6]); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(builder, "- **Source:** %s / %s\n", subscription.Provider, subscription.Dataset); err != nil {
+		return err
+	}
+
+	dataThrough := "_no data yet_"
+	if !subscription.LastObsDate.IsZero() {
+		dataThrough = subscription.LastObsDate.Format("Jan 2, 2006")
+
+		if !subscription.FirstObsDate.IsZero() {
+			dataThrough += p.Sprintf("  (history begins %s)", subscription.FirstObsDate.Format("Jan 2006"))
+		}
+	}
+
+	if _, err := fmt.Fprintf(builder, "- **Data through:** %s\n", dataThrough); err != nil {
+		return err
+	}
+
+	records := p.Sprintf("%d", subscription.TotalRecords)
+	if subscription.NumRecordsLastImport > 0 {
+		records += p.Sprintf(" — last import added %d", subscription.NumRecordsLastImport)
+	}
+
+	if _, err := fmt.Fprintf(builder, "- **Total records:** %s\n", records); err != nil {
+		return err
+	}
+
+	if _, err := builder.WriteString(p.Sprintf("- **Securities tracked:** %d\n", subscription.TotalSecurities)); err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(builder, "- **Schedule:** `%s`\n", subscription.Schedule); err != nil {
+		return err
+	}
+
+	lastRun := "_never_"
+	if !subscription.LastRun.IsZero() {
+		lastRun = timeago.English.Format(subscription.LastRun)
+	}
+
+	if _, err := fmt.Fprintf(builder, "- **Last run:** %s\n\n", lastRun); err != nil {
+		return err
+	}
+
+	return nil
 }
