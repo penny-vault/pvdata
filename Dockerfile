@@ -1,7 +1,15 @@
+FROM node:alpine AS ui-builder
+WORKDIR /src
+COPY web/ui/package.json web/ui/package-lock.json ./
+RUN npm ci
+COPY web/ui/ ./
+RUN npm run build
+
 FROM golang:alpine AS builder
 WORKDIR /go/src
 RUN apk add git make
 COPY ./ .
+COPY --from=ui-builder /src/dist ./web/ui/dist
 RUN make build
 
 FROM alpine
