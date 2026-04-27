@@ -123,12 +123,31 @@ The server runs until interrupted with Ctrl+C.`,
 
 		log.Info().Msg("shutting down")
 
-		if err := app.Shutdown(); err != nil {
+		// Bounded web-server shutdown: if SSE clients refuse to close
+		// within the timeout, abandon the wait so the process can exit.
+		const webShutdownTimeout = 15 * time.Second
+		if err := app.ShutdownWithTimeout(webShutdownTimeout); err != nil {
 			log.Error().Err(err).Msg("error shutting down web server")
 		}
 
-		if err := scheduler.Shutdown(); err != nil {
-			log.Error().Err(err).Msg("error shutting down scheduler")
+		// Bounded scheduler shutdown: scheduler.Shutdown waits for any
+		// in-flight subscription run, which can take tens of minutes.
+		// Give it a short window, then move on.
+		const schedulerShutdownTimeout = 30 * time.Second
+
+		schedulerDone := make(chan error, 1)
+
+		go func() {
+			schedulerDone <- scheduler.Shutdown()
+		}()
+
+		select {
+		case err := <-schedulerDone:
+			if err != nil {
+				log.Error().Err(err).Msg("error shutting down scheduler")
+			}
+		case <-time.After(schedulerShutdownTimeout):
+			log.Warn().Dur("timeout", schedulerShutdownTimeout).Msg("scheduler did not shut down in time; abandoning in-flight runs")
 		}
 	},
 }
