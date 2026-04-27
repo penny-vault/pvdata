@@ -63,6 +63,10 @@ func init() {
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
+	// Default Playwright to headless. The published Docker image runs without
+	// an X server; users debugging locally can opt back in via config.
+	viper.SetDefault("playwright.headless", true)
+
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.pvdata.toml)")
 	infoCmd.PersistentFlags().String("dbUrl", "", "database connection string")
 
