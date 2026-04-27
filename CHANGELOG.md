@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-04-27
+
+### Fixed
+
+- Newly created subscriptions no longer fail their first run with a "column already exists" error. The fresh table is built from the data type's current schema, so the subscription's tracked schema version is now initialized to that current version instead of zero — `RunMigrations` correctly skips migrations the table doesn't need. Existing broken subscriptions can be repaired by setting `schema_version` directly: `UPDATE subscriptions SET schema_version = 1 WHERE id = '<id>'`.
+- Playwright now defaults to headless mode. Providers that scrape (Zacks, Nasdaq) previously launched headed Chromium when `playwright.headless` was unset, which fails in containers without an X server. Set `[playwright] headless = false` in your config if you specifically want headed mode for local debugging.
+
 ## [0.4.0] - 2026-04-27
 
 ### Added
@@ -82,7 +89,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/penny-vault/pvdata/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/penny-vault/pvdata/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/penny-vault/pvdata/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/penny-vault/pvdata/compare/v0.1.0...v0.2.0
