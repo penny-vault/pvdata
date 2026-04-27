@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-26
+
+### Added
+
+- Tiingo subscriptions now accept an `assetTypes` config field — a comma-separated list of pv-data asset codes (e.g. `CS,PS,ETF,ETN,CEF,ADRC,MF`) that limits the EOD import to those types instead of fetching every active asset. Leave it blank to keep the previous behavior.
+
+### Changed
+
+- `pvdata info` now shows each active subscription as a labeled card with Source, Data through, Total records, Securities tracked, Schedule, and Last run. Empty dates render as "no data yet" / "never" instead of "Jan 0001".
+
+### Fixed
+
+- `pvdata migrate init` now runs successfully on a fresh database that doesn't yet have a `market_holidays` table.
+- Zacks Backblaze uploads now target the `zacks-rank` bucket (B2 requires bucket names of at least 6 characters; the old `zacks` bucket name was below that limit).
+
 ## [0.2.0] - 2026-04-26
 
 ### Added
@@ -52,6 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/penny-vault/pvdata/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/penny-vault/pvdata/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/penny-vault/pvdata/releases/tag/v0.1.0
