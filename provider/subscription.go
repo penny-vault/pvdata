@@ -61,15 +61,28 @@ func NewSubscription(providerName, datasetName string, config map[string]string,
 		dataTypes = filtered
 	}
 
+	// Tables are created from the data type's current schema, which already
+	// includes every column added by every prior migration. Initialize
+	// schema_version to the max version across the subscription's data
+	// types so RunMigrations doesn't try to re-apply migrations the new
+	// table doesn't need.
+	maxVersion := 0
+	for _, dt := range dataTypes {
+		if dt.Version > maxVersion {
+			maxVersion = dt.Version
+		}
+	}
+
 	subscription := &library.Subscription{
-		ID:        uuid.New(),
-		Name:      providerObj.Name(),
-		Provider:  providerName,
-		Dataset:   datasetName,
-		DataTypes: make([]string, len(dataTypes)),
-		Config:    config,
-		Schedule:  "0 0 * * 1-5",
-		Library:   myLibrary,
+		ID:            uuid.New(),
+		Name:          providerObj.Name(),
+		Provider:      providerName,
+		Dataset:       datasetName,
+		DataTypes:     make([]string, len(dataTypes)),
+		Config:        config,
+		Schedule:      "0 0 * * 1-5",
+		SchemaVersion: maxVersion,
+		Library:       myLibrary,
 	}
 
 	// make sure that the dataset types and tables are populated
