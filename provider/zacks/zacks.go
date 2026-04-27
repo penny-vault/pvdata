@@ -229,9 +229,9 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 	if viper.GetString("backblaze.application_id") != "" {
 		year := string(dateStr[:4])
-		logger.Info().Str("Year", year).Str("Bucket", viper.GetString("backblaze.bucket")).Msg("data")
+		logger.Info().Str("Year", year).Str("Bucket", "zacks-rank").Msg("data")
 
-		if err := backblaze.Upload(parquetFn, "zacks", year); err != nil {
+		if err := backblaze.Upload(parquetFn, "zacks-rank", year); err != nil {
 			logger.Error().Err(err).Msg("failed uploading parquet file to Backblaze")
 		}
 	} else {
