@@ -110,6 +110,7 @@ type massiveAssetFetcher struct {
 	client       *resty.Client
 	limiter      *rate.Limiter
 	publishChan  chan<- *data.Observation
+	numPublished int
 }
 
 type massiveResponse struct {
@@ -163,18 +164,28 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	// get a list of all active assets
 	assets := make([]*data.Asset, 0, 6000)
 
-	var assetDetail []*data.Asset
+	api := &massiveAssetFetcher{
+		subscription: subscription,
+		publishChan:  out,
+	}
 
 	defer func() {
 		runSummary.EndTime = time.Now()
 
-		runSummary.NumObservations = len(assetDetail)
+		runSummary.NumObservations = api.numPublished
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
+
 		exitNotification <- runSummary
 	}()
 
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -182,16 +193,15 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 		rateLimit = 5000
 	}
 
-	api := &massiveAssetFetcher{
-		subscription: subscription,
-		client:       resty.New().SetQueryParam("apiKey", subscription.Config["apiKey"]),
-		limiter:      rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1),
-		publishChan:  out,
-	}
+	api.client = resty.New().SetQueryParam("apiKey", subscription.Config["apiKey"])
+	api.limiter = rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
 
 	for _, assetType := range []string{"CS", "ADRC", "ETF"} {
 		if tmpAssets, err := api.assets(ctx, assetType); err != nil {
 			logger.Error().Err(err).Str("AssetType", assetType).Msg("error getting ticker information")
+
+			runSummary.Status = data.RunFailed
+
 			return
 		} else {
 			assets = append(assets, tmpAssets...)
@@ -247,9 +257,11 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 	// remove any assets that haven't been updated since our last
 	// look
-	assetDetail, err = api.filterAssetsByLastUpdated(ctx, assets)
+	assetDetail, err := api.filterAssetsByLastUpdated(ctx, assets)
 	if err != nil {
 		// logged by caller
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -262,6 +274,8 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	err = api.delistedAssets(ctx, assets)
 	if err != nil {
 		// logged by caller
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 }
@@ -275,13 +289,16 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 		SubscriptionName: subscription.Name,
 	}
 
-	// get a list of all active assets
-	holidays := make([]*data.MarketHoliday, 0, 10)
+	numObs := 0
 
 	defer func() {
 		runSummary.EndTime = time.Now()
 
-		runSummary.NumObservations = len(holidays)
+		runSummary.NumObservations = numObs
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
+
 		exitNotification <- runSummary
 	}()
 
@@ -294,6 +311,9 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
 	if err != nil {
 		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -323,11 +343,17 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 		Get("https://api.massive.com/v1/marketstatus/upcoming")
 	if err != nil {
 		logger.Error().Err(err).Msg("resty returned an error when querying reference/tickers")
+
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 
 	if resp.StatusCode() >= 300 {
 		logger.Error().Int("StatusCode", resp.StatusCode()).Msg("massive returned an invalid HTTP response")
+
+		runSummary.Status = data.RunFailed
+
 		return
 	}
 
@@ -345,6 +371,9 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 			closeTime, err = time.Parse(time.RFC3339Nano, holiday.Close)
 			if err != nil {
 				logger.Error().Err(err).Str("massiveClose", holiday.Close).Msg("could not parse close date from massive object")
+
+				runSummary.Status = data.RunFailed
+
 				return
 			}
 
@@ -365,6 +394,8 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 			SubscriptionID:   subscription.ID,
 			SubscriptionName: subscription.Name,
 		}
+
+		numObs++
 	}
 }
 
@@ -388,6 +419,8 @@ func (api *massiveAssetFetcher) publish(asset *data.Asset) {
 		SubscriptionID:   api.subscription.ID,
 		SubscriptionName: api.subscription.Name,
 	}
+
+	api.numPublished++
 }
 
 func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string) ([]*data.Asset, error) {
