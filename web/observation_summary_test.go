@@ -88,10 +88,120 @@ var _ = Describe("summarizeObservation", func() {
 		Expect(summary).To(Equal("AAPL ARQ 2026-03-31"))
 	})
 
-	It("falls back for unknown types", func() {
+	It("summarizes an EconomicIndicator", func() {
 		obs := &data.Observation{
-			MarketHoliday: &data.MarketHoliday{},
+			EconomicIndicator: &data.EconomicIndicator{
+				Series:    "GDP",
+				Value:     27000.5,
+				EventDate: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			},
 		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("economic_indicator"))
+		Expect(summary).To(Equal("GDP value=27000.50 2026-04-01"))
+	})
+
+	It("summarizes a Rating", func() {
+		obs := &data.Observation{
+			Rating: &data.AnalystRating{
+				Ticker:    "AAPL",
+				Analyst:   "zacks-rank",
+				Rating:    2,
+				EventDate: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("rating"))
+		Expect(summary).To(Equal("AAPL zacks-rank rating=2 2026-04-01"))
+	})
+
+	It("summarizes a Metric", func() {
+		obs := &data.Observation{
+			Metric: &data.Metric{
+				Ticker:    "AAPL",
+				MarketCap: 3_000_000_000_000,
+				PE:        28.4,
+				EventDate: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("metric"))
+		Expect(summary).To(Equal("AAPL mktcap=3000000000000 pe=28.40 2026-04-01"))
+	})
+
+	It("summarizes a Consensus", func() {
+		obs := &data.Observation{
+			Consensus: &data.Consensus{
+				Ticker:            "AAPL",
+				AvgRecommendation: 1.8,
+				NumAnalysts:       42,
+				AvgTargetPrice:    250.0,
+				EventDate:         time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("consensus"))
+		Expect(summary).To(Equal("AAPL rec=1.80 analysts=42 target=250.00 2026-04-01"))
+	})
+
+	It("summarizes an Estimate", func() {
+		obs := &data.Observation{
+			Estimate: &data.Estimate{
+				Ticker:      "AAPL",
+				Series:      "eps-q1",
+				Value:       1.45,
+				NumAnalysts: 28,
+				EventDate:   time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("estimate"))
+		Expect(summary).To(Equal("AAPL eps-q1 value=1.45 analysts=28 2026-04-01"))
+	})
+
+	It("summarizes an Asset", func() {
+		obs := &data.Observation{
+			AssetObject: &data.Asset{
+				Ticker:          "AAPL",
+				Name:            "Apple Inc.",
+				PrimaryExchange: data.NasdaqExchange,
+				AssetType:       data.CommonStock,
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("asset"))
+		Expect(summary).To(Equal("AAPL CS Apple Inc. (XNAS)"))
+	})
+
+	It("summarizes a Custom", func() {
+		obs := &data.Observation{
+			CustomObject: &data.Custom{
+				Ticker:    "AAPL",
+				Key:       "short_interest",
+				Value:     0.025,
+				EventDate: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("custom"))
+		Expect(summary).To(Equal("AAPL short_interest=0.025 2026-04-01"))
+	})
+
+	It("summarizes a MarketHoliday", func() {
+		obs := &data.Observation{
+			MarketHoliday: &data.MarketHoliday{
+				Name:      "Independence Day",
+				Market:    "NYSE",
+				EventDate: time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC),
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("market_holiday"))
+		Expect(summary).To(Equal("Independence Day NYSE 2026-07-03"))
+	})
+
+	It("falls back for unknown types", func() {
+		obs := &data.Observation{}
 		typ, summary := summarizeObservation(obs)
 		Expect(typ).To(Equal("observation"))
 		Expect(summary).To(Equal("observation"))
