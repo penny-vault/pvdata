@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-27
+
+### Added
+
+- The web UI's authentication config is now served at runtime from `GET /config.json`, sourced from `auth.issuer`, `auth.client_id`, and `auth.audience` in `~/.pvdata.toml`. The published Docker image works for any OIDC tenant without rebuilding — drop in your config and restart.
+
+### Changed
+
+- Authentication is now provider-agnostic. The backend reads `auth.issuer`, `auth.jwks_url`, and `auth.audience` instead of `auth.domain` / `auth.client_id`, so Auth0, Zitadel, Keycloak, or any standards-compliant OIDC provider works with the same binary. **Migration:** existing deployments using `auth.domain` / `auth.client_id` need to update to the new keys.
+- The Docker image now builds the Vue UI as part of the image build, so the published `pennyvault/pvdata` no longer ships with broken asset references.
+
+### Fixed
+
+- `pvdata serve` no longer hangs on shutdown when SSE clients (run-event streams, data-quality run streams) are connected or when a subscription is in-flight. Shutdown is now bounded to roughly 45 seconds worst-case.
+
 ## [0.3.0] - 2026-04-26
 
 ### Added
@@ -67,7 +82,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/penny-vault/pvdata/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/penny-vault/pvdata/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/penny-vault/pvdata/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/penny-vault/pvdata/releases/tag/v0.1.0
