@@ -118,15 +118,20 @@ func downloadAllFredIndicators(ctx context.Context, subscription *library.Subscr
 		}).
 		SetTimeout(60 * time.Second)
 
+	lookback := provider.LookbackFromContext(ctx, 60*24*time.Hour)
+	startDate := time.Now().Add(-lookback)
+
+	logger.Info().Dur("lookback", lookback).Time("observationStart", startDate).Msg("fetching FRED indicators")
+
 	seriesIds := strings.Split(subscription.Config["seriesIds"], ",")
 	for _, seriesId := range seriesIds {
 		seriesId = strings.TrimSpace(seriesId)
-		n := downloadIndicator(ctx, subscription, client, limiter, out, seriesId)
+		n := downloadIndicator(ctx, subscription, client, limiter, out, seriesId, startDate)
 		numObs += n
 	}
 }
 
-func downloadIndicator(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, out chan<- *data.Observation, seriesId string) int {
+func downloadIndicator(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, out chan<- *data.Observation, seriesId string, startDate time.Time) int {
 	logger := zerolog.Ctx(ctx)
 
 	if err := limiter.Wait(ctx); err != nil {
@@ -147,6 +152,7 @@ func downloadIndicator(ctx context.Context, subscription *library.Subscription, 
 		SetQueryParam("file_type", "json").
 		SetQueryParam("series_id", seriesId).
 		SetQueryParam("sort_order", "desc").
+		SetQueryParam("observation_start", startDate.Format("2006-01-02")).
 		SetResult(&resp).Get("https://api.stlouisfed.org/fred/series/observations")
 	if err != nil {
 		logger.Error().Err(err).Msg("downloading economic indicators failed")
