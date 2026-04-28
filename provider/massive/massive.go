@@ -607,6 +607,57 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 		assetDetail = append(assetDetail, assetUpdate[:numAssetsToUpdate]...)
 	}
 
+	// Missing-branding lane: surface DB assets whose icon_url /
+	// logo_url is NULL — i.e., we never managed to upload binaries
+	// for them. Limit per run so first runs don't drown the API.
+	apiAssetMap := make(map[string]struct{}, len(assets))
+	for _, a := range assets {
+		apiAssetMap[fmt.Sprintf("%s:%s", massiveTicker2PvTicker(a.Ticker), a.CompositeFigi)] = struct{}{}
+	}
+
+	missingSQL := fmt.Sprintf(`SELECT
+			ticker, composite_figi, share_class_figi, primary_exchange,
+			asset_type, active, name, description, corporate_url, sector,
+			industry, sic_code, cik, cusips, isins, other_identifiers,
+			similar_tickers, tags,
+			coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
+			coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
+			last_updated
+		FROM %s
+		WHERE active = true
+		  AND (icon_url IS NULL OR logo_url IS NULL)
+		LIMIT %d`, api.subscription.DataTablesMap[data.AssetKey], maxMissingBrandingPerRun*2)
+
+	missingRows, missingErr := dbConn.Query(ctx, missingSQL)
+	if missingErr != nil {
+		logger.Warn().Err(missingErr).Msg("could not query missing-branding assets; skipping lane")
+	} else {
+		var dbMissing []*data.Asset
+		if scanErr := pgxscan.ScanAll(&dbMissing, missingRows); scanErr != nil {
+			logger.Warn().Err(scanErr).Msg("could not scan missing-branding assets; skipping lane")
+		} else {
+			added := 0
+
+			for _, m := range dbMissing {
+				if added >= maxMissingBrandingPerRun {
+					break
+				}
+
+				key := fmt.Sprintf("%s:%s", m.Ticker, m.CompositeFigi)
+				if _, present := apiAssetMap[key]; !present {
+					continue // delisted or no longer in Massive
+				}
+
+				assetDetail = append(assetDetail, m)
+				added++
+			}
+
+			if added > 0 {
+				logger.Info().Int("AddedMissingBranding", added).Msg("queued missing-branding assets for refresh")
+			}
+		}
+	}
+
 	return assetDetail, nil
 }
 
@@ -944,6 +995,7 @@ func massiveTicker2PvTicker(ticker string) string {
 }
 
 const maxIconLogoFetchesPerRun = 100
+const maxMissingBrandingPerRun = 100
 
 // brandingBudget caps how many icon/logo HTTP fetches a single
 // run performs. A non-positive cap means unlimited. NOT
