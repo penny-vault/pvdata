@@ -125,6 +125,9 @@ const actionsMenuItems = computed(() => {
   return items
 })
 let eventSource: EventSource | null = null
+const reconnectMaxAttempts = 5
+const reconnectDelayMs = 2000
+let reconnectAttempts = 0
 
 function formatNumber(n: number | null | undefined): string {
   if (n === null || n === undefined) return '--'
@@ -219,6 +222,7 @@ async function attachEventSource() {
     const data = JSON.parse(e.data)
     runRecordCount.value = data.count
     runStatus.value = 'completed'
+    reconnectAttempts = 0
     eventSource?.close()
     eventSource = null
     loadSubscription()
@@ -229,6 +233,7 @@ async function attachEventSource() {
     const data = JSON.parse(e.data)
     runRecordCount.value = data.count
     runStatus.value = 'failed'
+    reconnectAttempts = 0
     error.value = data.error || 'Run failed'
     eventSource?.close()
     eventSource = null
@@ -241,15 +246,26 @@ async function attachEventSource() {
     eventSource = null
 
     if (runStatus.value !== 'running') {
+      reconnectAttempts = 0
+      return
+    }
+
+    if (reconnectAttempts >= reconnectMaxAttempts) {
+      reconnectAttempts = 0
+      runStatus.value = 'failed'
+      error.value = 'Lost connection to run event stream'
       return
     }
 
     try {
       const status = await getRunStatus(id.value)
       if (status.active) {
+        reconnectAttempts++
         // Refresh the run history so the running row's live count is
         // visible, then re-attach to the SSE stream.
         await loadRuns()
+        // Hold off briefly so a flapping connection doesn't tight-loop.
+        await new Promise(resolve => setTimeout(resolve, reconnectDelayMs))
         await attachEventSource()
         return
       }
@@ -257,6 +273,7 @@ async function attachEventSource() {
       // fall through to failed
     }
 
+    reconnectAttempts = 0
     runStatus.value = 'failed'
     error.value = 'Lost connection to run event stream'
   }
@@ -265,6 +282,7 @@ async function attachEventSource() {
 async function triggerRun() {
   try {
     runStatus.value = 'running'
+    reconnectAttempts = 0
     runRecordCount.value = 0
     runRecords.value = []
     liveLogs.value = []
