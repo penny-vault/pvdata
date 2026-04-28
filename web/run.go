@@ -153,18 +153,14 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 	close(observeChan)
 	wg.Wait()
 
+	// Insert run_history first so we have an id to UPDATE with the log
+	// after all post-fetch logging is done.
+	runID, insertErr := lib.InsertRunHistory(ctx, summary)
+	if insertErr != nil {
+		logger.Error().Err(insertErr).Msg("failed to save run history")
+	}
+
 	logQualitySummary(ctx, lib, sub, summary)
-
-	// Drain captured logs *before* persisting history so SaveRunHistory can
-	// write the log column in the same row.
-	var runLog string
-	if opts.LogCapture != nil {
-		runLog = opts.LogCapture.Drain(sub.ID.String())
-	}
-
-	if err := lib.SaveRunHistoryWithLog(ctx, summary, runLog); err != nil {
-		logger.Error().Err(err).Msg("failed to save run history")
-	}
 
 	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
 		for _, hook := range subDataset.PostFetch {
@@ -178,18 +174,43 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 	duration := summary.EndTime.Sub(summary.StartTime).Round(time.Second)
 
+	// Healthcheck ping first — any warning it logs should land in both the
+	// live stream and the persisted log.
 	if summary.Status == data.RunFailed {
-		logger.Error().Int("observations", summary.NumObservations).Msg("subscription run failed")
-		emitFinal(opts.Run, sub, summary.NumObservations, false, "run failed")
 		pingHealthcheck(sub, healthcheck.PingFail,
 			fmt.Sprintf("%s run of %s failed after %s (%d observations)",
 				source, sub.Name, duration, summary.NumObservations))
 	} else {
-		logger.Info().Int("observations", summary.NumObservations).Msg("subscription run completed")
-		emitFinal(opts.Run, sub, summary.NumObservations, true, "")
 		pingHealthcheck(sub, healthcheck.PingSuccess,
 			fmt.Sprintf("%s run of %s succeeded in %s (%d observations)",
 				source, sub.Name, duration, summary.NumObservations))
+	}
+
+	// Final summary line is the last log we emit for the run.
+	if summary.Status == data.RunFailed {
+		logger.Error().Int("observations", summary.NumObservations).Msg("subscription run failed")
+	} else {
+		logger.Info().Int("observations", summary.NumObservations).Msg("subscription run completed")
+	}
+
+	// Emit the final SSE event LAST — after this, attached UIs close the
+	// connection, so any later log lines wouldn't reach them.
+	if summary.Status == data.RunFailed {
+		emitFinal(opts.Run, sub, summary.NumObservations, false, "run failed")
+	} else {
+		emitFinal(opts.Run, sub, summary.NumObservations, true, "")
+	}
+
+	// Drain the captured log buffer LAST so post-fetch hooks, healthcheck
+	// pings, and the final "subscription run completed" line are all
+	// included — matching what live SSE clients saw.
+	if opts.LogCapture != nil && runID != "" {
+		runLog := opts.LogCapture.Drain(sub.ID.String())
+		if runLog != "" {
+			if err := lib.UpdateRunLog(ctx, runID, runLog); err != nil {
+				logger.Error().Err(err).Msg("failed to save run log")
+			}
+		}
 	}
 }
 

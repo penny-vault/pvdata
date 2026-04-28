@@ -52,33 +52,33 @@ type SparklineData struct {
 
 // SaveRunHistory persists a RunSummary to the run_history table and updates
 // the subscription's stats (last_run, num_records_last_import, total_records,
-// first_obs_date, last_obs_date).
+// first_obs_date, last_obs_date). Returns the inserted run_history id.
 func (myLibrary *Library) SaveRunHistory(ctx context.Context, summary data.RunSummary) error {
-	return myLibrary.SaveRunHistoryWithLog(ctx, summary, "")
+	_, err := myLibrary.InsertRunHistory(ctx, summary)
+
+	return err
 }
 
-// SaveRunHistoryWithLog persists a RunSummary to run_history along with the
-// captured log output for retrospection. Pass "" for runLog to omit the log.
-func (myLibrary *Library) SaveRunHistoryWithLog(ctx context.Context, summary data.RunSummary, runLog string) error {
+// InsertRunHistory inserts a RunSummary and returns the new run_history id.
+// Use UpdateRunLog to attach captured log output once it is fully drained.
+func (myLibrary *Library) InsertRunHistory(ctx context.Context, summary data.RunSummary) (string, error) {
 	conn, err := myLibrary.Pool.Acquire(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer conn.Release()
 
-	var logArg any
-	if runLog != "" {
-		logArg = runLog
-	}
+	var runID string
 
-	_, err = conn.Exec(ctx,
-		`INSERT INTO run_history (subscription_id, start_time, end_time, num_observations, status, log)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
+	err = conn.QueryRow(ctx,
+		`INSERT INTO run_history (subscription_id, start_time, end_time, num_observations, status)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id::text`,
 		summary.SubscriptionID, summary.StartTime, summary.EndTime, summary.NumObservations,
-		StatusToString(summary.Status), logArg,
-	)
+		StatusToString(summary.Status),
+	).Scan(&runID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	log.Info().
@@ -94,7 +94,30 @@ func (myLibrary *Library) SaveRunHistoryWithLog(ctx context.Context, summary dat
 		}
 	}
 
-	return nil
+	return runID, nil
+}
+
+// UpdateRunLog attaches captured log output to a run_history row that has
+// already been inserted. Use this after draining the LogCapture buffer at
+// the end of a run so the persisted log includes post-fetch hooks,
+// healthcheck pings, and the final completion line.
+func (myLibrary *Library) UpdateRunLog(ctx context.Context, runID, runLog string) error {
+	if runID == "" || runLog == "" {
+		return nil
+	}
+
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx,
+		`UPDATE run_history SET log = $1 WHERE id = $2`,
+		runLog, runID,
+	)
+
+	return err
 }
 
 // updateSubscriptionStats updates a subscription's stats after a successful run.
