@@ -236,13 +236,29 @@ async function attachEventSource() {
     loadRuns()
   })
 
-  eventSource.onerror = () => {
-    if (runStatus.value === 'running') {
-      runStatus.value = 'failed'
-      error.value = 'Lost connection to run event stream'
-    }
+  eventSource.onerror = async () => {
     eventSource?.close()
     eventSource = null
+
+    if (runStatus.value !== 'running') {
+      return
+    }
+
+    try {
+      const status = await getRunStatus(id.value)
+      if (status.active) {
+        // Refresh the run history so the running row's live count is
+        // visible, then re-attach to the SSE stream.
+        await loadRuns()
+        await attachEventSource()
+        return
+      }
+    } catch {
+      // fall through to failed
+    }
+
+    runStatus.value = 'failed'
+    error.value = 'Lost connection to run event stream'
   }
 }
 
@@ -458,7 +474,13 @@ onUnmounted(() => {
                 </Column>
                 <Column field="status" header="Status" sortable>
                   <template #body="{ data }">
-                    <Tag :value="data.status" :severity="data.status === 'success' ? 'success' : data.status === 'failed' ? 'danger' : 'secondary'" />
+                    <Tag :value="data.status"
+                         :severity="data.status === 'success' ? 'success' : data.status === 'failed' ? 'danger' : data.status === 'running' ? 'warning' : 'secondary'">
+                      <template #default>
+                        <i v-if="data.status === 'running'" class="pi pi-spin pi-spinner" style="margin-right: 0.4rem; font-size: 11px" />
+                        {{ data.status }}
+                      </template>
+                    </Tag>
                   </template>
                 </Column>
                 <Column field="records" header="Records" sortable />
