@@ -186,47 +186,43 @@ func (asset *Asset) ID() string {
 }
 
 func (asset *Asset) SaveFiles(ctx context.Context, filer Filer) error {
-	type File struct {
-		Name     string
-		MimeType string
-		Data     []byte
+	if url, err := saveAssetFile(filer, asset.CompositeFigi+"-icon", asset.IconMimeType, asset.Icon); err != nil {
+		log.Error().Err(err).Str("Name", asset.CompositeFigi+"-icon").Msg("error saving icon")
+	} else if url != "" {
+		asset.IconUrl = url
 	}
 
-	files := []File{{
-		Name:     asset.CompositeFigi + "-icon",
-		MimeType: asset.IconMimeType,
-		Data:     asset.Icon,
-	}, {
-		Name:     asset.CompositeFigi + "-logo",
-		MimeType: asset.LogoMimeType,
-		Data:     asset.Logo,
-	}}
-
-	for _, ff := range files {
-		switch ff.MimeType {
-		case "image/jpeg":
-			if _, err := filer.CreateFile(ff.Name+".jpg", ff.Data); err != nil {
-				log.Error().Err(err).Str("Name", ff.Name).Msg("error saving jpg")
-			}
-		case "image/png":
-			if _, err := filer.CreateFile(ff.Name+".png", ff.Data); err != nil {
-				log.Error().Err(err).Str("Name", ff.Name).Msg("error saving png")
-			}
-		case "image/svg+xml":
-			fallthrough
-		case "image/svg":
-			if _, err := filer.CreateFile(ff.Name+".svg", ff.Data); err != nil {
-				log.Error().Err(err).Str("Name", ff.Name).Msg("error saving svg")
-			}
-		case "":
-			// do nothing
-		default:
-			log.Error().Str("MimeType", ff.MimeType).Msg("unknown image mimetype")
-			return errors.New("unknown mimetype")
-		}
+	if url, err := saveAssetFile(filer, asset.CompositeFigi+"-logo", asset.LogoMimeType, asset.Logo); err != nil {
+		log.Error().Err(err).Str("Name", asset.CompositeFigi+"-logo").Msg("error saving logo")
+	} else if url != "" {
+		asset.LogoUrl = url
 	}
 
 	return nil
+}
+
+// saveAssetFile dispatches by mime type and writes the bytes via
+// filer. Returns the URL/path Filer.CreateFile reports, or "" when
+// there is nothing to save (empty mime type or zero-byte payload).
+func saveAssetFile(filer Filer, baseName, mimeType string, data []byte) (string, error) {
+	if len(data) == 0 || mimeType == "" {
+		return "", nil
+	}
+
+	var ext string
+
+	switch mimeType {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/png":
+		ext = ".png"
+	case "image/svg+xml", "image/svg":
+		ext = ".svg"
+	default:
+		return "", errors.New("unknown mimetype: " + mimeType)
+	}
+
+	return filer.CreateFile(baseName+ext, data)
 }
 
 func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
