@@ -111,6 +111,7 @@ type massiveAssetFetcher struct {
 	limiter      *rate.Limiter
 	publishChan  chan<- *data.Observation
 	numPublished int
+	branding     *brandingBudget
 }
 
 type massiveResponse struct {
@@ -167,6 +168,7 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	api := &massiveAssetFetcher{
 		subscription: subscription,
 		publishChan:  out,
+		branding:     NewBrandingBudget(maxIconLogoFetchesPerRun),
 	}
 
 	defer func() {
@@ -877,7 +879,7 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		iconMimeType string
 	)
 
-	if massiveAsset.Branding.IconURL != "" {
+	if massiveAsset.Branding.IconURL != "" && api.branding.Allow() {
 		if err := api.limiter.Wait(ctx); err != nil {
 			log.Panic().Err(err).Msg("rate limit failed")
 		}
@@ -897,7 +899,7 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		logoMimeType string
 	)
 
-	if massiveAsset.Branding.LogoURL != "" {
+	if massiveAsset.Branding.LogoURL != "" && api.branding.Allow() {
 		if err := api.limiter.Wait(ctx); err != nil {
 			log.Panic().Err(err).Msg("rate limit failed")
 		}
@@ -939,4 +941,35 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 
 func massiveTicker2PvTicker(ticker string) string {
 	return strings.ReplaceAll(ticker, ".", "/")
+}
+
+const maxIconLogoFetchesPerRun = 100
+
+// brandingBudget caps how many icon/logo HTTP fetches a single
+// run performs. A non-positive cap means unlimited.
+type brandingBudget struct {
+	limit     int
+	remaining int
+}
+
+// NewBrandingBudget returns a budget allowing up to limit Allow()
+// calls. limit <= 0 disables the cap.
+func NewBrandingBudget(limit int) *brandingBudget {
+	return &brandingBudget{limit: limit, remaining: limit}
+}
+
+// Allow consumes one slot and returns true if the request is allowed
+// under the cap.
+func (b *brandingBudget) Allow() bool {
+	if b == nil || b.limit <= 0 {
+		return true
+	}
+
+	if b.remaining <= 0 {
+		return false
+	}
+
+	b.remaining--
+
+	return true
 }
