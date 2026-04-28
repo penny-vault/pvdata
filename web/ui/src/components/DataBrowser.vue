@@ -70,6 +70,20 @@ function formatCell(value: any): string {
   return String(value)
 }
 
+function imageCellTemplate(createElement: any, props: any) {
+  const url = props.model?.[props.prop]
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+    return ''
+  }
+  return createElement('img', {
+    src: url,
+    alt: props.prop,
+    style: 'max-height: 28px; max-width: 80px; vertical-align: middle',
+    loading: 'lazy',
+    referrerpolicy: 'no-referrer',
+  })
+}
+
 const gridColumns = computed(() =>
   columns.value.map(col => {
     // Size columns based on content type heuristics
@@ -78,9 +92,16 @@ const gridColumns = computed(() =>
     else if (col.includes('date') || col.includes('time')) size = 180
     else if (col === 'ticker' || col === 'series') size = 100
     else if (col === 'name' || col === 'description') size = 250
+    else if (col === 'icon_url' || col === 'logo_url') size = 100
     else if (col.length > 12) size = col.length * 10
+
     const indicator = sortField.value === col ? (sortOrder.value === 'asc' ? ' ↑' : ' ↓') : ''
-    return { prop: col, name: col + indicator, size }
+
+    const column: Record<string, any> = { prop: col, name: col + indicator, size }
+    if (col === 'icon_url' || col === 'logo_url') {
+      column.cellTemplate = imageCellTemplate
+    }
+    return column as any
   })
 )
 
@@ -89,7 +110,11 @@ const gridRows = computed(() =>
     const obj: Record<string, any> = {}
     columns.value.forEach((col, i) => {
       const val = Array.isArray(row) ? row[i] : row[col]
-      obj[col] = formatCell(val)
+      if (col === 'icon_url' || col === 'logo_url') {
+        obj[col] = val ?? ''
+      } else {
+        obj[col] = formatCell(val)
+      }
     })
     return obj
   })
