@@ -123,6 +123,128 @@ func (myLibrary *Library) UpdateRunLog(ctx context.Context, runID, runLog string
 	return err
 }
 
+// BeginRun inserts a run_history row with status='running' and
+// num_observations=0 and returns its id. end_time is initialised
+// to start_time as a placeholder; FinalizeRun overwrites it on
+// completion.
+func (myLibrary *Library) BeginRun(ctx context.Context, summary data.RunSummary) (string, error) {
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Release()
+
+	var runID string
+
+	err = conn.QueryRow(ctx,
+		`INSERT INTO run_history (subscription_id, start_time, end_time, num_observations, status)
+		VALUES ($1, $2, $2, 0, 'running')
+		RETURNING id::text`,
+		summary.SubscriptionID, summary.StartTime,
+	).Scan(&runID)
+	if err != nil {
+		return "", err
+	}
+
+	log.Info().
+		Str("SubscriptionID", summary.SubscriptionID.String()).
+		Str("SubscriptionName", summary.SubscriptionName).
+		Str("RunID", runID).
+		Msg("started run")
+
+	return runID, nil
+}
+
+// UpdateRunProgress overwrites num_observations on a running row.
+// No-op when runID is empty so callers don't have to branch when
+// BeginRun failed.
+func (myLibrary *Library) UpdateRunProgress(ctx context.Context, runID string, numObservations int) error {
+	if runID == "" {
+		return nil
+	}
+
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx,
+		`UPDATE run_history SET num_observations = $1
+		 WHERE id = $2 AND status = 'running'`,
+		numObservations, runID,
+	)
+
+	return err
+}
+
+// FinalizeRun updates a running run_history row to its terminal
+// state. On success it also refreshes subscription stats. When
+// runID is empty it falls back to InsertRunHistory so callers
+// that didn't use BeginRun still record a row.
+func (myLibrary *Library) FinalizeRun(ctx context.Context, runID string, summary data.RunSummary) error {
+	if runID == "" {
+		_, err := myLibrary.InsertRunHistory(ctx, summary)
+
+		return err
+	}
+
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx,
+		`UPDATE run_history
+		 SET end_time = $1, num_observations = $2, status = $3
+		 WHERE id = $4`,
+		summary.EndTime, summary.NumObservations, StatusToString(summary.Status), runID,
+	)
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("SubscriptionID", summary.SubscriptionID.String()).
+		Str("SubscriptionName", summary.SubscriptionName).
+		Int("NumObservations", summary.NumObservations).
+		Str("Status", StatusToString(summary.Status)).
+		Str("RunID", runID).
+		Msg("finalised run")
+
+	if summary.Status == data.RunSuccess {
+		if err := myLibrary.updateSubscriptionStats(ctx, conn, summary); err != nil {
+			log.Error().Err(err).Str("SubscriptionID", summary.SubscriptionID.String()).Msg("failed to update subscription stats")
+		}
+	}
+
+	return nil
+}
+
+// MarkAbandonedRunsFailed transitions every run_history row still
+// in status='running' to 'failed'. Any in-flight goroutines were
+// lost with the previous process so these rows are permanently
+// abandoned. Returns the number of rows updated.
+func (myLibrary *Library) MarkAbandonedRunsFailed(ctx context.Context) (int64, error) {
+	conn, err := myLibrary.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Release()
+
+	tag, err := conn.Exec(ctx,
+		`UPDATE run_history
+		 SET status = 'failed', end_time = now()
+		 WHERE status = 'running'`,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return tag.RowsAffected(), nil
+}
+
 // updateSubscriptionStats updates a subscription's stats after a successful run.
 func (myLibrary *Library) updateSubscriptionStats(ctx context.Context, conn *pgxpool.Conn, summary data.RunSummary) error {
 	sub, err := myLibrary.SubscriptionFromID(ctx, summary.SubscriptionID.String())
