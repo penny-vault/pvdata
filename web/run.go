@@ -118,6 +118,8 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		logger.Error().Err(beginErr).Msg("could not insert running run_history row")
 	}
 
+	// Throttle progress updates so high-throughput providers (FRED-style)
+	// don't drown the DB in writes; one UPDATE per runProgressInterval.
 	progress := NewProgressThrottle(runProgressInterval, func(n int) {
 		if err := lib.UpdateRunProgress(ctx, runID, n); err != nil {
 			logger.Warn().Err(err).Msg("could not update run progress")
@@ -136,7 +138,7 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 	emitStarted(opts.Run, sub)
 
-	// Observation interceptor: summarise each record, push throttled
+	// Observation interceptor: summarize each record, push throttled
 	// progress to the DB, and forward to saveChan.
 	go func() {
 		count := 0
