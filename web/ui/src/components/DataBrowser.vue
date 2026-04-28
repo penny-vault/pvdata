@@ -75,9 +75,11 @@ function imageCellTemplate(createElement: any, props: any) {
   if (!url || typeof url !== 'string' || !url.startsWith('http')) {
     return ''
   }
+  const ticker = props.model?.ticker
+  const altLabel = ticker ? `${ticker} ${props.prop === 'icon_url' ? 'icon' : 'logo'}` : props.prop
   return createElement('img', {
     src: url,
-    alt: props.prop,
+    alt: altLabel,
     style: 'max-height: 28px; max-width: 80px; vertical-align: middle',
     loading: 'lazy',
     referrerpolicy: 'no-referrer',
@@ -101,6 +103,8 @@ const gridColumns = computed(() =>
     if (col === 'icon_url' || col === 'logo_url') {
       column.cellTemplate = imageCellTemplate
     }
+    // RevoGrid's column type doesn't model the cellTemplate property in
+    // the version pinned in package.json; the runtime accepts it fine.
     return column as any
   })
 )
