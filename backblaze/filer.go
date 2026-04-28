@@ -23,9 +23,12 @@ import (
 	"sync"
 
 	"github.com/kothar/go-backblaze"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
+
+var _ data.Filer = (*Filer)(nil)
 
 // Filer uploads files to a Backblaze B2 bucket and returns the
 // public URL. The bucket must be public-read for the URLs to
