@@ -125,6 +125,8 @@ tags TEXT[],
 listed timestamp,
 delisted timestamp,
 last_updated timestamp,
+icon_url TEXT,
+logo_url TEXT,
 PRIMARY KEY (ticker, composite_figi)
 );
 
@@ -139,8 +141,11 @@ ADD COLUMN search tsvector
 ) STORED;
 
 CREATE INDEX %[1]s_search_idx ON %[1]s USING GIN (search);`,
-		Migrations:    []string{},
-		Version:       0,
+		Migrations: []string{
+			`ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS icon_url TEXT;
+			 ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS logo_url TEXT;`,
+		},
+		Version:       1,
 		IsPartitioned: false,
 	},
 	ConsensusKey: {
