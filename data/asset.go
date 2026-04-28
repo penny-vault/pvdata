@@ -115,7 +115,9 @@ func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) (
 		tags,
 		coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
 		coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
-		last_updated
+		last_updated,
+		coalesce(icon_url, '') as icon_url,
+		coalesce(logo_url, '') as logo_url
 	FROM %s
 	WHERE active=true`, assetTable)
 
@@ -163,7 +165,9 @@ func AllAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*
 		tags,
 		coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
 		coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
-		coalesce(last_updated, '0001-01-01'::timestamp) as last_updated
+		coalesce(last_updated, '0001-01-01'::timestamp) as last_updated,
+		coalesce(icon_url, '') as icon_url,
+		coalesce(logo_url, '') as logo_url
 	FROM %s`, assetTable)
 
 	rows, err := dbConn.Query(ctx, sql)
@@ -275,10 +279,12 @@ func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn
 		"tags",
 		"listed",
 		"delisted",
-		"last_updated"
+		"last_updated",
+		"icon_url",
+		"logo_url"
 	) VALUES (
 		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-		$13, $14, $15, $16, $17, $18, $19, $20, $21
+		$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		primary_exchange = EXCLUDED.primary_exchange,
 		active = EXCLUDED.active,
@@ -296,13 +302,16 @@ func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn
 		tags = EXCLUDED.tags,
 		listed = EXCLUDED.listed,
 		delisted = EXCLUDED.delisted,
-		last_updated = EXCLUDED.last_updated`, tbl)
+		last_updated = EXCLUDED.last_updated,
+		icon_url = COALESCE(EXCLUDED.icon_url, %[1]s.icon_url),
+		logo_url = COALESCE(EXCLUDED.logo_url, %[1]s.logo_url)`, tbl)
 
 	_, err = tx.Exec(ctx, sql, asset.Ticker, asset.CompositeFigi, asset.ShareClassFigi,
 		asset.PrimaryExchange, asset.AssetType, asset.Active, asset.Name, asset.Description,
 		asset.CorporateUrl, asset.Sector, asset.Industry, asset.SIC, asset.CIK,
 		asset.CUSIP, asset.ISIN, asset.OtherIdentifiers, asset.SimilarTickers, asset.Tags,
-		listingDate, delistingDate, asset.LastUpdated)
+		listingDate, delistingDate, asset.LastUpdated,
+		brandingBind(asset.IconUrl), brandingBind(asset.LogoUrl))
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save asset to DB failed")
 		return err
@@ -344,4 +353,16 @@ func (asset *Asset) MarshalZerologObject(e *zerolog.Event) {
 	e.Strs("Tags", asset.Tags)
 	e.Strs("SimilarTickers", asset.SimilarTickers)
 	e.Time("LastUpdated", asset.LastUpdated)
+}
+
+// brandingBind converts an empty IconUrl/LogoUrl to a SQL NULL so
+// the missing-branding lane (which queries WHERE icon_url IS NULL)
+// can find assets that haven't been uploaded yet. Non-empty values
+// are passed through unchanged.
+func brandingBind(url string) any {
+	if url == "" {
+		return nil
+	}
+
+	return url
 }
