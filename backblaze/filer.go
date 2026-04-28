@@ -81,7 +81,12 @@ func (f *Filer) PublicURL(name string) string {
 }
 
 // CreateFile uploads data to <bucket>/<prefix>/<name> and returns
-// the public URL.
+// the public URL. NOTE: kothar/go-backblaze does not expose a
+// per-call timeout on its underlying HTTP client. A B2 endpoint
+// that hangs mid-upload will block the calling run indefinitely;
+// if that becomes a recurring issue, swap to an SDK that takes a
+// context.Context (e.g., aws-sdk-go-v2 against the S3-compatible
+// endpoint).
 func (f *Filer) CreateFile(name string, data []byte) (string, error) {
 	if err := f.ensureAuthorised(); err != nil {
 		return "", err

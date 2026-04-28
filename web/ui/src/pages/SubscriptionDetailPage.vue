@@ -134,8 +134,12 @@ function formatNumber(n: number | null | undefined): string {
   return n.toLocaleString()
 }
 
-function formatDuration(start: string, end: string | null): string {
+function formatDuration(start: string, end: string | null, status?: string): string {
   if (!end) return '--'
+  // Running rows store end_time = start_time as a placeholder until
+  // FinalizeRun overwrites it; rendering "0ms" alongside the running
+  // spinner is misleading, so show a sentinel instead.
+  if (status === 'running' || end === start) return '--'
   const ms = new Date(end).getTime() - new Date(start).getTime()
   if (ms < 1000) return `${ms}ms`
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
@@ -149,7 +153,7 @@ const runHistoryRows = computed(() =>
     start_time: run.start_time,
     status: run.status || 'unknown',
     records: formatNumber(run.num_observations),
-    duration: formatDuration(run.start_time, run.end_time),
+    duration: formatDuration(run.start_time, run.end_time, run.status),
   }))
 )
 
