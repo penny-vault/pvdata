@@ -15,7 +15,7 @@
 | File | Responsibility |
 |---|---|
 | `db/migrations/000012_run_history_running_status.{up,down}.sql` | Allow `'running'` in the run_history status check constraint. |
-| `data/datatype.go` | Add `RunRunning` to `StatusType`; add `icon_url` / `logo_url` to the `AssetKey` schema and a per-table migration. |
+| `data/datatype.go` | Add `RunInProgress` to `StatusType`; add `icon_url` / `logo_url` to the `AssetKey` schema and a per-table migration. |
 | `library/run_history.go` | Lifecycle methods (`BeginRun`, `UpdateRunProgress`, `FinalizeRun`, `MarkAbandonedRunsFailed`) and updated `StatusToString`. |
 | `library/run_history_test.go` | Specs for `StatusToString`. |
 | `library/filer.go` (new) | `FilerFromSpec(spec)` — recognises `file://` and `b2://`, returns a `data.Filer`. Lives in `library` so `data` doesn't import `backblaze`. |
@@ -84,7 +84,7 @@ git commit -m "feat(db): allow 'running' status in run_history"
 
 ---
 
-## Task 2: `RunRunning` + `StatusToString`
+## Task 2: `RunInProgress` + `StatusToString`
 
 **Files:**
 - Modify: `data/datatype.go:24-30`
@@ -96,15 +96,15 @@ git commit -m "feat(db): allow 'running' status in run_history"
 Append to `library/run_history_test.go` inside the existing `Describe("StatusToString", ...)`:
 
 ```go
-It("converts RunRunning to \"running\"", func() {
-    Expect(library.StatusToString(data.RunRunning)).To(Equal("running"))
+It("converts RunInProgress to \"running\"", func() {
+    Expect(library.StatusToString(data.RunInProgress)).To(Equal("running"))
 })
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `ginkgo run -race --focus "converts RunRunning" ./library/`
-Expected: FAIL — `data.RunRunning` undefined.
+Run: `ginkgo run -race --focus "converts RunInProgress" ./library/`
+Expected: FAIL — `data.RunInProgress` undefined.
 
 - [ ] **Step 3: Add the constant**
 
@@ -117,7 +117,7 @@ const (
 	StatusUnknown StatusType = iota
 	RunFailed
 	RunSuccess
-	RunRunning
+	RunInProgress
 )
 ```
 
@@ -128,7 +128,7 @@ func StatusToString(s data.StatusType) string {
 	switch s {
 	case data.RunSuccess:
 		return "success"
-	case data.RunRunning:
+	case data.RunInProgress:
 		return "running"
 	default:
 		return "failed"
@@ -145,7 +145,7 @@ Expected: 4 specs PASS.
 
 ```bash
 git add data/datatype.go library/run_history.go library/run_history_test.go
-git commit -m "feat(data): add RunRunning status"
+git commit -m "feat(data): add RunInProgress status"
 ```
 
 ---
