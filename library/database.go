@@ -190,6 +190,12 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 		var filer data.Filer
 		if filerPath, ok := subscription.Config["filer"]; ok {
 			filer = FilerFromSpec(filerPath)
+			if filer == nil {
+				log.Warn().
+					Str("SubscriptionName", subscription.Name).
+					Str("FilerSpec", filerPath).
+					Msg("unrecognised filer scheme; asset binaries will not be uploaded")
+			}
 		}
 
 		if validator != nil {
