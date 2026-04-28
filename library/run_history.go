@@ -26,11 +26,14 @@ import (
 
 // StatusToString converts a StatusType to its string representation.
 func StatusToString(s data.StatusType) string {
-	if s == data.RunSuccess {
+	switch s {
+	case data.RunSuccess:
 		return "success"
+	case data.RunInProgress:
+		return "running"
+	default:
+		return "failed"
 	}
-
-	return "failed"
 }
 
 // RunHistoryEntry represents a row from the run_history table.

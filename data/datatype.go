@@ -27,6 +27,7 @@ const (
 	StatusUnknown StatusType = iota
 	RunFailed
 	RunSuccess
+	RunInProgress
 )
 
 type RunSummary struct {

@@ -34,5 +34,9 @@ var _ = Describe("RunHistory", func() {
 		It("converts StatusUnknown to \"failed\"", func() {
 			Expect(library.StatusToString(data.StatusUnknown)).To(Equal("failed"))
 		})
+
+		It("converts RunInProgress to \"running\"", func() {
+			Expect(library.StatusToString(data.RunInProgress)).To(Equal("running"))
+		})
 	})
 })
