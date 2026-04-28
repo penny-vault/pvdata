@@ -76,6 +76,8 @@ type Asset struct {
 	IconMimeType         string    `parquet:"name=icon_mime_type, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	Logo                 []byte    `parquet:"name=logo, type=BYTE_ARRAY"`
 	LogoMimeType         string    `parquet:"name=logo_mime_type, tyle=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	IconUrl              string    `json:"icon_url" db:"icon_url"`
+	LogoUrl              string    `json:"logo_url" db:"logo_url"`
 	CorporateUrl         string    `json:"corporate_url" toml:"corporate_url" parquet:"name=corporate_url, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	HeadquartersLocation string    `json:"headquarters_location" toml:"headquarters_location" parquet:"name=headquarters_location, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	OtherIdentifiers     map[string]string
