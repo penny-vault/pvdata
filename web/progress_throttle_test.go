@@ -72,4 +72,40 @@ var _ = Describe("ProgressThrottle", func() {
 
 		Expect(atomic.LoadInt32(&last)).To(Equal(int32(7)))
 	})
+
+	It("emits at the exact interval boundary", func() {
+		var calls atomic.Int32
+
+		now := time.Unix(0, 0)
+
+		t := web.NewProgressThrottle(10*time.Second, func(int) { calls.Add(1) })
+		t.Tick(now, 5)
+		t.Tick(now.Add(10*time.Second), 9)
+
+		Expect(calls.Load()).To(Equal(int32(2)))
+	})
+
+	It("Flush is a no-op when nothing is pending", func() {
+		var calls atomic.Int32
+
+		t := web.NewProgressThrottle(time.Second, func(int) { calls.Add(1) })
+		t.Flush()
+
+		Expect(calls.Load()).To(Equal(int32(0)))
+	})
+
+	It("Flush after a throttled Tick that follows a previous Flush emits the new count", func() {
+		var calls []int
+
+		now := time.Unix(0, 0)
+
+		t := web.NewProgressThrottle(10*time.Second, func(n int) { calls = append(calls, n) })
+		t.Tick(now, 5)                    // emits 5 (first tick)
+		t.Tick(now.Add(time.Second), 7)   // throttled
+		t.Flush()                         // emits 7
+		t.Tick(now.Add(2*time.Second), 9) // throttled
+		t.Flush()                         // emits 9
+
+		Expect(calls).To(Equal([]int{5, 7, 9}))
+	})
 })
