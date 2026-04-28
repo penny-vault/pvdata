@@ -946,7 +946,10 @@ func massiveTicker2PvTicker(ticker string) string {
 const maxIconLogoFetchesPerRun = 100
 
 // brandingBudget caps how many icon/logo HTTP fetches a single
-// run performs. A non-positive cap means unlimited.
+// run performs. A non-positive cap means unlimited. NOT
+// thread-safe: a Massive run is sequential by construction
+// (downloadMassiveAssets -> assetDetails iterates one goroutine);
+// any reuse across goroutines must add external synchronisation.
 type brandingBudget struct {
 	limit     int
 	remaining int
