@@ -338,6 +338,8 @@ func (asset *Asset) MarshalZerologObject(e *zerolog.Event) {
 	e.Str("Sector", asset.Sector)
 	e.Str("CorporateURL", asset.CorporateUrl)
 	e.Str("HeadquartersLocation", asset.HeadquartersLocation)
+	e.Str("IconUrl", asset.IconUrl)
+	e.Str("LogoUrl", asset.LogoUrl)
 
 	for key, val := range asset.OtherIdentifiers {
 		e.Str(key, val)
