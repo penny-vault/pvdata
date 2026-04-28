@@ -157,7 +157,11 @@ func (myLibrary *Library) BeginRun(ctx context.Context, summary data.RunSummary)
 
 // UpdateRunProgress overwrites num_observations on a running row.
 // No-op when runID is empty so callers don't have to branch when
-// BeginRun failed.
+// BeginRun failed. The UPDATE is filtered by status='running', so
+// late ticks that arrive after FinalizeRun has flipped the status
+// silently affect zero rows and return nil — by design, callers
+// don't need to coordinate the throttle's last flush against the
+// finaliser.
 func (myLibrary *Library) UpdateRunProgress(ctx context.Context, runID string, numObservations int) error {
 	if runID == "" {
 		return nil
@@ -225,7 +229,11 @@ func (myLibrary *Library) FinalizeRun(ctx context.Context, runID string, summary
 // MarkAbandonedRunsFailed transitions every run_history row still
 // in status='running' to 'failed'. Any in-flight goroutines were
 // lost with the previous process so these rows are permanently
-// abandoned. Returns the number of rows updated.
+// abandoned. end_time is set to now() — i.e., server restart time
+// — which is a conservative upper bound on the actual run
+// duration; the goroutine could have died any time between
+// start_time and now(), and we don't have a more accurate
+// timestamp to record. Returns the number of rows updated.
 func (myLibrary *Library) MarkAbandonedRunsFailed(ctx context.Context) (int64, error) {
 	conn, err := myLibrary.Pool.Acquire(ctx)
 	if err != nil {
