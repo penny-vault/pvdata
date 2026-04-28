@@ -255,9 +255,13 @@ async function attachEventSource() {
     }
 
     if (reconnectAttempts >= reconnectMaxAttempts) {
+      // Don't pretend the run failed — we don't actually know.
+      // Clear the live banner; Run History below shows the truth.
       reconnectAttempts = 0
-      runStatus.value = 'failed'
-      error.value = 'Lost connection to run event stream'
+      runStatus.value = 'idle'
+      error.value = ''
+      await loadRuns()
+      await loadSubscription()
       return
     }
 
@@ -273,13 +277,23 @@ async function attachEventSource() {
         await attachEventSource()
         return
       }
-    } catch {
-      // fall through to failed
-    }
 
-    reconnectAttempts = 0
-    runStatus.value = 'failed'
-    error.value = 'Lost connection to run event stream'
+      // Registry says no active run — it either finished cleanly
+      // (we just missed the 'completed' event) or is genuinely gone.
+      // Either way, the Run History row records the actual outcome;
+      // surface that instead of fabricating a "Failed" state.
+      reconnectAttempts = 0
+      runStatus.value = 'idle'
+      error.value = ''
+      await loadRuns()
+      await loadSubscription()
+    } catch {
+      // Network or auth failure on the status probe; we genuinely
+      // don't know what happened. Mark idle and let the user refresh.
+      reconnectAttempts = 0
+      runStatus.value = 'idle'
+      error.value = ''
+    }
   }
 }
 

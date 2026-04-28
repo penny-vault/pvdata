@@ -57,6 +57,40 @@ var _ = Describe("PublishedViews", func() {
 			Expect(sqls[0]).To(ContainSubstring("WHERE event_date < '2023-01-01'"))
 		})
 
+		It("omits date WHERE bounds for asset-description views (no event_date column)", func() {
+			from := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+			until := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			pv := &library.PublishedView{
+				ViewName:    "assets",
+				DataTypeKey: "asset-description",
+				Sources: []library.ViewSource{
+					{TableName: "massive_assets_abc12", SubscriptionID: "sub-1", FromDate: &from, UntilDate: &until},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).NotTo(ContainSubstring("WHERE"))
+			Expect(sqls[0]).NotTo(ContainSubstring("event_date"))
+			Expect(sqls[0]).To(Equal(
+				"CREATE OR REPLACE VIEW assets AS SELECT * FROM massive_assets_abc12",
+			))
+		})
+
+		It("uses snapshot_date for index-snapshot views", func() {
+			from := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+			pv := &library.PublishedView{
+				ViewName:    "indices_snapshot",
+				DataTypeKey: "index-snapshot",
+				Sources: []library.ViewSource{
+					{TableName: "tradingview_idx_xyz", SubscriptionID: "sub-1", FromDate: &from},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).To(ContainSubstring("WHERE snapshot_date >= '2023-01-01'"))
+			Expect(sqls[0]).NotTo(ContainSubstring("event_date"))
+		})
+
 		It("generates DROP VIEW for zero sources", func() {
 			pv := &library.PublishedView{
 				ViewName:    "eod",
