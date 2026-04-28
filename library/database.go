@@ -189,7 +189,7 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 
 		var filer data.Filer
 		if filerPath, ok := subscription.Config["filer"]; ok {
-			filer = data.NewFilerFromString(filerPath)
+			filer = FilerFromSpec(filerPath)
 		}
 
 		if validator != nil {
