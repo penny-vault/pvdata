@@ -38,6 +38,12 @@ const (
 	RunSourceManual    RunSource = "manual"
 )
 
+// runProgressInterval bounds how often we UPDATE num_observations
+// on a running run_history row. FRED-style providers can emit
+// hundreds of thousands of records per minute; this caps the
+// write rate regardless of throughput.
+const runProgressInterval = 10 * time.Second
+
 // RunOptions configures a subscription run.
 type RunOptions struct {
 	// Run is the registry-managed activeRun. Required when callers want SSE
@@ -103,6 +109,21 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		return
 	}
 
+	runID, beginErr := lib.BeginRun(ctx, data.RunSummary{
+		StartTime:        time.Now(),
+		SubscriptionID:   sub.ID,
+		SubscriptionName: sub.Name,
+	})
+	if beginErr != nil {
+		logger.Error().Err(beginErr).Msg("could not insert running run_history row")
+	}
+
+	progress := NewProgressThrottle(runProgressInterval, func(n int) {
+		if err := lib.UpdateRunProgress(ctx, runID, n); err != nil {
+			logger.Warn().Err(err).Msg("could not update run progress")
+		}
+	})
+
 	observeChan := make(chan *data.Observation, 1000)
 	saveChan := make(chan *data.Observation, 1000)
 	exitChan := make(chan data.RunSummary, 1)
@@ -115,7 +136,8 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 	emitStarted(opts.Run, sub)
 
-	// Observation interceptor: summarize each record and forward to saveChan
+	// Observation interceptor: summarise each record, push throttled
+	// progress to the DB, and forward to saveChan.
 	go func() {
 		count := 0
 
@@ -132,6 +154,8 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 				})
 				opts.Run.publish(sseEvent{Event: "record", Data: string(d)})
 			}
+
+			progress.Tick(time.Now(), count)
 
 			saveChan <- obs
 		}
@@ -153,11 +177,10 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 	close(observeChan)
 	wg.Wait()
 
-	// Insert run_history first so we have an id to UPDATE with the log
-	// after all post-fetch logging is done.
-	runID, insertErr := lib.InsertRunHistory(ctx, summary)
-	if insertErr != nil {
-		logger.Error().Err(insertErr).Msg("failed to save run history")
+	progress.Flush()
+
+	if err := lib.FinalizeRun(ctx, runID, summary); err != nil {
+		logger.Error().Err(err).Msg("failed to finalise run history")
 	}
 
 	logQualitySummary(ctx, lib, sub, summary)
