@@ -69,7 +69,10 @@ const gridRows = computed(() => {
       )
     )
   }
-  return rows
+  return [...rows].sort((a, b) => {
+    if (a.status !== b.status) return a.status.localeCompare(b.status)
+    return a.name.localeCompare(b.name)
+  })
 })
 
 function toggleDatasetFilter(ds: string) {
