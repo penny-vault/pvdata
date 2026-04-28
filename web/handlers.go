@@ -16,6 +16,7 @@ package web
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/penny-vault/pvdata/healthcheck"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog/log"
@@ -47,6 +48,18 @@ type UpdateSubscriptionRequest struct {
 // getLibrary retrieves the shared library connection pool from request context.
 func getLibrary(c *fiber.Ctx) *library.Library {
 	return c.Locals("library").(*library.Library)
+}
+
+// getScheduler retrieves the subscription scheduler from request context.
+// Returns nil when the scheduler was not wired in (e.g. tests with a bare
+// Fiber app).
+func getScheduler(c *fiber.Ctx) *Scheduler {
+	v := c.Locals("scheduler")
+	if v == nil {
+		return nil
+	}
+
+	return v.(*Scheduler)
 }
 
 // GetSubscriptions returns all subscriptions.
@@ -130,6 +143,17 @@ func CreateSubscription(c *fiber.Ctx) error {
 		})
 	}
 
+	if sub.Active {
+		if scheduler := getScheduler(c); scheduler != nil {
+			if err := scheduler.Schedule(sub); err != nil {
+				log.Warn().Err(err).
+					Str("subscription_id", sub.ID.String()).
+					Str("schedule", sub.Schedule).
+					Msg("could not register cron job for new subscription")
+			}
+		}
+	}
+
 	return c.Status(fiber.StatusCreated).JSON(sub)
 }
 
@@ -178,6 +202,25 @@ func UpdateSubscription(c *fiber.Ctx) error {
 		}
 
 		sub.Schedule = *req.Schedule
+
+		if sub.HealthCheckID != "" {
+			if err := healthcheck.UpdateSchedule(sub.HealthCheckID, sub.Schedule); err != nil {
+				log.Warn().Err(err).
+					Str("subscription_id", sub.ID.String()).
+					Str("health_check_id", sub.HealthCheckID).
+					Str("schedule", sub.Schedule).
+					Msg("could not sync schedule to healthchecks.io")
+			}
+		}
+
+		if scheduler := getScheduler(c); scheduler != nil && sub.Active {
+			if err := scheduler.Schedule(sub); err != nil {
+				log.Warn().Err(err).
+					Str("subscription_id", sub.ID.String()).
+					Str("schedule", sub.Schedule).
+					Msg("could not reschedule cron job after edit")
+			}
+		}
 	}
 
 	if req.Config != nil {
@@ -228,6 +271,18 @@ func UpdateSubscription(c *fiber.Ctx) error {
 		}
 
 		sub.Active = *req.Active
+
+		if scheduler := getScheduler(c); scheduler != nil {
+			if sub.Active {
+				if err := scheduler.Schedule(sub); err != nil {
+					log.Warn().Err(err).Str("subscription_id", sub.ID.String()).Msg("could not register cron job on activate")
+				}
+			} else {
+				if err := scheduler.Unschedule(sub.ID); err != nil {
+					log.Warn().Err(err).Str("subscription_id", sub.ID.String()).Msg("could not remove cron job on deactivate")
+				}
+			}
+		}
 	}
 
 	return c.JSON(sub)
@@ -258,6 +313,12 @@ func DeleteSubscription(c *fiber.Ctx) error {
 		})
 	}
 
+	if scheduler := getScheduler(c); scheduler != nil {
+		if err := scheduler.Unschedule(sub.ID); err != nil {
+			log.Warn().Err(err).Str("subscription_id", sub.ID.String()).Msg("could not remove cron job on delete")
+		}
+	}
+
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -286,6 +347,14 @@ func ActivateSubscription(c *fiber.Ctx) error {
 		})
 	}
 
+	sub.Active = true
+
+	if scheduler := getScheduler(c); scheduler != nil {
+		if err := scheduler.Schedule(sub); err != nil {
+			log.Warn().Err(err).Str("subscription_id", sub.ID.String()).Msg("could not register cron job on activate")
+		}
+	}
+
 	return c.JSON(fiber.Map{"status": "activated"})
 }
 
@@ -312,6 +381,12 @@ func DeactivateSubscription(c *fiber.Ctx) error {
 			Code:    "500",
 			Message: "could not deactivate subscription",
 		})
+	}
+
+	if scheduler := getScheduler(c); scheduler != nil {
+		if err := scheduler.Unschedule(sub.ID); err != nil {
+			log.Warn().Err(err).Str("subscription_id", sub.ID.String()).Msg("could not remove cron job on deactivate")
+		}
 	}
 
 	return c.JSON(fiber.Map{"status": "deactivated"})

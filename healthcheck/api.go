@@ -77,6 +77,36 @@ func Create(name string, slug string, tags []string, schedule string) (string, e
 	return healthCheckID, nil
 }
 
+type updateReq struct {
+	Schedule string `json:"schedule"`
+}
+
+// UpdateSchedule changes the cron schedule on an existing healthchecks.io
+// check. The check's existing timezone is preserved (we don't send a tz
+// field). Returns nil silently when id or schedule is empty.
+func UpdateSchedule(id, schedule string) error {
+	if id == "" || schedule == "" {
+		return nil
+	}
+
+	client := resty.New()
+
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetHeader("X-Api-Key", viper.GetString("healthchecks.apikey")).
+		SetBody(updateReq{Schedule: schedule}).
+		Post(fmt.Sprintf("https://healthchecks.io/api/v3/checks/%s", id))
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode() >= 300 {
+		return fmt.Errorf("%w: %d", ErrStatus, resp.StatusCode())
+	}
+
+	return nil
+}
+
 // Pause monitoring of a health check
 func Delete(id string) error {
 	result := createResp{}

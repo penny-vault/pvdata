@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { displayTz } from '@/lib/timezone'
 
 interface Run {
   start_time: string
@@ -25,6 +26,10 @@ const chartData = computed(() => {
     (width - barPadding * sorted.length) / sorted.length
   )
 
+  const labelFmt: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+  if (displayTz.value === 'ET') labelFmt.timeZone = 'America/New_York'
+  const labelFormatter = new Intl.DateTimeFormat(undefined, labelFmt)
+
   const bars = sorted.map((run, i) => {
     const barHeight = (run.num_observations / maxVal) * (height - 30)
     return {
@@ -33,10 +38,7 @@ const chartData = computed(() => {
       width: barWidth,
       height: barHeight,
       color: run.status === 'failed' ? 'var(--p-red-400)' : 'var(--p-primary-color)',
-      label: new Date(run.start_time).toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-      }),
+      label: labelFormatter.format(new Date(run.start_time)),
       value: run.num_observations,
       status: run.status,
     }

@@ -22,15 +22,16 @@ import (
 	"github.com/spf13/viper"
 )
 
-func CreateFiberApp(myLibrary *library.Library, registry *RunRegistry, logCapture *LogCapture) *fiber.App {
+func CreateFiberApp(myLibrary *library.Library, registry *RunRegistry, logCapture *LogCapture, scheduler *Scheduler) *fiber.App {
 	app := fiber.New()
 
-	// Inject shared library connection pool, run registry, and log-capture
-	// sink into request context.
+	// Inject shared library connection pool, run registry, log-capture
+	// sink, and scheduler into request context.
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("library", myLibrary)
 		c.Locals("registry", registry)
 		c.Locals("logCapture", logCapture)
+		c.Locals("scheduler", scheduler)
 
 		return c.Next()
 	})

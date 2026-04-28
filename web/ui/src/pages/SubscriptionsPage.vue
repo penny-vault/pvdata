@@ -10,6 +10,7 @@ import Message from 'primevue/message'
 import StatusCell from '@/components/StatusCell.vue'
 import ProviderCell from '@/components/ProviderCell.vue'
 import DatasetCell from '@/components/DatasetCell.vue'
+import { displayTz, formatTimestamp } from '@/lib/timezone'
 
 const router = useRouter()
 const subscriptions = ref<any[]>([])
@@ -28,34 +29,26 @@ const gridColumns = [
   { prop: 'next_run', name: 'Next Import', sortable: true, size: 160 },
 ]
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr || dateStr.startsWith('0001')) return '--'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '--'
-  return d.toLocaleDateString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
-
 function formatNumber(n: number | null | undefined): string {
   if (n === null || n === undefined) return '--'
   return n.toLocaleString()
 }
 
-const allRows = computed(() =>
-  subscriptions.value.map(sub => ({
+const allRows = computed(() => {
+  // Read displayTz so the computed re-runs on toggle.
+  void displayTz.value
+  return subscriptions.value.map(sub => ({
     _id: sub.id,
     name: sub.name || sub.id,
     provider: sub.provider,
     dataset: sub.dataset,
     status: sub.active ? 'Active' : 'Inactive',
     total_records: formatNumber(sub.total_records),
-    last_run: formatDate(sub.last_run),
+    last_run: formatTimestamp(sub.last_run),
     records_last: formatNumber(sub.num_records_last_import),
     next_run: sub.next_run_human || '--',
   }))
-)
+})
 
 const datasetFilter = ref('')
 

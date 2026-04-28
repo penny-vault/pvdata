@@ -35,13 +35,13 @@ func StatusToString(s data.StatusType) string {
 
 // RunHistoryEntry represents a row from the run_history table.
 type RunHistoryEntry struct {
-	ID              string `json:"id"`
-	SubscriptionID  string `json:"subscription_id"`
-	StartTime       string `json:"start_time"`
-	EndTime         string `json:"end_time"`
-	NumObservations int    `json:"num_observations"`
-	Status          string `json:"status"`
-	CreatedOn       string `json:"created_on"`
+	ID              string    `json:"id"`
+	SubscriptionID  string    `json:"subscription_id"`
+	StartTime       time.Time `json:"start_time"`
+	EndTime         time.Time `json:"end_time"`
+	NumObservations int       `json:"num_observations"`
+	Status          string    `json:"status"`
+	CreatedOn       time.Time `json:"created_on"`
 }
 
 // SparklineData holds a single day's aggregated observation count.
@@ -183,8 +183,8 @@ func (myLibrary *Library) RunHistory(ctx context.Context, subscriptionID string,
 	}
 
 	rows, err := conn.Query(ctx,
-		`SELECT id::text, subscription_id::text, start_time::text, end_time::text,
-		num_observations, status, created_on::text
+		`SELECT id::text, subscription_id::text, start_time, end_time,
+		num_observations, status, created_on
 		FROM run_history
 		WHERE subscription_id::text LIKE $1
 		ORDER BY start_time DESC

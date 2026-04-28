@@ -28,6 +28,7 @@ import RunHistoryChart from '@/components/RunHistoryChart.vue'
 import DataBrowser from '@/components/DataBrowser.vue'
 import SubscriptionForm from '@/components/SubscriptionForm.vue'
 import LogViewer from '@/components/LogViewer.vue'
+import TimeDisplay from '@/components/TimeDisplay.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -82,7 +83,7 @@ function parseLogLine(line: string): LogEntry {
 
 const showRunLogDialog = ref(false)
 const selectedRunLog = ref('')
-const selectedRunMeta = ref<{ start: string; status: string } | null>(null)
+const selectedRunMeta = ref<{ start: string | null; status: string } | null>(null)
 const loadingRunLog = ref(false)
 const runMenuRef = ref()
 const showCustomLookback = ref(false)
@@ -125,16 +126,6 @@ const actionsMenuItems = computed(() => {
 })
 let eventSource: EventSource | null = null
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr || dateStr.startsWith('0001')) return '--'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return '--'
-  return d.toLocaleDateString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  })
-}
-
 function formatNumber(n: number | null | undefined): string {
   if (n === null || n === undefined) return '--'
   return n.toLocaleString()
@@ -152,7 +143,7 @@ const runHistoryRows = computed(() =>
   runs.value.map(run => ({
     id: run.id,
     raw: run,
-    date: formatDate(run.start_time),
+    start_time: run.start_time,
     status: run.status || 'unknown',
     records: formatNumber(run.num_observations),
     duration: formatDuration(run.start_time, run.end_time),
@@ -287,7 +278,7 @@ async function checkAndAttach() {
   }
 }
 
-async function viewRunLog(runID: string, meta: { start: string; status: string }) {
+async function viewRunLog(runID: string, meta: { start: string | null; status: string }) {
   selectedRunMeta.value = meta
   selectedRunLog.value = ''
   loadingRunLog.value = true
@@ -426,7 +417,7 @@ onUnmounted(() => {
           <div>
             <div style="font-weight: 600">Run Log</div>
             <div v-if="selectedRunMeta" style="font-size: 12px; opacity: 0.7">
-              {{ selectedRunMeta.start }} &middot; {{ selectedRunMeta.status }}
+              <TimeDisplay :value="selectedRunMeta.start" /> &middot; {{ selectedRunMeta.status }}
             </div>
           </div>
         </template>
@@ -439,7 +430,7 @@ onUnmounted(() => {
 
       <div v-if="!editing" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem">
         <Card><template #content><small>TOTAL RECORDS</small><h3>{{ formatNumber(subscription.total_records) }}</h3></template></Card>
-        <Card><template #content><small>LAST IMPORT</small><h3>{{ formatDate(subscription.last_run) }}</h3></template></Card>
+        <Card><template #content><small>LAST IMPORT</small><h3><TimeDisplay :value="subscription.last_run" /></h3></template></Card>
         <Card><template #content><small>RECORDS LAST IMPORT</small><h3>{{ formatNumber(subscription.num_records_last_import) }}</h3></template></Card>
         <Card><template #content><small>NEXT RUN</small><h3>{{ subscription.next_run_human || '--' }}</h3></template></Card>
       </div>
@@ -455,12 +446,16 @@ onUnmounted(() => {
               <RunHistoryChart :runs="runs" />
               <DataTable
                 :value="runHistoryRows"
-                :sort-field="'date'"
+                :sort-field="'start_time'"
                 :sort-order="-1"
                 size="small"
                 style="margin-top: 1rem"
               >
-                <Column field="date" header="Date" sortable />
+                <Column field="start_time" header="Date" sortable>
+                  <template #body="{ data }">
+                    <TimeDisplay :value="data.start_time" />
+                  </template>
+                </Column>
                 <Column field="status" header="Status" sortable>
                   <template #body="{ data }">
                     <Tag :value="data.status" :severity="data.status === 'success' ? 'success' : data.status === 'failed' ? 'danger' : 'secondary'" />
@@ -470,7 +465,7 @@ onUnmounted(() => {
                 <Column field="duration" header="Duration" sortable />
                 <Column header="" style="width: 6rem">
                   <template #body="{ data }">
-                    <Button label="Log" icon="pi pi-file" size="small" text @click="viewRunLog(data.id, { start: data.date, status: data.status })" />
+                    <Button label="Log" icon="pi pi-file" size="small" text @click="viewRunLog(data.id, { start: data.start_time, status: data.status })" />
                   </template>
                 </Column>
               </DataTable>

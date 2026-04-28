@@ -26,6 +26,7 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/google/uuid"
 	"github.com/penny-vault/pvdata/db"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/web"
@@ -74,10 +75,28 @@ The server runs until interrupted with Ctrl+C.`,
 			log.Fatal().Err(err).Msg("could not load timezone")
 		}
 
-		scheduler, err := gocron.NewScheduler(gocron.WithLocation(nyc))
+		gocronScheduler, err := gocron.NewScheduler(gocron.WithLocation(nyc))
 		if err != nil {
 			log.Fatal().Err(err).Msg("could not create scheduler")
 		}
+
+		// The scheduler runner re-loads each subscription from the library at
+		// fire time so cron edits, config changes, and active flips made via
+		// the web UI are picked up without restarting the server.
+		subScheduler := web.NewScheduler(gocronScheduler, func(subID uuid.UUID) {
+			sub, err := myLibrary.SubscriptionFromID(ctx, subID.String())
+			if err != nil {
+				log.Error().Err(err).Str("subscription_id", subID.String()).Msg("scheduled run: could not load subscription")
+				return
+			}
+
+			if !sub.Active {
+				log.Info().Str("subscription", sub.Name).Msg("scheduled run skipped: subscription is inactive")
+				return
+			}
+
+			runScheduled(ctx, myLibrary, registry, logCapture, sub)
+		})
 
 		allSubs, err := myLibrary.Subscriptions(ctx)
 		if err != nil {
@@ -91,13 +110,7 @@ The server runs until interrupted with Ctrl+C.`,
 				continue
 			}
 
-			_, err := scheduler.NewJob(
-				gocron.CronJob(sub.Schedule, false),
-				gocron.NewTask(func() {
-					runScheduled(ctx, myLibrary, registry, logCapture, sub)
-				}),
-			)
-			if err != nil {
+			if err := subScheduler.Schedule(sub); err != nil {
 				log.Fatal().Err(err).Str("subscription", sub.Name).Str("schedule", sub.Schedule).Msg("could not schedule subscription")
 			}
 
@@ -107,7 +120,7 @@ The server runs until interrupted with Ctrl+C.`,
 		}
 
 		// Daily sweep: clear log text on run_history rows older than 30 days.
-		if _, err := scheduler.NewJob(
+		if _, err := gocronScheduler.NewJob(
 			gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(3, 0, 0))),
 			gocron.NewTask(func() {
 				cleared, err := myLibrary.SweepRunLogs(ctx, runLogRetention)
@@ -124,7 +137,7 @@ The server runs until interrupted with Ctrl+C.`,
 			log.Warn().Err(err).Msg("could not schedule run-log sweep")
 		}
 
-		scheduler.Start()
+		gocronScheduler.Start()
 		log.Info().Int("count", scheduled).Msg("scheduler started")
 
 		// Start the web server
@@ -133,7 +146,7 @@ The server runs until interrupted with Ctrl+C.`,
 			port = "3000"
 		}
 
-		app := web.CreateFiberApp(myLibrary, registry, logCapture)
+		app := web.CreateFiberApp(myLibrary, registry, logCapture, subScheduler)
 
 		go func() {
 			log.Info().Str("port", port).Msg("starting web server")
@@ -165,7 +178,7 @@ The server runs until interrupted with Ctrl+C.`,
 		schedulerDone := make(chan error, 1)
 
 		go func() {
-			schedulerDone <- scheduler.Shutdown()
+			schedulerDone <- gocronScheduler.Shutdown()
 		}()
 
 		select {
