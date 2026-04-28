@@ -491,17 +491,76 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 CREATE INDEX %[1]s_ticker_event_date_idx ON %[1]s(ticker, event_date DESC);
 CREATE INDEX %[1]s_analyst_id_date_idx ON %[1]s(analyst_id, event_date) INCLUDE (composite_figi, ticker, rating)`,
 		Migrations: []string{
-			// DROP COLUMN analyst cascades to the old PK and any analyst-column
-			// indexes, so we don't drop them explicitly — that would break on
-			// legacy tables whose indexes were named outside the canonical
-			// %[1]s_analyst_date_idx convention.
-			`ALTER TABLE %[1]s ADD COLUMN analyst_id SMALLINT;
-UPDATE %[1]s SET analyst_id = analyst_lookup.id FROM analyst_lookup WHERE analyst_lookup.analyst = %[1]s.analyst;
-ALTER TABLE %[1]s ALTER COLUMN analyst_id SET NOT NULL;
-ALTER TABLE %[1]s DROP COLUMN analyst;
-ALTER TABLE %[1]s ADD PRIMARY KEY (analyst_id, composite_figi, event_date);
-CREATE INDEX %[1]s_analyst_id_date_idx ON %[1]s(analyst_id, event_date) INCLUDE (composite_figi, ticker, rating);
-ALTER TABLE %[1]s ADD CONSTRAINT %[1]s_analyst_id_fkey FOREIGN KEY (analyst_id) REFERENCES analyst_lookup(id);`,
+			// Wrapped in a DO block so that re-running on a table that
+			// has already been (partially or fully) migrated is a no-op
+			// instead of erroring with "column already exists" or
+			// "constraint already exists". Each step is guarded by a
+			// catalog lookup so the migration is safe to retry.
+			`DO $do$
+DECLARE
+    pk_name TEXT;
+BEGIN
+    -- Step 1: add analyst_id if missing.
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = '%[1]s' AND column_name = 'analyst_id' AND table_schema = 'public'
+    ) THEN
+        ALTER TABLE %[1]s ADD COLUMN analyst_id SMALLINT;
+    END IF;
+
+    -- Step 2: backfill from analyst (if it still exists) and drop the column.
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = '%[1]s' AND column_name = 'analyst' AND table_schema = 'public'
+    ) THEN
+        UPDATE %[1]s SET analyst_id = analyst_lookup.id
+            FROM analyst_lookup
+            WHERE analyst_lookup.analyst = %[1]s.analyst AND %[1]s.analyst_id IS NULL;
+        ALTER TABLE %[1]s DROP COLUMN analyst;
+    END IF;
+
+    -- Step 3: enforce NOT NULL on analyst_id if it isn't already.
+    IF (SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = '%[1]s' AND column_name = 'analyst_id' AND table_schema = 'public') = 'YES' THEN
+        ALTER TABLE %[1]s ALTER COLUMN analyst_id SET NOT NULL;
+    END IF;
+
+    -- Step 4: replace the PK if it's not already keyed by analyst_id.
+    SELECT c.conname INTO pk_name
+    FROM pg_constraint c
+    WHERE c.conrelid = '%[1]s'::regclass AND c.contype = 'p'
+      AND NOT EXISTS (
+          SELECT 1 FROM pg_attribute a
+          WHERE a.attrelid = c.conrelid
+            AND a.attnum = ANY(c.conkey)
+            AND a.attname = 'analyst_id'
+      )
+    LIMIT 1;
+
+    IF pk_name IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE %[1]s DROP CONSTRAINT ' || quote_ident(pk_name);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = '%[1]s'::regclass AND contype = 'p'
+    ) THEN
+        ALTER TABLE %[1]s ADD PRIMARY KEY (analyst_id, composite_figi, event_date);
+    END IF;
+
+    -- Step 5: add the FK if missing.
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = '%[1]s'::regclass
+          AND contype = 'f'
+          AND conname = '%[1]s_analyst_id_fkey'
+    ) THEN
+        ALTER TABLE %[1]s ADD CONSTRAINT %[1]s_analyst_id_fkey
+            FOREIGN KEY (analyst_id) REFERENCES analyst_lookup(id);
+    END IF;
+END
+$do$;
+CREATE INDEX IF NOT EXISTS %[1]s_analyst_id_date_idx ON %[1]s(analyst_id, event_date) INCLUDE (composite_figi, ticker, rating);`,
 		},
 		Version:       1,
 		IsPartitioned: true,

@@ -66,33 +66,20 @@ The server runs until interrupted with Ctrl+C.`,
 			log.Info().Int64("count", cleared).Msg("marked abandoned runs as failed")
 		}
 
-		// Apply per-subscription DataType migrations at startup. The
-		// SQL-level db.Migrate above only handles the schema-wide
-		// migrations table; bumping a DataType.Version (e.g., adding
-		// icon_url/logo_url to asset tables) requires walking each
-		// subscription's table and running its Migrations slice.
-		// Failures are logged but don't abort startup so a single
-		// broken subscription doesn't block the whole server.
-		if subs, err := myLibrary.Subscriptions(ctx); err != nil {
-			log.Error().Err(err).Msg("could not load subscriptions for migration")
+		// Apply per-subscription DataType migrations at startup in a
+		// single coordinated transaction. The SQL-level db.Migrate
+		// above only handles the schema-wide migrations table;
+		// bumping a DataType.Version (e.g., adding icon_url/logo_url
+		// to asset tables) requires walking every subscription's
+		// table and running its Migrations slice. Coordinating
+		// across subs avoids the published-view UNION mismatch that
+		// happens when tables migrate one at a time.
+		log.Info().Msg("applying per-subscription migrations")
+
+		if migrated, total, err := myLibrary.MigrateAllSubscriptions(ctx); err != nil {
+			log.Fatal().Err(err).Msg("subscription migrations failed")
 		} else {
-			migrated := 0
-
-			for _, sub := range subs {
-				before := sub.SchemaVersion
-				if err := sub.RunMigrations(ctx); err != nil {
-					log.Error().Err(err).Str("subscription", sub.Name).Msg("subscription migration failed")
-					continue
-				}
-
-				if sub.SchemaVersion != before {
-					log.Info().Str("subscription", sub.Name).Int("from", before).Int("to", sub.SchemaVersion).Msg("migrated subscription tables")
-
-					migrated++
-				}
-			}
-
-			log.Info().Int("migrated", migrated).Int("checked", len(subs)).Msg("subscription migrations complete")
+			log.Info().Int("migrated", migrated).Int("checked", total).Msg("subscription migrations complete")
 		}
 
 		// Run registry shared between scheduled runs and the web SSE handlers

@@ -71,29 +71,12 @@ var migrateCmd = &cobra.Command{
 		}
 		defer myLibrary.Close()
 
-		subs, err := myLibrary.Subscriptions(ctx)
+		migrated, total, err := myLibrary.MigrateAllSubscriptions(ctx)
 		if err != nil {
-			log.Fatal().Err(err).Msg("could not load subscriptions")
+			log.Fatal().Err(err).Msg("subscription migrations failed")
 		}
 
-		var migrated int
-
-		for _, sub := range subs {
-			before := sub.SchemaVersion
-
-			if err := sub.RunMigrations(ctx); err != nil {
-				log.Error().Err(err).Str("subscription", sub.Name).Msg("subscription migration failed")
-				continue
-			}
-
-			if sub.SchemaVersion != before {
-				log.Info().Str("subscription", sub.Name).Int("from", before).Int("to", sub.SchemaVersion).Msg("migrated subscription tables")
-
-				migrated++
-			}
-		}
-
-		log.Info().Int("migrated", migrated).Int("checked", len(subs)).Msg("subscription migrations complete")
+		log.Info().Int("migrated", migrated).Int("checked", total).Msg("subscription migrations complete")
 	},
 }
 
