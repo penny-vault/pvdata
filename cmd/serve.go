@@ -60,6 +60,12 @@ The server runs until interrupted with Ctrl+C.`,
 		}
 		defer myLibrary.Close()
 
+		if cleared, err := myLibrary.MarkAbandonedRunsFailed(ctx); err != nil {
+			log.Warn().Err(err).Msg("could not clean up abandoned runs")
+		} else if cleared > 0 {
+			log.Info().Int64("count", cleared).Msg("marked abandoned runs as failed")
+		}
+
 		// Run registry shared between scheduled runs and the web SSE handlers
 		// so the UI can attach to scheduled runs in flight.
 		registry := web.NewRunRegistry()
