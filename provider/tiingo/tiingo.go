@@ -61,7 +61,7 @@ func (tiingo *Tiingo) ConfigDescription() map[string]string {
 	return map[string]string{
 		"apiKey":     "Enter your tiingo API key:",
 		"rateLimit":  "What is the maximum number of requests per minute?",
-		"assetTypes": "Comma-separated asset types to include for EOD (e.g. CS,PS,ETF,ETN,CEF,ADRC,MF). Leave blank for all.",
+		"assetTypes": "Comma-separated asset types to include for EOD and Stock Tickers (e.g. CS,ETF,MF). Leave blank for all.",
 	}
 }
 
@@ -350,6 +350,11 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 		return
 	}
 
+	assetTypeFilter := parseAssetTypeFilter(subscription.Config["assetTypes"])
+	if len(assetTypeFilter) > 0 {
+		log.Info().Strs("asset_types", assetTypeFilterKeys(assetTypeFilter)).Msg("applying asset type filter to Tiingo Stock Tickers")
+	}
+
 	// get nyc timezone
 	nyc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -465,6 +470,12 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 			pvAsset.AssetType = data.MutualFund
 		}
 
+		if len(assetTypeFilter) > 0 {
+			if _, ok := assetTypeFilter[pvAsset.AssetType]; !ok {
+				continue
+			}
+		}
+
 		if tiingoAsset.EndDate != "" {
 			endDate, err := time.Parse("2006-01-02", tiingoAsset.EndDate)
 			if err != nil {
@@ -515,6 +526,15 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 
 	// determine which assets are no longer active
 	for _, dbAsset := range activeDBAssets {
+		// when an asset type filter is set, only reconcile types that
+		// were actually fetched from Tiingo; otherwise we'd mark every
+		// asset of an excluded type as delisted
+		if len(assetTypeFilter) > 0 {
+			if _, ok := assetTypeFilter[dbAsset.AssetType]; !ok {
+				continue
+			}
+		}
+
 		_, ok := pvAssetMap[dbAsset.CompositeFigi]
 		if !ok {
 			dbAsset.Active = false
