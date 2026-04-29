@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,89 +50,15 @@ type PublishedView struct {
 }
 
 // GenerateViewSQL produces the SQL statements needed to create (or drop) the
-// published view. This returns a single CREATE OR REPLACE VIEW statement, or a
-// DROP VIEW IF EXISTS statement when there are zero sources.
+// published view. The shape (plain UNION ALL vs priority-deduped form) is
+// determined entirely by the data type's configuration on data.DataTypes.
 func (pv *PublishedView) GenerateViewSQL() []string {
-	var gen data.ViewGenerator
-	if dt, ok := data.DataTypes[pv.DataTypeKey]; ok && dt != nil {
-		gen = dt.ViewGenerator
+	dt, ok := data.DataTypes[pv.DataTypeKey]
+	if !ok || dt == nil {
+		return []string{fmt.Sprintf("DROP VIEW IF EXISTS %s", pv.ViewName)}
 	}
 
-	return []string{generateUnionSQL(pv.ViewName, pv.Sources, gen, dateColumnForType(pv.DataTypeKey))}
-}
-
-// generateUnionSQL builds a CREATE OR REPLACE VIEW or DROP VIEW statement.
-// When gen is non-nil, the SELECT/FROM portion of each leg is delegated to it
-// instead of using the default "SELECT * FROM <table>". dateColumn names the
-// column used for FromDate/UntilDate WHERE bounds; "" disables the bounds.
-func generateUnionSQL(viewName string, sources []ViewSource, gen data.ViewGenerator, dateColumn string) string {
-	if len(sources) == 0 {
-		return fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName)
-	}
-
-	legs := make([]string, len(sources))
-	for i, s := range sources {
-		legs[i] = buildLeg(s, gen, dateColumn)
-	}
-
-	return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS %s", viewName, strings.Join(legs, " UNION ALL "))
-}
-
-// buildLeg renders one leg of a published view: the SELECT/FROM clause
-// (default or generator-supplied) followed by an optional WHERE filter
-// derived from the source's date bounds.
-func buildLeg(s ViewSource, gen data.ViewGenerator, dateColumn string) string {
-	var sel string
-	if gen != nil {
-		sel = gen.SelectFrom(s.TableName)
-	} else {
-		sel = fmt.Sprintf("SELECT * FROM %s", s.TableName)
-	}
-
-	where := buildWhereClause(s, dateColumn)
-	if where == "" {
-		return sel
-	}
-
-	return sel + " WHERE " + where
-}
-
-// buildWhereClause produces the WHERE conditions for a single source
-// based on its date bounds, using dateColumn as the column name. When
-// dateColumn is empty (e.g., asset descriptions have no date axis),
-// FromDate/UntilDate are silently ignored to avoid generating SQL
-// referencing a non-existent column.
-func buildWhereClause(s ViewSource, dateColumn string) string {
-	if dateColumn == "" {
-		return ""
-	}
-
-	var parts []string
-	if s.FromDate != nil {
-		parts = append(parts, fmt.Sprintf("%s >= '%s'", dateColumn, s.FromDate.Format("2006-01-02")))
-	}
-
-	if s.UntilDate != nil {
-		parts = append(parts, fmt.Sprintf("%s < '%s'", dateColumn, s.UntilDate.Format("2006-01-02")))
-	}
-
-	return strings.Join(parts, " AND ")
-}
-
-// dateColumnForType returns the column used for date-bounded WHERE
-// clauses on a published view of the given data type. Returns ""
-// for data types with no date axis (asset descriptions); returns
-// "snapshot_date" for index snapshots; "event_date" for everything
-// else, matching the column name used by those tables' schemas.
-func dateColumnForType(dataTypeKey string) string {
-	switch dataTypeKey {
-	case data.AssetKey:
-		return ""
-	case data.IndexSnapshotKey:
-		return "snapshot_date"
-	default:
-		return "event_date"
-	}
+	return []string{dt.GenerateViewSQL(pv.ViewName, pv.Sources)}
 }
 
 // ValidateSources checks that the date ranges of sources do not overlap.
