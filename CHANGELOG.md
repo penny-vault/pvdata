@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-28
+
+### Added
+
+- Live in-flight runs in the web UI. The subscriptions list shows the most recent run's status as a chip on every row and refreshes itself; the detail page's run panel renders rows that are currently running with a live progress count and reconnects automatically if the SSE stream drops, with bounded retry/backoff. Run lifecycle is now persisted to `run_history` from start to finish (including a `running` status) so progress survives reload, and abandoned `running` rows from a prior process are reconciled to `failed` when `pvdata serve` boots.
+- Asset icons and logos. Asset records now carry `icon_url` and `logo_url`. When a `[filers]` block points at the new Backblaze B2 backend, the Massive provider downloads each asset's branding, uploads to a public bucket, and stores the resulting URL on the asset row. Per-run download budgets keep fetches bounded, and the data browser renders the URLs as inline images. Massive's asset-detail view has a new "missing branding" filter lane to surface tickers without resolved URLs.
+- Priority-based dedup for the published assets view. The view now picks the highest-priority source per CIK/CUSIP rather than emitting duplicate rows. Priority is configured per source on the publication. Published views are also rebuilt at server startup so changes take effect without a manual `pvdata publish`.
+- Tiingo Stock Tickers can be filtered by asset type (stock, ETF, mutual fund) at subscription time, so a subscription can target only the catalog slice it cares about.
+- Editable subscription name. The edit form on the detail page now accepts a new `name` and the API rejects empty values.
+- Drag-handle reordering for publication sources. Hold the handle and drag a row to change source priority instead of editing JSON.
+- New-subscription form can auto-create a healthchecks.io monitor on submission, picking a slug from the subscription's name and dataset.
+- Web UI footer shows the running `pvdata` version and build date; hover the version for the commit hash. The version is sourced from a new `version`/`commit`/`build_date` triple in `/config.json`.
+
+### Changed
+
+- Subscriptions list is sorted by status (active first) then name, and the run-history chart on the detail page uses PrimeVue's charting component for a consistent look with the rest of the UI.
+- Editing a subscription's schedule applies live: the cron job is re-registered immediately, the new schedule is pushed to its healthchecks.io monitor (if configured), and timestamps render in the user's chosen timezone.
+- Asset-typed publications hide date-range affordances that don't apply to point-in-time asset snapshots.
+- The "success" tag in the Last Run column matches the height of the surrounding Active/provider/dataset chips, so rows line up cleanly.
+
+### Fixed
+
+- Per-subscription schema migrations now run eagerly so a freshly-imported subscription doesn't fail its first run with a "column already exists" error. The published-view rebuild path was corrected, the SSE banner reflects the real reconnect status, and the Zacks `RatingKey` parser is hardened against malformed rows.
+- Imports of data types without a date column (e.g. assets, market holidays) no longer log spurious "observation overlap" warnings.
+- Rows still in the `running` state no longer display a misleading "0ms" duration in the data browser.
+- The persisted run log now matches the live SSE stream byte-for-byte; both come from the same capture path.
+- `pvdata version` (and the new UI footer) now report the raw `git describe` output (e.g. `v0.5.0` on a tag, `v0.5.0-3-gabcd123` between tags) instead of a synthetic minor-bumped string.
+
 ## [0.4.3] - 2026-04-27
 
 ### Added
@@ -118,7 +146,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/penny-vault/pvdata/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/penny-vault/pvdata/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/penny-vault/pvdata/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/penny-vault/pvdata/compare/v0.4.0...v0.4.1
