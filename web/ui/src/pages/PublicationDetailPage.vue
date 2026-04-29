@@ -196,6 +196,33 @@ async function confirmRemoveSource() {
   }
 }
 
+// --- Reorder sources ---
+
+async function onRowReorder(event: { value: any[] }) {
+  const previous = publication.value.sources
+  publication.value.sources = event.value
+  saving.value = true
+
+  const updatedSources = event.value.map((s: any) => {
+    const source: any = {
+      table_name: s.table_name,
+      subscription_id: s.subscription_id,
+    }
+    if (s.from_date) source.from_date = new Date(s.from_date)
+    if (s.until_date) source.until_date = new Date(s.until_date)
+    return source
+  })
+
+  try {
+    publication.value = await updatePublication(id.value, { sources: updatedSources })
+  } catch (e: any) {
+    error.value = e.message || 'Failed to reorder sources'
+    publication.value.sources = previous
+  } finally {
+    saving.value = false
+  }
+}
+
 // --- Delete view ---
 
 async function confirmDeleteView() {
@@ -239,7 +266,13 @@ onMounted(load)
         <Button label="Add Source" icon="pi pi-plus" size="small" @click="openAddSource" />
       </div>
 
-      <DataTable :value="publication.sources" :loading="saving">
+      <DataTable
+        :value="publication.sources"
+        :loading="saving"
+        :reorderableRows="true"
+        @row-reorder="onRowReorder"
+      >
+        <Column rowReorder style="width: 3rem" />
         <Column field="table_name" header="Source Table" />
         <Column field="subscription_name" header="Subscription" />
         <Column header="Provider / Dataset">
