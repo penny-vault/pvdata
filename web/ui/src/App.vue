@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import Menubar from 'primevue/menubar'
 import Button from 'primevue/button'
 import ProgressSpinner from 'primevue/progressspinner'
 import { useAuthStore } from '@/stores/auth'
+import { loadConfig } from '@/lib/config'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -16,8 +17,23 @@ const menuItems = [
   { label: 'Data Quality', icon: 'pi pi-check-circle', command: () => router.push('/data-quality') },
 ]
 
-onMounted(() => {
+const version = ref('')
+const commit = ref('')
+const buildDate = ref('')
+
+const versionTitle = computed(() => {
+  const parts: string[] = []
+  if (commit.value) parts.push(`commit ${commit.value}`)
+  if (buildDate.value) parts.push(`built ${buildDate.value}`)
+  return parts.join(' · ')
+})
+
+onMounted(async () => {
   auth.init()
+  const cfg = await loadConfig()
+  version.value = cfg.version
+  commit.value = cfg.commit
+  buildDate.value = cfg.build_date
 })
 </script>
 
@@ -50,6 +66,13 @@ onMounted(() => {
       </div>
       <router-view v-else />
     </main>
+
+    <footer v-if="version || buildDate" class="app-footer">
+      <div class="footer-inner">
+        <span v-if="version" class="footer-version" :title="versionTitle">pvdata {{ version }}</span>
+        <span v-if="buildDate" class="footer-build">built {{ buildDate }}</span>
+      </div>
+    </footer>
   </div>
 </template>
 
@@ -87,5 +110,25 @@ onMounted(() => {
   max-width: 1400px;
   margin: 0 auto;
   padding: 2rem;
+}
+
+.app-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: 2rem;
+}
+
+.footer-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0.75rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.footer-version {
+  cursor: help;
 }
 </style>

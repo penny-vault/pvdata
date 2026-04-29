@@ -1,22 +1,5 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
-
-interface PublicConfig {
-  auth_issuer: string
-  auth_client_id: string
-  auth_audience: string
-}
-
-let configPromise: Promise<PublicConfig> | null = null
-
-function loadConfig(): Promise<PublicConfig> {
-  if (!configPromise) {
-    configPromise = fetch('/config.json')
-      .then((r) => (r.ok ? r.json() : { auth_issuer: '', auth_client_id: '', auth_audience: '' }))
-      .catch(() => ({ auth_issuer: '', auth_client_id: '', auth_audience: '' }))
-  }
-
-  return configPromise
-}
+import { loadConfig } from '@/lib/config'
 
 let userManager: UserManager | null = null
 let userManagerInitialized = false

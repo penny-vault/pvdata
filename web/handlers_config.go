@@ -16,6 +16,7 @@ package web
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/penny-vault/pvdata/pkginfo"
 	"github.com/spf13/viper"
 )
 
@@ -26,6 +27,9 @@ type PublicConfig struct {
 	AuthIssuer   string `json:"auth_issuer"`
 	AuthClientID string `json:"auth_client_id"`
 	AuthAudience string `json:"auth_audience"`
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	BuildDate    string `json:"build_date"`
 }
 
 // GetPublicConfig returns the runtime config payload consumed by the SPA.
@@ -34,5 +38,8 @@ func GetPublicConfig(c *fiber.Ctx) error {
 		AuthIssuer:   viper.GetString("auth.issuer"),
 		AuthClientID: viper.GetString("auth.client_id"),
 		AuthAudience: viper.GetString("auth.audience"),
+		Version:      pkginfo.Version,
+		Commit:       pkginfo.CommitHash,
+		BuildDate:    pkginfo.BuildDate,
 	})
 }
