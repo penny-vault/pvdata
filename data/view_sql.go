@@ -85,9 +85,57 @@ func (dt *DataType) buildWhereClause(s ViewSource) string {
 	return strings.Join(parts, " AND ")
 }
 
-// buildDedupedUnion is implemented in Task 4. For now, fall back to the plain
-// union form so any caller that flips DedupKeys on early gets correct
-// non-dedup behavior rather than a broken stub.
+// buildDedupedUnion emits a CREATE OR REPLACE VIEW where each lower-priority
+// leg excludes rows whose dedup-key tuple already appears in any
+// higher-priority leg. The resulting view returns each unique dedup-key
+// tuple exactly once, taking the row whole from the highest-priority source
+// containing it.
+//
+// Date bounds (FromDate/UntilDate) are not applied in dedup mode -- there is
+// no real-world data type today that uses both DedupKeys and a DateColumn,
+// and the asset case explicitly has DateColumn == "". A non-nil
+// ViewGenerator is also ignored: dedup mode emits plain "SELECT * FROM <t>"
+// per leg so the NOT EXISTS clauses can reference columns by table name
+// without alias bookkeeping. AssetKey has no ViewGenerator, so this
+// limitation is moot for the only configured dedup type.
 func (dt *DataType) buildDedupedUnion(viewName string, sources []ViewSource) string {
-	return dt.buildPlainUnion(viewName, sources)
+	legs := make([]string, len(sources))
+
+	for i, s := range sources {
+		legs[i] = dt.buildDedupLeg(s.TableName, sources[:i])
+	}
+
+	return fmt.Sprintf("CREATE OR REPLACE VIEW %s AS %s", viewName, strings.Join(legs, " UNION ALL "))
+}
+
+func (dt *DataType) buildDedupLeg(table string, higher []ViewSource) string {
+	sel := fmt.Sprintf("SELECT * FROM %s", table)
+	if len(higher) == 0 {
+		return sel
+	}
+
+	clauses := make([]string, len(higher))
+
+	for i, h := range higher {
+		clauses[i] = fmt.Sprintf(
+			"NOT EXISTS (SELECT 1 FROM %s WHERE %s)",
+			h.TableName,
+			joinKeyEquality(dt.DedupKeys, h.TableName, table),
+		)
+	}
+
+	return sel + " WHERE " + strings.Join(clauses, " AND ")
+}
+
+// joinKeyEquality returns "<higher>.<k1> = <self>.<k1> AND ..." for each
+// dedup key, used inside a NOT EXISTS subquery to identify rows already
+// present in a higher-priority leg.
+func joinKeyEquality(keys []string, higher, self string) string {
+	parts := make([]string, len(keys))
+
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%s.%s = %s.%s", higher, k, self, k)
+	}
+
+	return strings.Join(parts, " AND ")
 }

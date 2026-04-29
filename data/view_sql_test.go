@@ -99,6 +99,71 @@ var _ = Describe("DataType.GenerateViewSQL", func() {
 			))
 		})
 	})
+
+	Describe("deduped types (DedupKeys set)", func() {
+		asset := &data.DataType{
+			Name:      "a",
+			ViewName:  "assets",
+			DedupKeys: []string{"ticker", "composite_figi"},
+		}
+
+		It("emits a single leg for one source", func() {
+			sql := asset.GenerateViewSQL("assets", []data.ViewSource{
+				{TableName: "tiingo_assets_abc"},
+			})
+			Expect(sql).To(Equal(
+				"CREATE OR REPLACE VIEW assets AS SELECT * FROM tiingo_assets_abc",
+			))
+		})
+
+		It("anti-joins the second leg against the first on the dedup keys", func() {
+			sql := asset.GenerateViewSQL("assets", []data.ViewSource{
+				{TableName: "tiingo_assets_abc"},
+				{TableName: "sharadar_assets_def"},
+			})
+			Expect(sql).To(Equal(
+				"CREATE OR REPLACE VIEW assets AS " +
+					"SELECT * FROM tiingo_assets_abc " +
+					"UNION ALL " +
+					"SELECT * FROM sharadar_assets_def " +
+					"WHERE NOT EXISTS (" +
+					"SELECT 1 FROM tiingo_assets_abc " +
+					"WHERE tiingo_assets_abc.ticker = sharadar_assets_def.ticker " +
+					"AND tiingo_assets_abc.composite_figi = sharadar_assets_def.composite_figi" +
+					")",
+			))
+		})
+
+		It("anti-joins each leg against every higher-priority leg", func() {
+			sql := asset.GenerateViewSQL("assets", []data.ViewSource{
+				{TableName: "s1"},
+				{TableName: "s2"},
+				{TableName: "s3"},
+			})
+			// First leg: no anti-join.
+			Expect(sql).To(ContainSubstring("SELECT * FROM s1 UNION ALL"))
+			// Second leg: one anti-join (against s1).
+			Expect(sql).To(ContainSubstring(
+				"SELECT * FROM s2 WHERE NOT EXISTS (SELECT 1 FROM s1 WHERE s1.ticker = s2.ticker AND s1.composite_figi = s2.composite_figi)",
+			))
+			// Third leg: two anti-joins (against s1 AND s2), combined with AND.
+			Expect(sql).To(ContainSubstring(
+				"SELECT * FROM s3 WHERE NOT EXISTS (SELECT 1 FROM s1 WHERE s1.ticker = s3.ticker AND s1.composite_figi = s3.composite_figi) AND NOT EXISTS (SELECT 1 FROM s2 WHERE s2.ticker = s3.ticker AND s2.composite_figi = s3.composite_figi)",
+			))
+		})
+
+		It("ignores FromDate/UntilDate even if present (DateColumn empty)", func() {
+			from := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+			sql := asset.GenerateViewSQL("assets", []data.ViewSource{
+				{TableName: "s1", FromDate: &from},
+			})
+			Expect(sql).NotTo(ContainSubstring("WHERE"))
+		})
+
+		It("DROP VIEW for zero sources still wins over dedup", func() {
+			Expect(asset.GenerateViewSQL("assets", nil)).To(Equal("DROP VIEW IF EXISTS assets"))
+		})
+	})
 })
 
 type ratingTestVG struct{}
