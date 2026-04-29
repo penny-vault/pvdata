@@ -1,7 +1,7 @@
 EXECUTABLE_NAME = pvdata
 
 GO_MODULE:=$$(go list -m)
-GIT_VERSION:=$$(git describe --always | awk '{n=split($$0, a, "-"); if (n=="3") { split(a[1], b, "."); print b[1] "." b[2]+1 "." b[3] "-pre+" a[2] "-" a[3] } else { print a[1] }}')
+GIT_VERSION:=$$(git describe --always)
 COMMIT_HASH:=$$(git rev-parse --short HEAD)
 BUILD_DATE:=$$(date -Iseconds)
 
