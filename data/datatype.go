@@ -117,6 +117,7 @@ var DataTypes = map[string]*DataType{
 		Name:       AssetKey,
 		ViewName:   "assets",
 		DateColumn: "",
+		DedupKeys:  []string{"ticker", "composite_figi"},
 		Schema: `CREATE TABLE %[1]s (
 ticker TEXT,
 composite_figi TEXT,

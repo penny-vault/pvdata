@@ -76,6 +76,23 @@ var _ = Describe("PublishedViews", func() {
 			))
 		})
 
+		It("emits the priority-dedup anti-join form for asset views with multiple sources", func() {
+			pv := &library.PublishedView{
+				ViewName:    "assets",
+				DataTypeKey: "asset-description",
+				Sources: []library.ViewSource{
+					{TableName: "tiingo_assets_abc"},
+					{TableName: "sharadar_assets_def"},
+				},
+			}
+			sqls := pv.GenerateViewSQL()
+			Expect(sqls).To(HaveLen(1))
+			Expect(sqls[0]).To(ContainSubstring("UNION ALL"))
+			Expect(sqls[0]).To(ContainSubstring(
+				"SELECT * FROM sharadar_assets_def WHERE NOT EXISTS (SELECT 1 FROM tiingo_assets_abc WHERE tiingo_assets_abc.ticker = sharadar_assets_def.ticker AND tiingo_assets_abc.composite_figi = sharadar_assets_def.composite_figi)",
+			))
+		})
+
 		It("uses snapshot_date for index-snapshot views", func() {
 			from := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
 			pv := &library.PublishedView{
