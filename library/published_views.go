@@ -76,6 +76,14 @@ func (pv *PublishedView) ValidateSources() error {
 // CheckOverlaps returns human-readable descriptions of any overlapping date
 // ranges between sources. Returns an empty slice when there are no overlaps.
 func (pv *PublishedView) CheckOverlaps() []string {
+	// Data types with no date axis (e.g. assets) cannot have overlapping
+	// date ranges by construction; FromDate/UntilDate on their sources are
+	// silently ignored at SQL-gen time. Skip the check entirely so the UI
+	// does not surface spurious overlap warnings.
+	if dt, ok := data.DataTypes[pv.DataTypeKey]; ok && dt != nil && dt.DateColumn == "" {
+		return nil
+	}
+
 	if len(pv.Sources) <= 1 {
 		return nil
 	}

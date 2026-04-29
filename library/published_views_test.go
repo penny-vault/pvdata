@@ -297,5 +297,20 @@ var _ = Describe("PublishedViews", func() {
 			overlaps := pv.CheckOverlaps()
 			Expect(overlaps).To(BeEmpty())
 		})
+
+		It("returns empty for asset publications regardless of date fields", func() {
+			from := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+			until := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			d3 := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+			pv := &library.PublishedView{
+				ViewName:    "assets",
+				DataTypeKey: "asset-description",
+				Sources: []library.ViewSource{
+					{TableName: "t1", FromDate: &from, UntilDate: &until},
+					{TableName: "t2", FromDate: &d3},
+				},
+			}
+			Expect(pv.CheckOverlaps()).To(BeEmpty())
+		})
 	})
 })
