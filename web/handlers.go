@@ -16,6 +16,7 @@ package web
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gosimple/slug"
@@ -43,6 +44,7 @@ type CreateSubscriptionRequest struct {
 
 // UpdateSubscriptionRequest is the JSON body for updating an existing subscription.
 type UpdateSubscriptionRequest struct {
+	Name          *string            `json:"name"`
 	Schedule      *string            `json:"schedule"`
 	Config        *map[string]string `json:"config"`
 	HealthCheckID *string            `json:"health_check_id"`
@@ -215,6 +217,27 @@ func UpdateSubscription(c *fiber.Ctx) error {
 		})
 	}
 	defer conn.Release()
+
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(HttpError{
+				Code:    "400",
+				Message: "name cannot be empty",
+			})
+		}
+
+		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET name=$1 WHERE id=$2", name, sub.ID); err != nil {
+			log.Error().Err(err).Msg("could not update name")
+
+			return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+				Code:    "500",
+				Message: "could not update subscription",
+			})
+		}
+
+		sub.Name = name
+	}
 
 	if req.Schedule != nil {
 		if _, err := conn.Exec(ctx, "UPDATE subscriptions SET schedule=$1 WHERE id=$2", *req.Schedule, sub.ID); err != nil {

@@ -7,6 +7,7 @@ import Message from 'primevue/message'
 
 interface Subscription {
   id: string
+  name: string
   schedule: string
   config: Record<string, string>
   health_check_id: string
@@ -22,6 +23,7 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
+const name = ref('')
 const schedule = ref('')
 const healthCheckId = ref('')
 const configEntries = ref<{ key: string; value: string }[]>([])
@@ -29,6 +31,7 @@ const saving = ref(false)
 const error = ref('')
 
 onMounted(() => {
+  name.value = props.subscription.name || ''
   schedule.value = props.subscription.schedule || ''
   healthCheckId.value = props.subscription.health_check_id || ''
   const cfg = props.subscription.config || {}
@@ -53,6 +56,12 @@ async function onSave() {
   saving.value = true
   error.value = ''
   try {
+    const trimmedName = name.value.trim()
+    if (!trimmedName) {
+      error.value = 'Name cannot be empty'
+      saving.value = false
+      return
+    }
     const config: Record<string, string> = {}
     for (const entry of configEntries.value) {
       if (entry.key.trim()) {
@@ -60,6 +69,7 @@ async function onSave() {
       }
     }
     const result = await updateSubscription(props.subscription.id, {
+      name: trimmedName,
       schedule: schedule.value,
       config,
       health_check_id: healthCheckId.value,
@@ -78,6 +88,11 @@ async function onSave() {
     <Message v-if="error" severity="error" :closable="true" @close="error = ''">
       {{ error }}
     </Message>
+
+    <div style="display: flex; flex-direction: column; gap: 0.5rem">
+      <label>Name</label>
+      <InputText v-model="name" placeholder="Subscription name" />
+    </div>
 
     <div style="display: flex; flex-direction: column; gap: 0.5rem">
       <label>Schedule (cron expression)</label>
