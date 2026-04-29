@@ -65,7 +65,7 @@ func PurgeExpiredData(ctx context.Context, subscription *library.Subscription) e
 
 	cutoff := time.Now().Add(-subDataset.TTL)
 
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire connection for purge: %w", err)
 	}
@@ -99,7 +99,7 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 
 	log.Info().Str("Table", tableName).Msg("adjusting EOD prices")
 
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire connection for eod adjust: %w", err)
 	}

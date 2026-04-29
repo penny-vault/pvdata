@@ -70,7 +70,7 @@ func GetQualityIssues(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 
@@ -211,7 +211,7 @@ func GetQualitySummary(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 

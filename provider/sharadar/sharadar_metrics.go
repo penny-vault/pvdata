@@ -79,7 +79,7 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
 
 	// Get a list of active assets
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Panic().Msg("could not acquire database connection")
 	}

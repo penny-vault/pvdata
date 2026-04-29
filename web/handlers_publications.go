@@ -80,7 +80,7 @@ func GetPublications(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 
@@ -136,7 +136,7 @@ func CreatePublication(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 
@@ -181,7 +181,7 @@ func GetPublication(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 
@@ -246,7 +246,7 @@ func UpdatePublication(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 
@@ -314,7 +314,7 @@ func DeletePublication(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 
@@ -363,7 +363,7 @@ func GetPublicationCandidates(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 
@@ -433,7 +433,7 @@ func GetAvailablePublicationTypes(c *fiber.Ctx) error {
 	myLibrary := getLibrary(c)
 	ctx := c.UserContext()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("could not acquire database connection")
 

@@ -213,7 +213,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 	}
 
 	// Get a list of active assets
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Panic().Msg("could not acquire database connection")
 	}

@@ -142,7 +142,7 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 		countQuery = fmt.Sprintf("SELECT count(*) FROM %s WHERE %s = $1", tableName, searchCol)
 	}
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
 			Code:    "500",

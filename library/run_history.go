@@ -65,7 +65,7 @@ func (myLibrary *Library) SaveRunHistory(ctx context.Context, summary data.RunSu
 // InsertRunHistory inserts a RunSummary and returns the new run_history id.
 // Use UpdateRunLog to attach captured log output once it is fully drained.
 func (myLibrary *Library) InsertRunHistory(ctx context.Context, summary data.RunSummary) (string, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -109,7 +109,7 @@ func (myLibrary *Library) UpdateRunLog(ctx context.Context, runID, runLog string
 		return nil
 	}
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -128,7 +128,7 @@ func (myLibrary *Library) UpdateRunLog(ctx context.Context, runID, runLog string
 // to start_time as a placeholder; FinalizeRun overwrites it on
 // completion.
 func (myLibrary *Library) BeginRun(ctx context.Context, summary data.RunSummary) (string, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -167,7 +167,7 @@ func (myLibrary *Library) UpdateRunProgress(ctx context.Context, runID string, n
 		return nil
 	}
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func (myLibrary *Library) FinalizeRun(ctx context.Context, runID string, summary
 		return err
 	}
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -235,7 +235,7 @@ func (myLibrary *Library) FinalizeRun(ctx context.Context, runID string, summary
 // start_time and now(), and we don't have a more accurate
 // timestamp to record. Returns the number of rows updated.
 func (myLibrary *Library) MarkAbandonedRunsFailed(ctx context.Context) (int64, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -297,7 +297,7 @@ func (myLibrary *Library) updateSubscriptionStats(ctx context.Context, conn *pgx
 // RunHistory returns paginated run history entries for a subscription.
 // It returns the entries, the total count of matching rows, and any error.
 func (myLibrary *Library) RunHistory(ctx context.Context, subscriptionID string, limit, offset int) ([]RunHistoryEntry, int, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -355,7 +355,7 @@ func (myLibrary *Library) RunHistory(ctx context.Context, subscriptionID string,
 // (either the run pre-dates the log column or the 30-day retention has
 // already cleared it).
 func (myLibrary *Library) RunHistoryLog(ctx context.Context, runID string) (string, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -381,7 +381,7 @@ func (myLibrary *Library) RunHistoryLog(ctx context.Context, runID string) (stri
 // SweepRunLogs nulls out captured log text on run_history rows older than
 // retention. Returns the number of rows whose log was cleared.
 func (myLibrary *Library) SweepRunLogs(ctx context.Context, retention time.Duration) (int64, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -403,7 +403,7 @@ func (myLibrary *Library) SweepRunLogs(ctx context.Context, retention time.Durat
 
 // RunHistorySparkline returns daily aggregated observation counts for the last 30 days.
 func (myLibrary *Library) RunHistorySparkline(ctx context.Context, subscriptionID string) ([]SparklineData, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -536,12 +536,11 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 	assetDetail := make([]*data.Asset, 0, len(assets))
 	assetUpdate := make([]*data.Asset, 0, len(assets))
 
-	dbConn, err := api.subscription.Library.Pool.Acquire(ctx)
-	if err != nil {
-		logger.Error().Err(err).Msg("error getting database connection")
-		return nil, err
-	}
-	defer dbConn.Release()
+	// Use the pool directly so each query auto-acquires and releases
+	// instead of pinning one connection across thousands of per-asset
+	// SELECTs. The previous version held a conn for the whole loop and
+	// helped saturate the pgxpool.
+	pool := api.subscription.Library.Pool
 
 	// Enrich any assets that have no figi
 	toEnrich := make([]*data.Asset, 0, len(assets)/2)
@@ -565,7 +564,7 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 
 		sql := fmt.Sprintf("SELECT COALESCE(last_updated, '0001-01-01'::timestamp) as last_updated FROM %s WHERE composite_figi=$1 AND ticker=$2 LIMIT 1", api.subscription.DataTablesMap[data.AssetKey])
 
-		err := dbConn.QueryRow(
+		err := pool.QueryRow(
 			ctx,
 			sql,
 			asset.CompositeFigi,
@@ -628,7 +627,7 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 		  AND (icon_url IS NULL OR logo_url IS NULL)
 		LIMIT %d`, api.subscription.DataTablesMap[data.AssetKey], maxMissingBrandingPerRun*2)
 
-	missingRows, missingErr := dbConn.Query(ctx, missingSQL)
+	missingRows, missingErr := pool.Query(ctx, missingSQL)
 	if missingErr != nil {
 		logger.Warn().Err(missingErr).Msg("could not query missing-branding assets; skipping lane")
 	} else {
@@ -670,12 +669,9 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 		return err
 	}
 
-	dbConn, err := api.subscription.Library.Pool.Acquire(ctx)
-	if err != nil {
-		logger.Error().Err(err).Msg("error getting database connection")
-		return err
-	}
-	defer dbConn.Release()
+	// Single-shot query against the pool — no need to hold a conn
+	// across the post-processing logic below.
+	pool := api.subscription.Library.Pool
 
 	assetMap := make(map[string]*data.Asset, len(assets))
 	for _, asset := range assets {
@@ -685,7 +681,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 	// get a list of assets that are currently active in the database
 	inactive := make([]*data.Asset, 0, 50)
 
-	rows, err := dbConn.Query(ctx, fmt.Sprintf(`SELECT
+	rows, err := pool.Query(ctx, fmt.Sprintf(`SELECT
 		ticker,
 		composite_figi,
 		share_class_figi,

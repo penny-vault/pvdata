@@ -177,7 +177,7 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 	}
 
 	// Get a list of active assets
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Panic().Msg("could not acquire database connection")
 	}
@@ -511,7 +511,7 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 	}
 
 	// get a list of assets already in the database
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Panic().Msg("could not acquire database connection")
 	}

@@ -150,32 +150,17 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 		}
 	}
 
-	// Acquire DB connection and build figi map
-	conn, err := subscription.Library.Pool.Acquire(ctx)
-	if err != nil {
-		logger.Error().Err(err).Msg("could not acquire database connection")
-
-		runSummary.Status = data.RunFailed
-
-		return
-	}
-	defer conn.Release()
-
-	assets, err := data.ActiveAssets(ctx, conn)
+	// Build figi/name maps in a narrow scope so the pool connection is
+	// released before the long per-ETF download loop runs. Holding it
+	// across the loop (alongside SaveObservations' conn) previously
+	// helped saturate the pgxpool and wedge the scheduler.
+	figiMap, assetNameMap, err := iSharesAssetMaps(ctx, subscription)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
 
 		runSummary.Status = data.RunFailed
 
 		return
-	}
-
-	figiMap := make(map[string]string, len(assets))
-	assetNameMap := make(map[string]string, len(assets))
-
-	for _, asset := range assets {
-		figiMap[asset.Ticker] = asset.CompositeFigi
-		assetNameMap[asset.Ticker] = asset.Name
 	}
 
 	// Create HTTP client
@@ -215,6 +200,32 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 	}
 
 	runSummary.Status = data.RunSuccess
+}
+
+// iSharesAssetMaps returns ticker -> composite_figi and ticker -> name maps
+// for active assets. The DB connection is released before this returns so
+// the caller can run a long download loop without pinning a pgxpool slot.
+func iSharesAssetMaps(ctx context.Context, subscription *library.Subscription) (map[string]string, map[string]string, error) {
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer conn.Release()
+
+	assets, err := data.ActiveAssets(ctx, conn)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	figiMap := make(map[string]string, len(assets))
+	assetNameMap := make(map[string]string, len(assets))
+
+	for _, asset := range assets {
+		figiMap[asset.Ticker] = asset.CompositeFigi
+		assetNameMap[asset.Ticker] = asset.Name
+	}
+
+	return figiMap, assetNameMap, nil
 }
 
 func downloadSingleISharesETF(

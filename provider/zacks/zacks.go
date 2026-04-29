@@ -134,26 +134,18 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 	runSummary.Status = data.RunSuccess
 
-	// enrich with Figi data
-	conn, err := subscription.Library.Pool.Acquire(ctx)
-	if err != nil {
-		logger.Panic().Msg("could not acquire database connection")
-	}
-
-	defer conn.Release()
-
-	assets, err := data.ActiveAssets(ctx, conn)
+	// Load active assets in a narrow scope so the pool connection is
+	// released before the multi-thousand-record publish loop below. The
+	// loop emits to a back-pressured channel and can take a long time;
+	// holding a conn for the whole run (alongside SaveObservations'
+	// conn) previously saturated the pgxpool and wedged the scheduler.
+	figiMap, err := zacksFigiMap(ctx, subscription)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not load active assets")
 
 		runSummary.Status = data.RunFailed
 
 		return
-	}
-
-	figiMap := make(map[string]string, len(assets))
-	for _, asset := range assets {
-		figiMap[asset.Ticker] = asset.CompositeFigi
 	}
 
 	// Apply ticker/FIGI filter if set
@@ -248,7 +240,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	// publish results
 	for _, record := range enriched {
 		// Zacks Rank
-		latest := data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-rank")
+		latest := data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], subscription.Library.Pool, "zacks-rank")
 		if latest == nil || latest.Rating != record.ZacksRank {
 			out <- &data.Observation{
 				Rating: &data.AnalystRating{
@@ -266,7 +258,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 		}
 
 		// Value Score
-		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-value")
+		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], subscription.Library.Pool, "zacks-value")
 
 		valueScore, ok := letterGradeToInt[record.ValueScore]
 		if (latest == nil || latest.Rating != valueScore) && ok {
@@ -286,7 +278,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 		}
 
 		// Growth Score
-		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-growth")
+		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], subscription.Library.Pool, "zacks-growth")
 
 		growthScore, ok := letterGradeToInt[record.GrowthScore]
 		if (latest == nil || latest.Rating != growthScore) && ok {
@@ -306,7 +298,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 		}
 
 		// Momentum Score
-		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-momentum")
+		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], subscription.Library.Pool, "zacks-momentum")
 
 		momentumScore, ok := letterGradeToInt[record.MomentumScore]
 		if (latest == nil || latest.Rating != momentumScore) && ok {
@@ -326,7 +318,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 		}
 
 		// Value-Growth-Momentum Score
-		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], conn, "zacks-vgm")
+		latest = data.LatestRating(ctx, subscription.DataTablesMap[data.RatingKey], subscription.Library.Pool, "zacks-vgm")
 
 		vgmScore, ok := letterGradeToInt[record.VgmScore]
 		if (latest == nil || latest.Rating != vgmScore) && ok {
@@ -774,6 +766,29 @@ func zacksEnsureLoggedIn(ctx context.Context, page playwright.Page, username, pa
 		logger.Error().Err(err).Msg("could not click login button")
 		return
 	}
+}
+
+// zacksFigiMap returns a ticker -> composite_figi map for active assets.
+// The DB connection is released before this returns so the caller can
+// run a long publish loop without pinning a pgxpool slot.
+func zacksFigiMap(ctx context.Context, subscription *library.Subscription) (map[string]string, error) {
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Release()
+
+	assets, err := data.ActiveAssets(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+
+	figiMap := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		figiMap[asset.Ticker] = asset.CompositeFigi
+	}
+
+	return figiMap, nil
 }
 
 func zacksSaveToParquet(ctx context.Context, records []*ZacksRecord, fn string) error {

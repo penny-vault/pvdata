@@ -96,7 +96,7 @@ func (myLibrary *Library) MigrateAllSubscriptions(ctx context.Context) (migrated
 		return 0, len(subs), nil
 	}
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return 0, 0, err
 	}

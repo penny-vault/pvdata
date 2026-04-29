@@ -287,7 +287,7 @@ func pingHealthcheck(sub *library.Subscription, kind healthcheck.PingKind, body 
 }
 
 func logQualitySummary(ctx context.Context, lib *library.Library, sub *library.Subscription, summary data.RunSummary) {
-	qualityConn, qErr := lib.Pool.Acquire(ctx)
+	qualityConn, qErr := lib.AcquireWithTimeout(ctx)
 	if qErr != nil {
 		return
 	}

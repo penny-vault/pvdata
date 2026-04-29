@@ -1669,7 +1669,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				}
 			}
 
-			conn, err := sub.Library.Pool.Acquire(cleanupCtx)
+			conn, err := sub.Library.AcquireWithTimeout(cleanupCtx)
 			if err == nil {
 				rows, err := conn.Query(cleanupCtx,
 					fmt.Sprintf("SELECT dimension, event_date FROM %s WHERE composite_figi = $1", tbl),

@@ -28,7 +28,23 @@ import (
 	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
 )
+
+// AcquireTimeout bounds how long Pool.Acquire waits for a free connection
+// before failing. The pool deadlocked once when long-running provider
+// fetches held all connections; surfacing the wait as an error lets us
+// see and fix the saturating call site instead of hanging forever.
+const AcquireTimeout = 30 * time.Second
+
+// AcquireWithTimeout wraps Pool.Acquire with AcquireTimeout so callers do
+// not need to remember to bound the wait themselves.
+func (myLibrary *Library) AcquireWithTimeout(ctx context.Context) (*pgxpool.Conn, error) {
+	acquireCtx, cancel := context.WithTimeout(ctx, AcquireTimeout)
+	defer cancel()
+
+	return myLibrary.Pool.Acquire(acquireCtx)
+}
 
 type Library struct {
 	DBUrl string
@@ -38,13 +54,37 @@ type Library struct {
 	Pool *pgxpool.Pool
 }
 
+// newPool builds a pgxpool with explicit sizing and lifetime knobs. The
+// pgx default of MaxConns = max(4, NumCPU) is too small for pvdata: a
+// running subscription can hold two connections (one for the provider
+// goroutine, one for SaveObservations), so a few concurrent runs
+// saturate a 4-conn pool and every subsequent Acquire blocks.
+func newPool(ctx context.Context, dbURL string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse pgxpool config: %w", err)
+	}
+
+	maxConns := int32(viper.GetInt("db.max_conns"))
+	if maxConns <= 0 {
+		maxConns = 25
+	}
+
+	cfg.MaxConns = maxConns
+	cfg.MinConns = 2
+	cfg.MaxConnLifetime = time.Hour
+	cfg.MaxConnIdleTime = 15 * time.Minute
+
+	return pgxpool.NewWithConfig(ctx, cfg)
+}
+
 // Connect to the database configured for the library
 func (myLibrary *Library) Connect(ctx context.Context) error {
 	if myLibrary.Pool != nil {
 		return nil
 	}
 
-	pool, err := pgxpool.New(context.Background(), myLibrary.DBUrl)
+	pool, err := newPool(context.Background(), myLibrary.DBUrl)
 	if err != nil {
 		return err
 	}
@@ -61,21 +101,21 @@ func (myLibrary *Library) Close() {
 
 // NewFromDB creates a new library object with values from the database
 func NewFromDB(ctx context.Context, dbURL string) (*Library, error) {
-	pool, err := pgxpool.New(context.Background(), dbURL)
+	pool, err := newPool(context.Background(), dbURL)
 	if err != nil {
 		return nil, err
 	}
-
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Release()
 
 	myLibrary := Library{
 		DBUrl: dbURL,
 		Pool:  pool,
 	}
+
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Release()
 
 	if err := conn.QueryRow(ctx, "SELECT name, owner FROM library").Scan(&myLibrary.Name, &myLibrary.Owner); err != nil {
 		return nil, err
@@ -86,7 +126,7 @@ func NewFromDB(ctx context.Context, dbURL string) (*Library, error) {
 
 // SaveDB creates a new record in the library table for this library
 func (myLibrary *Library) SaveDB(ctx context.Context) error {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -99,7 +139,7 @@ func (myLibrary *Library) SaveDB(ctx context.Context) error {
 
 // NumSubscriptions returns the total count of subscriptions configured in the database
 func (myLibrary *Library) NumSubscriptions(ctx context.Context) (int, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -113,7 +153,7 @@ func (myLibrary *Library) NumSubscriptions(ctx context.Context) (int, error) {
 
 // LastUpdated returns the date that the database was last updated
 func (myLibrary *Library) LastUpdated(ctx context.Context) (time.Time, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -131,7 +171,7 @@ func (myLibrary *Library) LastUpdated(ctx context.Context) (time.Time, error) {
 
 // TotalRecords returns the total number of records in the library
 func (myLibrary *Library) TotalRecords(ctx context.Context) (int, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -145,7 +185,7 @@ func (myLibrary *Library) TotalRecords(ctx context.Context) (int, error) {
 
 // TotalSecurities returns the total number of securities in the library
 func (myLibrary *Library) TotalSecurities(ctx context.Context) (int, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -163,7 +203,7 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 
 	defer wg.Done()
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		log.Panic().Err(err).Msg("cannot acquire database connection")
 		return
@@ -382,7 +422,7 @@ created_by FROM subscriptions`)
 
 // SubscriptionFromID fetches a subscription from the library with the given ID
 func (myLibrary *Library) SubscriptionFromID(ctx context.Context, id string) (*Subscription, error) {
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return nil, err
 	}

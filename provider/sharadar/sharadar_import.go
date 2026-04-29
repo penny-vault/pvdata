@@ -774,24 +774,60 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 	}
 }
 
-// importFundamentalsRows processes rows for the Fundamentals dataset.
-func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
-	logger := zerolog.Ctx(ctx)
-
-	conn, err := sub.Library.Pool.Acquire(ctx)
+// activeFigiMap returns a ticker -> composite_figi map of currently active
+// assets. The DB connection is released before this returns so the caller
+// can run a long emit loop without pinning a pgxpool slot.
+func activeFigiMap(ctx context.Context, sub *library.Subscription) (map[string]string, error) {
+	conn, err := sub.Library.AcquireWithTimeout(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("could not acquire database connection: %w", err)
+		return nil, fmt.Errorf("could not acquire database connection: %w", err)
 	}
 	defer conn.Release()
 
 	assets, err := data.ActiveAssets(ctx, conn)
 	if err != nil {
-		return 0, fmt.Errorf("could not load active assets: %w", err)
+		return nil, fmt.Errorf("could not load active assets: %w", err)
 	}
 
 	figiMap := make(map[string]string, len(assets))
 	for _, asset := range assets {
 		figiMap[asset.Ticker] = asset.CompositeFigi
+	}
+
+	return figiMap, nil
+}
+
+// allFigiMap returns a ticker -> composite_figi map of every asset
+// (active and delisted), released before returning.
+func allFigiMap(ctx context.Context, sub *library.Subscription) (map[string]string, error) {
+	conn, err := sub.Library.AcquireWithTimeout(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not acquire database connection: %w", err)
+	}
+	defer conn.Release()
+
+	assets, err := data.AllAssets(ctx, conn)
+	if err != nil {
+		return nil, fmt.Errorf("could not load assets: %w", err)
+	}
+
+	figiMap := make(map[string]string, len(assets))
+	for _, asset := range assets {
+		if asset.CompositeFigi != "" {
+			figiMap[asset.Ticker] = asset.CompositeFigi
+		}
+	}
+
+	return figiMap, nil
+}
+
+// importFundamentalsRows processes rows for the Fundamentals dataset.
+func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
+	logger := zerolog.Ctx(ctx)
+
+	figiMap, err := activeFigiMap(ctx, sub)
+	if err != nil {
+		return 0, err
 	}
 
 	count := 0
@@ -825,20 +861,9 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 func importMetricsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
-	conn, err := sub.Library.Pool.Acquire(ctx)
+	figiMap, err := activeFigiMap(ctx, sub)
 	if err != nil {
-		return 0, fmt.Errorf("could not acquire database connection: %w", err)
-	}
-	defer conn.Release()
-
-	assets, err := data.ActiveAssets(ctx, conn)
-	if err != nil {
-		return 0, fmt.Errorf("could not load active assets: %w", err)
-	}
-
-	figiMap := make(map[string]string, len(assets))
-	for _, asset := range assets {
-		figiMap[asset.Ticker] = asset.CompositeFigi
+		return 0, err
 	}
 
 	nyc, err := time.LoadLocation("America/New_York")
@@ -969,23 +994,12 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows <-chan
 		rowSlice = append(rowSlice, rr.Row)
 	}
 
-	conn, err := sub.Library.Pool.Acquire(ctx)
+	// Load FIGI map (active + delisted) in a narrow scope so the pool
+	// connection is released before the per-ticker OpenFIGI lookup and
+	// emit loop below.
+	figiMap, err := allFigiMap(ctx, sub)
 	if err != nil {
-		return 0, fmt.Errorf("could not acquire database connection: %w", err)
-	}
-	defer conn.Release()
-
-	// Step 1: Load all assets (active + delisted) for FIGI map
-	assets, err := data.AllAssets(ctx, conn)
-	if err != nil {
-		return 0, fmt.Errorf("could not load assets: %w", err)
-	}
-
-	figiMap := make(map[string]string, len(assets))
-	for _, asset := range assets {
-		if asset.CompositeFigi != "" {
-			figiMap[asset.Ticker] = asset.CompositeFigi
-		}
+		return 0, err
 	}
 
 	// Step 2: Collect all unique tickers from the data

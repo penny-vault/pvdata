@@ -1154,7 +1154,7 @@ func runCompareFundamentals(cmd *cobra.Command, args []string) {
 	}
 
 	if raw.excludeForeign {
-		conn, connErr := myLibrary.Pool.Acquire(ctx)
+		conn, connErr := myLibrary.AcquireWithTimeout(ctx)
 		if connErr != nil {
 			log.Fatal().Err(connErr).Msg("could not acquire db connection for domestic ticker query")
 		}

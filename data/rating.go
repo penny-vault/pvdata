@@ -86,8 +86,12 @@ func (rating *AnalystRating) SaveDB(ctx context.Context, tbl string, dbConn *pgx
 	return nil
 }
 
-func LatestRating(ctx context.Context, tbl string, dbConn *pgxpool.Conn, analyst string) *AnalystRating {
-	rows, err := dbConn.Query(ctx,
+// LatestRating queries for the most recent AnalystRating for the given
+// analyst across the entire table. It takes a *pgxpool.Pool so the caller
+// does not need to hold a connection across long-running loops; the pool
+// acquires and releases per call.
+func LatestRating(ctx context.Context, tbl string, pool *pgxpool.Pool, analyst string) *AnalystRating {
+	rows, err := pool.Query(ctx,
 		"SELECT t.ticker, t.composite_figi, t.event_date, a.analyst, t.rating FROM "+tbl+
 			" t JOIN analyst_lookup a ON t.analyst_id = a.id WHERE a.analyst = $1"+
 			" ORDER BY t.event_date DESC LIMIT 1",

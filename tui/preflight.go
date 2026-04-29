@@ -18,7 +18,7 @@ type PreflightResult struct {
 // RunPreflight validates configuration and prompts for missing values.
 func RunPreflight(ctx context.Context, myLibrary *library.Library, subscriptionIDs []string) (*PreflightResult, error) {
 	// Step 1: Validate database connection
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not connect to database: %w", err)
 	}

@@ -209,7 +209,7 @@ func UpdateSubscription(c *fiber.Ctx) error {
 		})
 	}
 
-	conn, err := myLibrary.Pool.Acquire(ctx)
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
 			Code:    "500",

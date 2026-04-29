@@ -210,7 +210,7 @@ func downloadTradingViewConstituents(ctx context.Context, subscription *library.
 	}
 
 	// Acquire DB connection and build FIGI map.
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not acquire database connection")
 

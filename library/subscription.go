@@ -86,7 +86,7 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 		}
 	}
 
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 
 // Activate the subscription
 func (subscription *Subscription) Activate(ctx context.Context) error {
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,7 @@ func (subscription *Subscription) Activate(ctx context.Context) error {
 // Deactivate the subscription; all data is still saved in the database but the subscription
 // is marked as inactive and it won't show up in reports
 func (subscription *Subscription) Deactivate(ctx context.Context) error {
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -253,7 +253,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);`, subscription.ID.String(
 
 // Save the subscription to the database
 func (subscription *Subscription) Save(ctx context.Context) error {
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -297,7 +297,7 @@ func (subscription *Subscription) ComputeTableNames() {
 
 // ManagePartitions creates any new partitions needed for the subscription
 func (subscription *Subscription) ManagePartitions(ctx context.Context) error {
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
@@ -446,7 +446,7 @@ func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 		tableSet[t] = struct{}{}
 	}
 
-	conn, err := subscription.Library.Pool.Acquire(ctx)
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return err
 	}
