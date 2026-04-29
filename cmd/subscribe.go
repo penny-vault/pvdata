@@ -87,7 +87,7 @@ Also see: subscriptions, unsubscribe`,
 		// build a dataset selection field
 		datasetOptions := make([]huh.Option[string], 0, len(dataProvider.Datasets()))
 		for k, v := range dataProvider.Datasets() {
-			datasetOptions = append(datasetOptions, huh.NewOption[string](v.Name, k))
+			datasetOptions = append(datasetOptions, huh.NewOption(v.Name, k))
 		}
 
 		// create a new field group for configuring the provider
