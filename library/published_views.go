@@ -37,14 +37,10 @@ type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// ViewSource represents a single table contributing to a published view,
-// optionally bounded by a date range. FromDate is inclusive, UntilDate is exclusive.
-type ViewSource struct {
-	TableName      string     `json:"table_name"`
-	SubscriptionID string     `json:"subscription_id"`
-	FromDate       *time.Time `json:"from_date,omitempty"`
-	UntilDate      *time.Time `json:"until_date,omitempty"`
-}
+// ViewSource is re-exported from the data package so that existing callers
+// (web handlers, TUI, library tests) continue to compile against
+// library.ViewSource. New code may use data.ViewSource directly.
+type ViewSource = data.ViewSource
 
 // PublishedView represents a database view composed of one or more source tables.
 type PublishedView struct {
