@@ -76,6 +76,19 @@ type DataType struct {
 	IsPartitioned     bool
 	PartitionInterval string
 	ViewGenerator     ViewGenerator
+
+	// DateColumn names the column used for FromDate/UntilDate WHERE bounds in
+	// a published view leg. An empty string disables date bounds entirely
+	// (asset descriptions have no date axis). Examples: "event_date" for most
+	// time-series types; "snapshot_date" for IndexSnapshotKey.
+	DateColumn string
+
+	// DedupKeys, when non-empty, switches the published-view generator from
+	// a plain UNION ALL into a priority-dedup form that emits each unique
+	// key tuple exactly once, taking the row from the highest-priority
+	// source (sources[0] is highest priority). The keys are column names
+	// referenced in NOT EXISTS anti-joins between legs.
+	DedupKeys []string
 }
 
 const (
@@ -101,8 +114,9 @@ const (
 
 var DataTypes = map[string]*DataType{
 	AssetKey: {
-		Name:     AssetKey,
-		ViewName: "assets",
+		Name:       AssetKey,
+		ViewName:   "assets",
+		DateColumn: "",
 		Schema: `CREATE TABLE %[1]s (
 ticker TEXT,
 composite_figi TEXT,
@@ -149,8 +163,9 @@ CREATE INDEX %[1]s_search_idx ON %[1]s USING GIN (search);`,
 		IsPartitioned: false,
 	},
 	ConsensusKey: {
-		Name:     ConsensusKey,
-		ViewName: "consensus",
+		Name:       ConsensusKey,
+		ViewName:   "consensus",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 	ticker                   CHARACTER VARYING(10) NOT NULL,
 	composite_figi           CHARACTER(12)         NOT NULL,
@@ -173,8 +188,9 @@ CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date);`,
 		IsPartitioned: true,
 	},
 	CustomKey: {
-		Name:     CustomKey,
-		ViewName: "custom",
+		Name:       CustomKey,
+		ViewName:   "custom",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 	ticker         CHARACTER VARYING(10) NOT NULL,
 	composite_figi CHARACTER(12)         NOT NULL,
@@ -190,8 +206,9 @@ CREATE INDEX %[1]s_key_ticker_event_date_idx ON %[1]s(key, ticker, event_date DE
 		IsPartitioned: false,
 	},
 	EconomicIndicatorKey: {
-		Name:     EconomicIndicatorKey,
-		ViewName: "economic_indicators",
+		Name:       EconomicIndicatorKey,
+		ViewName:   "economic_indicators",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 			series     TEXT NOT NULL,
 			event_date DATE NOT NULL,
@@ -203,8 +220,9 @@ CREATE INDEX %[1]s_key_ticker_event_date_idx ON %[1]s(key, ticker, event_date DE
 		IsPartitioned: false,
 	},
 	EODKey: {
-		Name:     EODKey,
-		ViewName: "eod",
+		Name:       EODKey,
+		ViewName:   "eod",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 ticker         CHARACTER VARYING(10) NOT NULL,
 composite_figi CHARACTER(12)         NOT NULL,
@@ -233,8 +251,9 @@ EXECUTE PROCEDURE adj_close_default();`,
 		IsPartitioned: true,
 	},
 	EstimateKey: {
-		Name:     EstimateKey,
-		ViewName: "estimates",
+		Name:       EstimateKey,
+		ViewName:   "estimates",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 	ticker         CHARACTER VARYING(10) NOT NULL,
 	composite_figi CHARACTER(12)         NOT NULL,
@@ -255,8 +274,9 @@ CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, series);`,
 		IsPartitioned: true,
 	},
 	IndexSnapshotKey: {
-		Name:     IndexSnapshotKey,
-		ViewName: "indices_snapshot",
+		Name:       IndexSnapshotKey,
+		ViewName:   "indices_snapshot",
+		DateColumn: "snapshot_date",
 		Schema: `CREATE TABLE %[1]s (
     index_ticker   TEXT   NOT NULL,
     snapshot_date  DATE   NOT NULL,
@@ -270,8 +290,9 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, snapshot_date);`,
 		IsPartitioned: false,
 	},
 	IndexChangelogKey: {
-		Name:     IndexChangelogKey,
-		ViewName: "indices_changelog",
+		Name:       IndexChangelogKey,
+		ViewName:   "indices_changelog",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
     composite_figi CHARACTER(12)         NOT NULL,
     ticker         CHARACTER VARYING(10) NOT NULL,
@@ -288,8 +309,9 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
 		IsPartitioned: false,
 	},
 	FundamentalsKey: {
-		Name:     FundamentalsKey,
-		ViewName: "fundamentals",
+		Name:       FundamentalsKey,
+		ViewName:   "fundamentals",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 	event_date DATE,
 	ticker TEXT,
@@ -407,8 +429,9 @@ CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date, dimension);`,
 		IsPartitioned: false,
 	},
 	MarketHolidaysKey: {
-		Name:     MarketHolidaysKey,
-		ViewName: "market_holidays",
+		Name:       MarketHolidaysKey,
+		ViewName:   "market_holidays",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 holiday TEXT NOT NULL,
 event_date DATE NOT NULL,
@@ -422,8 +445,9 @@ PRIMARY KEY (event_date, market)
 		IsPartitioned: false,
 	},
 	MetricKey: {
-		Name:     MetricKey,
-		ViewName: "metrics",
+		Name:       MetricKey,
+		ViewName:   "metrics",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 ticker         CHARACTER VARYING(10) NOT NULL,
 composite_figi CHARACTER(12)         NOT NULL,
@@ -456,8 +480,9 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 		IsPartitioned: true,
 	},
 	QuoteKey: {
-		Name:     QuoteKey,
-		ViewName: "quotes",
+		Name:       QuoteKey,
+		ViewName:   "quotes",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 ticker         CHARACTER VARYING(10) NOT NULL,
 composite_figi CHARACTER(12)         NOT NULL,
@@ -477,8 +502,9 @@ CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
 		PartitionInterval: PartitionIntervalMonthly,
 	},
 	RatingKey: {
-		Name:     RatingKey,
-		ViewName: "ratings",
+		Name:       RatingKey,
+		ViewName:   "ratings",
+		DateColumn: "event_date",
 		Schema: `CREATE TABLE %[1]s (
 	ticker         CHARACTER VARYING(10) NOT NULL,
 	composite_figi CHARACTER(12)         NOT NULL,
