@@ -169,8 +169,8 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	}
 
 	// Start Playwright
-	page, browserContext, browser, pw := playwright_helpers.StartPlaywright(viper.GetBool("playwright.headless"))
-	defer playwright_helpers.StopPlaywright(page, browserContext, browser, pw)
+	page, browserContext, browser, pw := playwright_helpers.StartPlaywright(ctx, viper.GetBool("playwright.headless"))
+	defer playwright_helpers.StopPlaywright(ctx, page, browserContext, browser, pw)
 
 	// Navigate to the Nasdaq NDX-100 page
 	logger.Info().Str("URL", NASDAQ_NDX_URL).Msg("navigating to Nasdaq NDX-100 page")

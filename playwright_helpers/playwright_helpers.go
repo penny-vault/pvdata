@@ -15,11 +15,12 @@
 package playwright_helpers
 
 import (
+	"context"
 	_ "embed"
 	"strings"
 
 	"github.com/playwright-community/playwright-go"
-	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 )
 
@@ -31,44 +32,48 @@ import (
 var stealthJS string
 
 // StealthPage creates a new playwright page with stealth js loaded to prevent bot detection
-func StealthPage(context *playwright.BrowserContext) playwright.Page {
-	page, err := (*context).NewPage()
+func StealthPage(ctx context.Context, browserContext *playwright.BrowserContext) playwright.Page {
+	logger := zerolog.Ctx(ctx)
+
+	page, err := (*browserContext).NewPage()
 	if err != nil {
-		log.Error().Err(err).Msg("could not create page")
+		logger.Error().Err(err).Msg("could not create page")
 	}
 
 	if err = page.AddInitScript(playwright.Script{
 		Content: playwright.String(stealthJS),
 	}); err != nil {
-		log.Error().Err(err).Msg("could not load stealth mode")
+		logger.Error().Err(err).Msg("could not load stealth mode")
 	}
 
 	return page
 }
 
 // BuildUserAgent dynamically determines the user agent and removes the headless identifier
-func BuildUserAgent(browser *playwright.Browser) string {
-	context, err := (*browser).NewContext()
-	if err != nil {
-		log.Error().Err(err).Msg("could not create context for building user agent")
-	}
-	defer context.Close()
+func BuildUserAgent(ctx context.Context, browser *playwright.Browser) string {
+	logger := zerolog.Ctx(ctx)
 
-	page, err := context.NewPage()
+	browserContext, err := (*browser).NewContext()
 	if err != nil {
-		log.Error().Err(err).Msg("could not create page BuildUserAgent")
+		logger.Error().Err(err).Msg("could not create context for building user agent")
+	}
+	defer browserContext.Close()
+
+	page, err := browserContext.NewPage()
+	if err != nil {
+		logger.Error().Err(err).Msg("could not create page BuildUserAgent")
 	}
 
 	resp, err := page.Goto("https://playwright.dev", playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateNetworkidle,
 	})
 	if err != nil {
-		log.Error().Err(err).Str("Url", "https://playwright.dev").Msg("could not load page")
+		logger.Error().Err(err).Str("Url", "https://playwright.dev").Msg("could not load page")
 	}
 
 	headers, err := resp.Request().AllHeaders()
 	if err != nil {
-		log.Error().Err(err).Msg("could not load request headers")
+		logger.Error().Err(err).Msg("could not load request headers")
 	}
 
 	userAgent := headers["user-agent"]
@@ -78,47 +83,51 @@ func BuildUserAgent(browser *playwright.Browser) string {
 }
 
 // StartPlaywright starts the playwright server and browser, it then creates a new context and page with the stealth extensions loaded
-func StartPlaywright(headless bool) (page playwright.Page, context playwright.BrowserContext, browser playwright.Browser, pw *playwright.Playwright) {
+func StartPlaywright(ctx context.Context, headless bool) (page playwright.Page, browserContext playwright.BrowserContext, browser playwright.Browser, pw *playwright.Playwright) {
+	logger := zerolog.Ctx(ctx)
+
 	pw, err := playwright.Run()
 	if err != nil {
-		log.Error().Err(err).Msg("could not launch playwright")
+		logger.Error().Err(err).Msg("could not launch playwright")
 	}
 
 	browser, err = pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(headless),
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("could not launch Chromium")
+		logger.Error().Err(err).Msg("could not launch Chromium")
 	}
 
-	log.Info().Bool("Headless", headless).Str("ExecutablePath", pw.Chromium.ExecutablePath()).Str("BrowserVersion", browser.Version()).Msg("starting playwright")
+	logger.Info().Bool("Headless", headless).Str("ExecutablePath", pw.Chromium.ExecutablePath()).Str("BrowserVersion", browser.Version()).Msg("starting playwright")
 
 	// calculate user-agent
 	userAgent := viper.GetString("user_agent")
 	if userAgent == "" {
-		userAgent = BuildUserAgent(&browser)
+		userAgent = BuildUserAgent(ctx, &browser)
 	}
 
-	log.Info().Str("UserAgent", userAgent).Msg("using user-agent")
+	logger.Info().Str("UserAgent", userAgent).Msg("using user-agent")
 
 	// create context
-	context, err = browser.NewContext(playwright.BrowserNewContextOptions{
+	browserContext, err = browser.NewContext(playwright.BrowserNewContextOptions{
 		UserAgent: playwright.String(userAgent),
 	})
 	if err != nil {
-		log.Error().Msg("could not create browser context")
+		logger.Error().Msg("could not create browser context")
 	}
 
 	// get a page
-	page = StealthPage(&context)
+	page = StealthPage(ctx, &browserContext)
 
 	// block trackers
-	BlockTrackers(page)
+	BlockTrackers(ctx, page)
 
 	return
 }
 
-func BlockTrackers(page playwright.Page) {
+func BlockTrackers(ctx context.Context, page playwright.Page) {
+	logger := zerolog.Ctx(ctx)
+
 	// block a variety of domains that contain trackers and ads
 	err := page.Route("**/*", func(route playwright.Route) {
 		request := route.Request()
@@ -149,7 +158,7 @@ func BlockTrackers(page playwright.Page) {
 			strings.Contains(request.URL(), "eyeota.net") {
 			err := route.Abort("failed")
 			if err != nil {
-				log.Error().Err(err).Msg("failed blocking route")
+				logger.Error().Err(err).Msg("failed blocking route")
 			}
 
 			return
@@ -159,30 +168,32 @@ func BlockTrackers(page playwright.Page) {
 			if request.ResourceType() == "image" {
 				err := route.Abort("failed")
 				if err != nil {
-					log.Error().Err(err).Msg("failed blocking image")
+					logger.Error().Err(err).Msg("failed blocking image")
 				}
 			}
 		*/
 
 		if err := route.Continue(); err != nil {
-			log.Error().Err(err).Msg("failed continueing route")
+			logger.Error().Err(err).Msg("failed continueing route")
 		}
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("page route errored")
+		logger.Error().Err(err).Msg("page route errored")
 	}
 }
 
-func StopPlaywright(page playwright.Page, context playwright.BrowserContext, browser playwright.Browser, pw *playwright.Playwright) {
-	log.Info().Msg("closing browser")
+func StopPlaywright(ctx context.Context, page playwright.Page, browserContext playwright.BrowserContext, browser playwright.Browser, pw *playwright.Playwright) {
+	logger := zerolog.Ctx(ctx)
+
+	logger.Info().Msg("closing browser")
 
 	if err := browser.Close(); err != nil {
-		log.Error().Err(err).Msg("error encountered when closing browser")
+		logger.Error().Err(err).Msg("error encountered when closing browser")
 	}
 
-	log.Info().Msg("stopping playwright")
+	logger.Info().Msg("stopping playwright")
 
 	if err := pw.Stop(); err != nil {
-		log.Error().Err(err).Msg("error encountered when stopping playwright")
+		logger.Error().Err(err).Msg("error encountered when stopping playwright")
 	}
 }

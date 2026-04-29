@@ -18,6 +18,7 @@
 package nasdaq
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -30,9 +31,10 @@ import (
 
 var _ = Describe("Nasdaq Integration", func() {
 	It("should scrape NDX-100 constituents from Nasdaq website", func() {
+		ctx := context.Background()
 		// Nasdaq requires non-headless mode to avoid bot detection
-		page, ctx, browser, pw := playwright_helpers.StartPlaywright(false)
-		defer playwright_helpers.StopPlaywright(page, ctx, browser, pw)
+		page, browserContext, browser, pw := playwright_helpers.StartPlaywright(ctx, false)
+		defer playwright_helpers.StopPlaywright(ctx, page, browserContext, browser, pw)
 
 		GinkgoWriter.Println("Navigating to Nasdaq NDX-100 page")
 

@@ -30,7 +30,6 @@ import (
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/playwright-community/playwright-go"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 	"github.com/xitongsys/parquet-go-source/local"
 	"github.com/xitongsys/parquet-go/parquet"
@@ -97,7 +96,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 		exitNotification <- runSummary
 	}()
 
-	screenerData, outputFilename, err := downloadZacksScreenerData(subscription)
+	screenerData, outputFilename, err := downloadZacksScreenerData(ctx, subscription)
 	if err != nil {
 		logger.Error().Err(err).Msg("downloading zacks screen data failed")
 
@@ -122,8 +121,8 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 		return
 	}
 
-	ratings := loadZacksRatings(screenerData, dateStr)
-	log.Info().Int("NumRatings", len(ratings)).Msg("loaded ratings")
+	ratings := loadZacksRatings(ctx, screenerData, dateStr)
+	logger.Info().Int("NumRatings", len(ratings)).Msg("loaded ratings")
 
 	if len(ratings) == 0 {
 		logger.Error().Msg("no ratings returned")
@@ -138,7 +137,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	// enrich with Figi data
 	conn, err := subscription.Library.Pool.Acquire(ctx)
 	if err != nil {
-		log.Panic().Msg("could not acquire database connection")
+		logger.Panic().Msg("could not acquire database connection")
 	}
 
 	defer conn.Release()
@@ -189,9 +188,9 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 			suggestions := provider.SuggestMatch(input, candidates)
 			if len(suggestions) > 0 {
-				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Zacks universe; did you mean one of these?")
+				logger.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Zacks universe; did you mean one of these?")
 			} else {
-				log.Error().Str("input", input).Msg("security not found in Zacks universe")
+				logger.Error().Str("input", input).Msg("security not found in Zacks universe")
 			}
 
 			runSummary.Status = data.RunFailed
@@ -201,7 +200,7 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 
 		figiMap = filtered
 
-		log.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
+		logger.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
 	}
 
 	enriched := make([]*ZacksRecord, 0, len(ratings))
@@ -216,14 +215,14 @@ func downloadZacksData(ctx context.Context, subscription *library.Subscription, 
 	// Save data as parquet to a temporary directory
 	tmpdir, err := os.MkdirTemp(os.TempDir(), "import-zacks")
 	if err != nil {
-		log.Error().Err(err).Msg("could not create tempdir")
+		logger.Error().Err(err).Msg("could not create tempdir")
 	}
 
 	dateStr = strings.ReplaceAll(dateStr, "-", "")
 	parquetFn := fmt.Sprintf("%s/zacks-%s.parquet", tmpdir, dateStr)
-	log.Info().Str("FileName", parquetFn).Msg("writing zacks ratings data to parquet")
+	logger.Info().Str("FileName", parquetFn).Msg("writing zacks ratings data to parquet")
 
-	if err := zacksSaveToParquet(ratings, parquetFn); err != nil {
+	if err := zacksSaveToParquet(ctx, ratings, parquetFn); err != nil {
 		logger.Error().Err(err).Msg("failed writing parquet file")
 	}
 
@@ -583,20 +582,21 @@ const (
 	ZACKS_STOCK_SCREENER_URL string = `https://www.zacks.com/screening/stock-screener`
 )
 
-func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
+func loadZacksRatings(ctx context.Context, ratingsData []byte, dateStr string) []*ZacksRecord {
+	logger := zerolog.Ctx(ctx)
 	records := []*ZacksRecord{}
 
 	stringData := string(ratingsData[:])
 
 	stringData = strings.ReplaceAll(stringData, `"NA"`, `"0"`)
 	if err := gocsv.UnmarshalString(stringData, &records); err != nil {
-		log.Error().Err(err).Msg("failed to unmarshal byte data")
+		logger.Error().Err(err).Msg("failed to unmarshal byte data")
 		return make([]*ZacksRecord, 0)
 	}
 
 	date, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
-		log.Error().Err(err).Str("DateStr", dateStr).Msg("cannot parse dateStr")
+		logger.Error().Err(err).Str("DateStr", dateStr).Msg("cannot parse dateStr")
 	}
 
 	// cleanup records
@@ -613,7 +613,7 @@ func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
 			r.LastReportedFiscalYr = dt
 		} else {
 			if r.LastReportedFiscalYrStr != "" {
-				log.Warn().Str("Ticker", r.Ticker).Str("InputString", r.LastReportedFiscalYrStr).Msg("could not parse last reported fiscal year")
+				logger.Warn().Str("Ticker", r.Ticker).Str("InputString", r.LastReportedFiscalYrStr).Msg("could not parse last reported fiscal year")
 			}
 		}
 
@@ -623,7 +623,7 @@ func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
 			r.LastReportedQtrDate = dt
 		} else {
 			if r.LastReportedQtrDateStr != "" {
-				log.Warn().Str("Ticker", r.Ticker).Str("InputString", r.LastReportedQtrDateStr).Msg("could not parse last reported quarter date")
+				logger.Warn().Str("Ticker", r.Ticker).Str("InputString", r.LastReportedQtrDateStr).Msg("could not parse last reported quarter date")
 			}
 		}
 
@@ -633,7 +633,7 @@ func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
 			r.LastEpsReportDate = dt
 		} else {
 			if r.LastEpsReportDateStr != "" {
-				log.Warn().Str("Ticker", r.Ticker).Str("InputString", r.LastEpsReportDateStr).Msg("could not parse last eps report date")
+				logger.Warn().Str("Ticker", r.Ticker).Str("InputString", r.LastEpsReportDateStr).Msg("could not parse last eps report date")
 			}
 		}
 
@@ -643,7 +643,7 @@ func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
 			r.NextEpsReportDate = dt
 		} else {
 			if r.NextEpsReportDateStr != "" {
-				log.Warn().Str("Ticker", r.Ticker).Str("InputString", r.NextEpsReportDateStr).Msg("could not parse next eps report date")
+				logger.Warn().Str("Ticker", r.Ticker).Str("InputString", r.NextEpsReportDateStr).Msg("could not parse next eps report date")
 			}
 		}
 	}
@@ -653,56 +653,58 @@ func loadZacksRatings(ratingsData []byte, dateStr string) []*ZacksRecord {
 
 // Download authenticates with the zacks webpage and downloads the results of the stock screen
 // it returns the downloaded bytes, filename, and any errors that occur
-func downloadZacksScreenerData(subscription *library.Subscription) (fileData []byte, outputFilename string, err error) {
-	page, context, browser, pw := playwright_helpers.StartPlaywright(viper.GetBool("playwright.headless"))
+func downloadZacksScreenerData(ctx context.Context, subscription *library.Subscription) (fileData []byte, outputFilename string, err error) {
+	logger := zerolog.Ctx(ctx)
 
-	zacksEnsureLoggedIn(page, subscription.Config["username"], subscription.Config["password"])
+	page, browserContext, browser, pw := playwright_helpers.StartPlaywright(ctx, viper.GetBool("playwright.headless"))
 
-	log.Info().Msg("Load stock screener page")
+	zacksEnsureLoggedIn(ctx, page, subscription.Config["username"], subscription.Config["password"])
+
+	logger.Info().Msg("Load stock screener page")
 
 	if _, err = page.Goto(ZACKS_STOCK_SCREENER_URL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateNetworkidle,
 	}); err != nil {
-		log.Error().Err(err).Msg("could not load stock screener page")
+		logger.Error().Err(err).Msg("could not load stock screener page")
 		return
 	}
 
 	frame := page.FrameLocator("#screenerContent")
 
-	log.Info().Msg("navigate to saved screens tab")
+	logger.Info().Msg("navigate to saved screens tab")
 
 	if err = frame.Locator("#my-screen-tab").Click(); err != nil {
-		log.Error().Err(err).Msg("click tab button failed")
+		logger.Error().Err(err).Msg("click tab button failed")
 		return
 	}
 
-	log.Info().Msg("run the saved stock screen")
+	logger.Info().Msg("run the saved stock screen")
 
 	// navigate to our saved screen
 
-	log.Info().Msg("clicking run button")
+	logger.Info().Msg("clicking run button")
 
 	if err = frame.Locator("#btn_run_137005").Click(); err != nil {
-		log.Error().Err(err).Msg("click run button failed")
+		logger.Error().Err(err).Msg("click run button failed")
 		return
 	}
 
-	log.Info().Msg("button clicked")
+	logger.Info().Msg("button clicked")
 
 	// wait for the screen to finish running
 	if err = frame.Locator("#screener_table_wrapper > div.dt-buttons > a.dt-button.buttons-csv.buttons-html5").WaitFor(); err != nil {
-		log.Error().Err(err).Msg("wait for 'csv' download selector failed")
+		logger.Error().Err(err).Msg("wait for 'csv' download selector failed")
 		return
 	}
 
 	zacksPdfFn := viper.GetString("zacks.pdf")
 	if zacksPdfFn != "" {
-		log.Info().Str("fn", zacksPdfFn).Msg("saving PDF")
+		logger.Info().Str("fn", zacksPdfFn).Msg("saving PDF")
 
 		if _, err = page.PDF(playwright.PagePdfOptions{
 			Path: playwright.String(zacksPdfFn),
 		}); err != nil {
-			log.Error().Err(err).Msg("could not save page to PDF")
+			logger.Error().Err(err).Msg("could not save page to PDF")
 		}
 	}
 
@@ -710,81 +712,85 @@ func downloadZacksScreenerData(subscription *library.Subscription) (fileData []b
 	if download, err = page.ExpectDownload(func() error {
 		return frame.Locator("#screener_table_wrapper > div.dt-buttons > a.dt-button.buttons-csv.buttons-html5").Click()
 	}); err != nil {
-		log.Error().Err(err).Msg("download failed")
+		logger.Error().Err(err).Msg("download failed")
 	}
 
 	var path string
 	if path, err = download.Path(); err != nil {
-		log.Error().Err(err).Msg("download failed")
+		logger.Error().Err(err).Msg("download failed")
 	} else {
 		outputFilename = download.SuggestedFilename()
 
 		fileData, err = os.ReadFile(path)
 		if err != nil {
-			log.Error().Err(err).Msg("reading data failed")
+			logger.Error().Err(err).Msg("reading data failed")
 			return
 		}
 	}
 
-	playwright_helpers.StopPlaywright(page, context, browser, pw)
+	playwright_helpers.StopPlaywright(ctx, page, browserContext, browser, pw)
 
 	return
 }
 
-func zacksEnsureLoggedIn(page playwright.Page, username, password string) {
+func zacksEnsureLoggedIn(ctx context.Context, page playwright.Page, username, password string) {
+	logger := zerolog.Ctx(ctx)
+
 	if _, err := page.Goto(ZACKS_HOMEPAGE_URL, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateNetworkidle,
 		Timeout:   playwright.Float(10000),
 	}); err != nil {
-		log.Error().Err(err).Msg("waiting for network idle on home page timed out")
+		logger.Error().Err(err).Msg("waiting for network idle on home page timed out")
 	}
 
 	locator := page.Locator("#user_menu > li.welcome_usn")
 	if visible, err := locator.IsVisible(); visible {
 		// already logged in
-		log.Info().Msg("user is already logged in")
+		logger.Info().Msg("user is already logged in")
 		return
 	} else if err != nil {
-		log.Error().Err(err).Msg("encountered error when checking if user logged in")
+		logger.Error().Err(err).Msg("encountered error when checking if user logged in")
 	}
 
-	log.Info().Msg("need to log user in")
+	logger.Info().Msg("need to log user in")
 
 	// load the login page
 	if _, err := page.Goto(ZACKS_LOGIN_URL); err != nil {
-		log.Error().Err(err).Msg("could not load login page")
+		logger.Error().Err(err).Msg("could not load login page")
 		return
 	}
 
 	if err := page.Locator("#login input[name=username]").Fill(username); err != nil {
-		log.Error().Err(err).Msg("could not fill username")
+		logger.Error().Err(err).Msg("could not fill username")
 		return
 	}
 
 	if err := page.Locator("#login input[name=password]").Fill(password); err != nil {
-		log.Error().Err(err).Msg("could not fill password")
+		logger.Error().Err(err).Msg("could not fill password")
 		return
 	}
 
 	if err := page.Locator("#login input[value=Login]").Click(); err != nil {
-		log.Error().Err(err).Msg("could not click login button")
+		logger.Error().Err(err).Msg("could not click login button")
 		return
 	}
 }
 
-func zacksSaveToParquet(records []*ZacksRecord, fn string) error {
+func zacksSaveToParquet(ctx context.Context, records []*ZacksRecord, fn string) error {
+	logger := zerolog.Ctx(ctx)
+
 	var err error
 
 	fh, err := local.NewLocalFileWriter(fn)
 	if err != nil {
-		log.Error().Err(err).Str("FileName", fn).Msg("cannot create local file")
+		logger.Error().Err(err).Str("FileName", fn).Msg("cannot create local file")
 		return err
 	}
 	defer fh.Close()
 
 	pw, err := writer.NewParquetWriter(fh, new(ZacksRecord), 4)
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Str("OriginalError", err.Error()).
 			Msg("Parquet write failed")
 
@@ -797,7 +803,7 @@ func zacksSaveToParquet(records []*ZacksRecord, fn string) error {
 
 	for _, r := range records {
 		if err = pw.Write(r); err != nil {
-			log.Error().
+			logger.Error().
 				Str("OriginalError", err.Error()).
 				Str("EventDate", r.EventDateStr).Str("Ticker", r.Ticker).
 				Str("CompositeFigi", r.CompositeFigi).
@@ -806,11 +812,11 @@ func zacksSaveToParquet(records []*ZacksRecord, fn string) error {
 	}
 
 	if err = pw.WriteStop(); err != nil {
-		log.Error().Err(err).Msg("Parquet write failed")
+		logger.Error().Err(err).Msg("Parquet write failed")
 		return err
 	}
 
-	log.Info().Int("NumRecords", len(records)).Msg("Parquet write finished")
+	logger.Info().Int("NumRecords", len(records)).Msg("Parquet write finished")
 
 	return nil
 }
