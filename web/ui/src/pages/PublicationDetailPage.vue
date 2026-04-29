@@ -18,6 +18,7 @@ import {
 const route = useRoute()
 const router = useRouter()
 const id = computed(() => route.params.id as string)
+const isAssetPublication = computed(() => publication.value?.data_type_key === 'asset-description')
 
 const publication = ref<any>(null)
 const loading = ref(true)
@@ -256,7 +257,7 @@ onMounted(load)
 
       <Message v-if="error" severity="error" :closable="true" style="margin-bottom: 1rem" @close="error = ''">{{ error }}</Message>
 
-      <Message v-for="(overlap, i) in (publication.overlaps || [])" :key="i" severity="warn" style="margin-bottom: 0.5rem">
+      <Message v-for="(overlap, i) in (isAssetPublication ? [] : (publication.overlaps || []))" :key="i" severity="warn" style="margin-bottom: 0.5rem">
         {{ overlap }}
       </Message>
 
@@ -273,20 +274,33 @@ onMounted(load)
         @row-reorder="onRowReorder"
       >
         <Column rowReorder style="width: 3rem" />
+        <Column
+          v-if="isAssetPublication"
+          header="Priority"
+          style="width: 6rem"
+        >
+          <template #body="{ index }">{{ index + 1 }}</template>
+        </Column>
         <Column field="table_name" header="Source Table" />
         <Column field="subscription_name" header="Subscription" />
         <Column header="Provider / Dataset">
           <template #body="{ data }">{{ data.provider }} / {{ data.dataset }}</template>
         </Column>
-        <Column field="from_date" header="From">
+        <Column v-if="!isAssetPublication" field="from_date" header="From">
           <template #body="{ data }">{{ data.from_date || '' }}</template>
         </Column>
-        <Column field="until_date" header="Until">
+        <Column v-if="!isAssetPublication" field="until_date" header="Until">
           <template #body="{ data }">{{ data.until_date || '' }}</template>
         </Column>
         <Column header="Actions" style="width: 120px">
           <template #body="{ index }">
-            <Button icon="pi pi-pencil" text size="small" @click="openEditDates(index)" />
+            <Button
+              v-if="!isAssetPublication"
+              icon="pi pi-pencil"
+              text
+              size="small"
+              @click="openEditDates(index)"
+            />
             <Button icon="pi pi-trash" text size="small" severity="danger" @click="openRemoveSource(index)" />
           </template>
         </Column>
@@ -314,7 +328,7 @@ onMounted(load)
       </Dialog>
 
       <!-- Edit dates dialog -->
-      <Dialog v-model:visible="showEditDates" header="Edit Date Bounds" :modal="true" :style="{ width: '25rem' }">
+      <Dialog v-if="!isAssetPublication" v-model:visible="showEditDates" header="Edit Date Bounds" :modal="true" :style="{ width: '25rem' }">
         <div v-if="editingSourceIdx >= 0" style="margin-bottom: 1rem; opacity: 0.7">
           {{ publication.sources[editingSourceIdx]?.table_name }}
         </div>
