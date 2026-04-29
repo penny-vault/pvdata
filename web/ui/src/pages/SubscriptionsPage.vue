@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getSubscriptions } from '@/lib/api'
 import RevoGrid, { VGridVueTemplate } from '@revolist/vue3-datagrid'
@@ -8,9 +8,12 @@ import InputText from 'primevue/inputtext'
 import ProgressSpinner from 'primevue/progressspinner'
 import Message from 'primevue/message'
 import StatusCell from '@/components/StatusCell.vue'
+import RunStatusCell from '@/components/RunStatusCell.vue'
 import ProviderCell from '@/components/ProviderCell.vue'
 import DatasetCell from '@/components/DatasetCell.vue'
 import { displayTz, formatTimestamp } from '@/lib/timezone'
+
+const POLL_INTERVAL_MS = 10_000
 
 const router = useRouter()
 const subscriptions = ref<any[]>([])
@@ -23,6 +26,7 @@ const gridColumns = [
   { prop: 'provider', name: 'Provider', sortable: true, size: 130, cellTemplate: VGridVueTemplate(ProviderCell) },
   { prop: 'dataset', name: 'Dataset', sortable: true, size: 200, cellTemplate: VGridVueTemplate(DatasetCell) },
   { prop: 'status', name: 'Status', sortable: true, size: 110, cellTemplate: VGridVueTemplate(StatusCell) },
+  { prop: 'last_run_status', name: 'Last Run', sortable: true, size: 120, cellTemplate: VGridVueTemplate(RunStatusCell) },
   { prop: 'total_records', name: 'Total Records', sortable: true, size: 180 },
   { prop: 'last_run', name: 'Last Import', sortable: true, size: 180 },
   { prop: 'records_last', name: 'Records Last', sortable: true, size: 150 },
@@ -43,6 +47,7 @@ const allRows = computed(() => {
     provider: sub.provider,
     dataset: sub.dataset,
     status: sub.active ? 'Active' : 'Inactive',
+    last_run_status: sub.last_run_status || '',
     total_records: formatNumber(sub.total_records),
     last_run: formatTimestamp(sub.last_run),
     records_last: formatNumber(sub.num_records_last_import),
@@ -86,13 +91,27 @@ function onCellFocus(e: CustomEvent) {
   }
 }
 
-onMounted(async () => {
+async function refresh() {
   try {
     subscriptions.value = await getSubscriptions()
+    error.value = ''
   } catch (e: any) {
     error.value = e.message || 'Failed to load subscriptions'
-  } finally {
-    loading.value = false
+  }
+}
+
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+onMounted(async () => {
+  await refresh()
+  loading.value = false
+  pollTimer = setInterval(refresh, POLL_INTERVAL_MS)
+})
+
+onUnmounted(() => {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
   }
 })
 </script>

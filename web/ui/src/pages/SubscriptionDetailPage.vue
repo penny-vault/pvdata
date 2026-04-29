@@ -29,6 +29,7 @@ import DataBrowser from '@/components/DataBrowser.vue'
 import SubscriptionForm from '@/components/SubscriptionForm.vue'
 import LogViewer from '@/components/LogViewer.vue'
 import TimeDisplay from '@/components/TimeDisplay.vue'
+import RunStatusCell from '@/components/RunStatusCell.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -510,13 +511,7 @@ onUnmounted(() => {
                 </Column>
                 <Column field="status" header="Status" sortable>
                   <template #body="{ data }">
-                    <Tag :value="data.status"
-                         :severity="data.status === 'success' ? 'success' : data.status === 'failed' ? 'danger' : data.status === 'running' ? 'warning' : 'secondary'">
-                      <template #default>
-                        <i v-if="data.status === 'running'" class="pi pi-spin pi-spinner" style="margin-right: 0.4rem; font-size: 11px" />
-                        {{ data.status }}
-                      </template>
-                    </Tag>
+                    <RunStatusCell :status="data.status" />
                   </template>
                 </Column>
                 <Column field="records" header="Records" sortable />

@@ -341,7 +341,10 @@ func (myLibrary *Library) Subscriptions(ctx context.Context) ([]*Subscription, e
 num_records_last_import, total_securities, num_securities_last_import,
 coalesce(first_obs_date, '0001-01-01'::timestamp) as first_obs_date,
 coalesce(last_obs_date, '0001-01-01'::timestamp) as last_obs_date, schedule, health_check_id,
-coalesce(last_run, '0001-01-01'::timestamp) as last_run, active, schema_version, created_on,
+coalesce(last_run, '0001-01-01'::timestamp) as last_run,
+coalesce((SELECT status FROM run_history rh WHERE rh.subscription_id = subscriptions.id
+          ORDER BY start_time DESC LIMIT 1), '') as last_run_status,
+active, schema_version, created_on,
 created_by FROM subscriptions`)
 	for _, sub := range subscriptions {
 		sub.Library = myLibrary
@@ -394,7 +397,10 @@ func (myLibrary *Library) SubscriptionFromID(ctx context.Context, id string) (*S
 	data_tables, data_types, total_records, num_records_last_import, total_securities,
 	num_securities_last_import, coalesce(first_obs_date, '0001-01-01'::timestamp) as first_obs_date,
 	coalesce(last_obs_date, '0001-01-01'::timestamp) as last_obs_date,
-	schedule, health_check_id, coalesce(last_run, '0001-01-01'::timestamp) as last_run, active,
+	schedule, health_check_id, coalesce(last_run, '0001-01-01'::timestamp) as last_run,
+	coalesce((SELECT status FROM run_history rh WHERE rh.subscription_id = subscriptions.id
+	          ORDER BY start_time DESC LIMIT 1), '') as last_run_status,
+	active,
 	schema_version, created_on, created_by FROM subscriptions WHERE id::text like '%s%%' LIMIT 1`, id))
 	if err != nil {
 		return nil, err
@@ -415,7 +421,10 @@ func (myLibrary *Library) SubscriptionFromID(ctx context.Context, id string) (*S
 	data_tables, data_types, total_records, num_records_last_import, total_securities,
 	num_securities_last_import, coalesce(first_obs_date, '0001-01-01'::timestamp) as first_obs_date,
 	coalesce(last_obs_date, '0001-01-01'::timestamp) as last_obs_date,
-	schedule, health_check_id, coalesce(last_run, '0001-01-01'::timestamp) as last_run, active,
+	schedule, health_check_id, coalesce(last_run, '0001-01-01'::timestamp) as last_run,
+	coalesce((SELECT status FROM run_history rh WHERE rh.subscription_id = subscriptions.id
+	          ORDER BY start_time DESC LIMIT 1), '') as last_run_status,
+	active,
 	schema_version, created_on, created_by FROM subscriptions WHERE lower(name) = lower($1) LIMIT 1`, id)
 	if err != nil {
 		return nil, err

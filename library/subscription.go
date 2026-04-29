@@ -57,6 +57,7 @@ type Subscription struct {
 	NextRun       time.Time `json:"next_run"`
 	NextRunHuman  string    `json:"next_run_human"`
 	LastRun       time.Time `json:"last_run"`
+	LastRunStatus string    `json:"last_run_status" db:"last_run_status"`
 	Active        bool      `json:"active"`
 	SchemaVersion int       `json:"schema_version"`
 
