@@ -15,7 +15,10 @@
 package web
 
 import (
+	"fmt"
+
 	"github.com/gofiber/fiber/v2"
+	"github.com/gosimple/slug"
 	"github.com/penny-vault/pvdata/healthcheck"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
@@ -29,12 +32,13 @@ type HttpError struct {
 
 // CreateSubscriptionRequest is the JSON body for creating a new subscription.
 type CreateSubscriptionRequest struct {
-	Provider      string            `json:"provider"`
-	Dataset       string            `json:"dataset"`
-	Config        map[string]string `json:"config"`
-	Schedule      string            `json:"schedule"`
-	DataTypes     []string          `json:"data_types"`
-	HealthCheckID string            `json:"health_check_id"`
+	Provider          string            `json:"provider"`
+	Dataset           string            `json:"dataset"`
+	Config            map[string]string `json:"config"`
+	Schedule          string            `json:"schedule"`
+	DataTypes         []string          `json:"data_types"`
+	HealthCheckID     string            `json:"health_check_id"`
+	CreateHealthcheck bool              `json:"create_healthcheck"`
 }
 
 // UpdateSubscriptionRequest is the JSON body for updating an existing subscription.
@@ -130,7 +134,28 @@ func CreateSubscription(c *fiber.Ctx) error {
 		sub.Schedule = req.Schedule
 	}
 
-	if req.HealthCheckID != "" {
+	switch {
+	case req.CreateHealthcheck:
+		idShort := sub.ID.String()[:5]
+		checkSlug := slug.Make(fmt.Sprintf("%s %s %s %s", sub.Name, sub.Provider, sub.Dataset, idShort))
+
+		checkID, err := healthcheck.Create(
+			fmt.Sprintf("%s %s (%s)", sub.Name, sub.Dataset, idShort),
+			checkSlug,
+			sub.DataTypes,
+			sub.Schedule,
+		)
+		if err != nil {
+			log.Error().Err(err).Msg("could not create healthchecks.io monitor")
+
+			return c.Status(fiber.StatusBadGateway).JSON(HttpError{
+				Code:    "502",
+				Message: "could not create healthchecks.io monitor: " + err.Error(),
+			})
+		}
+
+		sub.HealthCheckID = checkID
+	case req.HealthCheckID != "":
 		sub.HealthCheckID = req.HealthCheckID
 	}
 

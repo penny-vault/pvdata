@@ -13,6 +13,7 @@ import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
+import ToggleSwitch from 'primevue/toggleswitch'
 
 const router = useRouter()
 
@@ -26,7 +27,7 @@ const selectedProvider = ref('')
 const selectedDataset = ref('')
 const schedule = ref('0 6 * * *')
 const configEntries = ref<{ key: string; value: string }[]>([])
-const healthCheckId = ref('')
+const createHealthcheck = ref(false)
 
 const providerList = computed(() =>
   Object.entries(providers.value).map(([key, val]) => ({
@@ -88,7 +89,7 @@ async function onCreate() {
       dataset: selectedDataset.value,
       schedule: schedule.value,
       config,
-      health_check_id: healthCheckId.value || undefined,
+      create_healthcheck: createHealthcheck.value,
     })
     router.push(`/subscriptions/${result.id}`)
   } catch (e: any) {
@@ -201,8 +202,13 @@ onMounted(async () => {
               </div>
 
               <div style="margin-bottom: 1.5rem">
-                <label style="display: block; margin-bottom: 0.25rem; font-weight: 600">Health Check ID <span style="font-weight: 400; opacity: 0.5">(optional)</span></label>
-                <InputText v-model="healthCheckId" placeholder="healthchecks.io UUID" style="width: 100%; max-width: 400px" />
+                <label style="display: flex; align-items: center; gap: 0.75rem; font-weight: 600">
+                  <ToggleSwitch v-model="createHealthcheck" />
+                  Create a healthchecks.io monitor
+                </label>
+                <div style="font-size: 12px; opacity: 0.5; margin-top: 0.25rem; margin-left: 3.25rem">
+                  Auto-creates a check via the healthchecks.io API using the schedule above.
+                </div>
               </div>
 
               <div style="display: flex; justify-content: space-between; margin-top: 1.5rem">
@@ -249,10 +255,8 @@ onMounted(async () => {
                     <span style="font-weight: 600">{{ selectedDataset }}</span>
                     <span style="opacity: 0.5">Schedule</span>
                     <span><code>{{ schedule }}</code></span>
-                    <template v-if="healthCheckId">
-                      <span style="opacity: 0.5">Health Check</span>
-                      <span>{{ healthCheckId }}</span>
-                    </template>
+                    <span style="opacity: 0.5">Health Check</span>
+                    <span>{{ createHealthcheck ? 'Will be created on healthchecks.io' : 'None' }}</span>
                     <template v-for="entry in configEntries.filter(e => e.key.trim())" :key="entry.key">
                       <span style="opacity: 0.5">{{ entry.key }}</span>
                       <span>{{ entry.value || '(empty)' }}</span>
