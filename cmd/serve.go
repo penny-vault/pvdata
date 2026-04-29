@@ -82,6 +82,17 @@ The server runs until interrupted with Ctrl+C.`,
 			log.Info().Int("migrated", migrated).Int("checked", total).Msg("subscription migrations complete")
 		}
 
+		// Rebuild all published views at startup. CREATE OR REPLACE VIEW is
+		// idempotent and lets code-level changes to view-SQL generation
+		// (e.g. priority dedup on assets) take effect on first boot.
+		log.Info().Msg("rebuilding published views")
+
+		if rebuilt, total, err := myLibrary.RebuildAllPublishedViews(ctx); err != nil {
+			log.Error().Err(err).Int("rebuilt", rebuilt).Int("total", total).Msg("some published views failed to rebuild")
+		} else {
+			log.Info().Int("rebuilt", rebuilt).Int("total", total).Msg("published views rebuilt")
+		}
+
 		// Run registry shared between scheduled runs and the web SSE handlers
 		// so the UI can attach to scheduled runs in flight.
 		registry := web.NewRunRegistry()
