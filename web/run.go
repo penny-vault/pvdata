@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/healthcheck"
 	"github.com/penny-vault/pvdata/library"
@@ -134,7 +133,7 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 	wg.Add(1)
 
-	go lib.SaveObservations(saveChan, &wg, checks.NewInlineValidator(checks.InlineChecks()))
+	go lib.SaveObservations(saveChan, &wg, nil)
 
 	emitStarted(opts.Run, sub)
 

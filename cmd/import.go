@@ -6,7 +6,6 @@ import (
 	"os"
 	"sync"
 
-	"github.com/penny-vault/pvdata/checks"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
@@ -95,7 +94,7 @@ Examples:
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		go myLibrary.SaveObservations(outChan, &wg, checks.NewInlineValidator(checks.InlineChecks()))
+		go myLibrary.SaveObservations(outChan, &wg, nil)
 
 		fetchLogger := log.With().Str("SubscriptionID", sub.ID.String()).Logger()
 		fetchCtx := fetchLogger.WithContext(ctx)
