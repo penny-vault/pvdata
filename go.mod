@@ -18,7 +18,7 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.13
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
-	github.com/klauspost/compress v1.18.5
+	github.com/klauspost/compress v1.18.6
 	github.com/kothar/go-backblaze v0.0.0-20210124194846-35409b867216
 	github.com/parquet-go/parquet-go v0.29.0
 	github.com/tidwall/gjson v1.18.0
