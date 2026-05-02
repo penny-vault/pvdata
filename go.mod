@@ -103,7 +103,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
-	github.com/pelletier/go-toml/v2 v2.3.0
+	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/playwright-community/playwright-go v0.5700.1
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/zerolog v1.35.1
