@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-02
+
+### Changed
+
+- Index snapshots from iShares, Nasdaq, TradingView, and Sharadar SP500 are now taken on fixed calendar dates (January 1 for most providers, December 22 for Nasdaq's NDX-100 to land just after the December rebalance) instead of a rolling 365-day window from the last snapshot. Re-runs now converge on the same `(index_ticker, snapshot_date)` rows so upserts overwrite cleanly rather than accumulating near-duplicate snapshots whenever the cron timing shifted.
+- Index providers (iShares, Nasdaq, TradingView, Sharadar SP500, pvindex) now window-replace on re-run: prior changelog and snapshot rows for the date range being recomputed are cleared before fresh rows are emitted. Backfills and reruns over a date range now converge to the run's current view of the data, so source revisions, FIGI resolver fixes, and parser changes no longer leave orphan add/remove/weight-change events behind.
+- `db.max_conns` is now configurable (default 25) and the pool is built with explicit min/max/lifetime knobs instead of the pgx default of `max(4, NumCPU)`. All connection acquires go through a 30-second timeout helper, so a saturated pool surfaces as a quick error rather than a silent hang of the scheduler and the API.
+
+### Removed
+
+- The Nasdaq subscription's `snapshotFrequency` config option. It produced non-repeatable snapshot dates and is replaced by the fixed annual anchor described above.
+
+### Fixed
+
+- pvindex skips trading days where the daily metrics import has fewer than 500 broad-market rows, instead of computing the universe against incomplete data and emitting spurious add/remove events that flap on the next complete run.
+- Concurrent scheduled runs no longer wedge the server when the connection pool fills. Long-running provider loops (Zacks, iShares, Massive, Sharadar) release their database connection before the multi-thousand-record publish phase instead of pinning it for the whole run.
+- Sharadar fundamentals imports no longer drop most historical observations. Inline checks (e.g. `positive_shares`) were rejecting rows where fields like `shareswadil` are NULL for early periods; checks now run only via `pvdata check`, not inline during imports, TUI runs, or `pvdata serve`.
+- Zacks and Nasdaq scraper log lines now appear in the per-run log viewer. They were previously logging via the global zerolog logger without a SubscriptionID tag, so the run-log capture dropped them and they never made it to the UI's "Logs" tab.
+
 ## [0.5.0] - 2026-04-28
 
 ### Added
@@ -146,7 +165,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/penny-vault/pvdata/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/penny-vault/pvdata/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/penny-vault/pvdata/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/penny-vault/pvdata/compare/v0.4.1...v0.4.2
