@@ -99,7 +99,7 @@ The server runs until interrupted with Ctrl+C.`,
 
 		// Tee zerolog output through LogCapture so per-run logs are buffered
 		// for SSE streaming and DB persistence in addition to the console.
-		logCapture := web.NewLogCapture(registry, 0)
+		logCapture := web.NewLogCapture(registry)
 		log.Logger = log.Output(io.MultiWriter(zerolog.ConsoleWriter{Out: os.Stderr}, logCapture))
 
 		// Start the scheduler

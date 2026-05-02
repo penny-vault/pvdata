@@ -31,25 +31,21 @@ import (
 // The writer also forwards every line untouched to a passthrough writer
 // (typically the existing zerolog ConsoleWriter) so dev/console output is
 // unchanged.
+//
+// The per-run buffer is intentionally unbounded: the captured log is
+// preserved in full for diagnostic value, with retention enforced at
+// the database layer via SweepRunLogs (30 days by default).
 type LogCapture struct {
-	registry   *RunRegistry
-	mu         sync.Mutex
-	buffers    map[string]*bytes.Buffer
-	maxBufSize int
+	registry *RunRegistry
+	mu       sync.Mutex
+	buffers  map[string]*bytes.Buffer
 }
 
 // NewLogCapture creates a capture sink bound to the given registry.
-// maxBufSize caps each per-run buffer (in bytes) to keep memory bounded
-// for very long runs; 0 means use a 4 MiB default.
-func NewLogCapture(registry *RunRegistry, maxBufSize int) *LogCapture {
-	if maxBufSize <= 0 {
-		maxBufSize = 4 * 1024 * 1024
-	}
-
+func NewLogCapture(registry *RunRegistry) *LogCapture {
 	return &LogCapture{
-		registry:   registry,
-		buffers:    make(map[string]*bytes.Buffer),
-		maxBufSize: maxBufSize,
+		registry: registry,
+		buffers:  make(map[string]*bytes.Buffer),
 	}
 }
 
@@ -78,9 +74,7 @@ func (lc *LogCapture) Write(p []byte) (int, error) {
 		lc.buffers[subID] = buf
 	}
 
-	if buf.Len()+len(p) <= lc.maxBufSize {
-		buf.Write(p)
-	}
+	buf.Write(p)
 
 	return len(p), nil
 }
@@ -101,6 +95,22 @@ func (lc *LogCapture) Drain(subID string) string {
 	delete(lc.buffers, subID)
 
 	return s
+}
+
+// Snapshot returns a copy of the captured log buffer for the subscription
+// without clearing it. Use this for periodic in-flight flushes to the
+// run_history.log column so partial logs survive an abrupt process exit;
+// pair it with a final Drain at run-end.
+func (lc *LogCapture) Snapshot(subID string) string {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+
+	buf, ok := lc.buffers[subID]
+	if !ok {
+		return ""
+	}
+
+	return buf.String()
 }
 
 // extractSubscriptionID parses one zerolog JSON line for a SubscriptionID

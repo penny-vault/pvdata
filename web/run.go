@@ -43,6 +43,14 @@ const (
 // write rate regardless of throughput.
 const runProgressInterval = 10 * time.Second
 
+// runLogFlushInterval bounds how often we copy the captured log
+// buffer into run_history.log while the run is in progress. The
+// final drain at run-end always writes one more time, so this
+// interval only affects how much of the log survives an abrupt
+// process exit (panic, OOM, restart). Five seconds keeps the
+// write rate modest while preserving useful diagnostics.
+const runLogFlushInterval = 5 * time.Second
+
 // RunOptions configures a subscription run.
 type RunOptions struct {
 	// Run is the registry-managed activeRun. Required when callers want SSE
@@ -124,6 +132,41 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 			logger.Warn().Err(err).Msg("could not update run progress")
 		}
 	})
+
+	// Periodically flush the captured log buffer into run_history.log so
+	// the persisted log survives an abrupt process exit (panic, OOM,
+	// restart). The final Drain at run-end writes one more time after
+	// stopFlusher is closed, so flushes do not race with the final write.
+	stopFlusher := make(chan struct{})
+
+	var flusherDone sync.WaitGroup
+
+	if opts.LogCapture != nil && runID != "" {
+		flusherDone.Add(1)
+
+		go func() {
+			defer flusherDone.Done()
+
+			ticker := time.NewTicker(runLogFlushInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-stopFlusher:
+					return
+				case <-ticker.C:
+					snapshot := opts.LogCapture.Snapshot(sub.ID.String())
+					if snapshot == "" {
+						continue
+					}
+
+					if err := lib.UpdateRunLog(ctx, runID, snapshot); err != nil {
+						logger.Warn().Err(err).Msg("could not flush run log")
+					}
+				}
+			}
+		}()
+	}
 
 	observeChan := make(chan *data.Observation, 1000)
 	saveChan := make(chan *data.Observation, 1000)
@@ -227,8 +270,12 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 	// Drain the captured log buffer LAST so post-fetch hooks, healthcheck
 	// pings, and the final "subscription run completed" line are all
-	// included — matching what live SSE clients saw.
+	// included — matching what live SSE clients saw. Stop the periodic
+	// flusher first so its UPDATE cannot race with this final write.
 	if opts.LogCapture != nil && runID != "" {
+		close(stopFlusher)
+		flusherDone.Wait()
+
 		runLog := opts.LogCapture.Drain(sub.ID.String())
 		if runLog != "" {
 			if err := lib.UpdateRunLog(ctx, runID, runLog); err != nil {
