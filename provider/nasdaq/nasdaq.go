@@ -37,6 +37,15 @@ const NASDAQ_NDX_URL = "https://www.nasdaq.com/market-activity/quotes/nasdaq-ndx
 
 type Nasdaq struct{}
 
+// snapshotMonth and snapshotDay define the annual snapshot anchor date.
+// NDX rebalances on the third Friday of December (latest possible: Dec 21),
+// so anchoring just past that captures the post-rebalance state and keeps
+// runs reproducible regardless of cron timing.
+const (
+	snapshotMonth = time.December
+	snapshotDay   = 22
+)
+
 type nasdaqHolding struct {
 	Ticker string
 	Weight float64
@@ -47,9 +56,7 @@ func (n *Nasdaq) Name() string {
 }
 
 func (n *Nasdaq) ConfigDescription() map[string]string {
-	return map[string]string{
-		"snapshotFrequency": "How often to take snapshots: daily, weekly, monthly, quarterly (default: weekly)",
-	}
+	return map[string]string{}
 }
 
 func (n *Nasdaq) Description() string {
@@ -90,11 +97,6 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 		runSummary.NumObservations = numObs
 		exitNotification <- runSummary
 	}()
-
-	snapshotFrequency := subscription.Config["snapshotFrequency"]
-	if snapshotFrequency == "" {
-		snapshotFrequency = "weekly"
-	}
 
 	// Acquire DB connection and build figi map
 	conn, err := subscription.Library.AcquireWithTimeout(ctx)
@@ -276,8 +278,8 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	// Check if a snapshot should be taken
 	lastDate := provider.LastSnapshotDate(ctx, subscription.Library.Pool, snapshotTable, "NDX")
-	if provider.ShouldTakeSnapshot(lastDate, eventDate, snapshotFrequency) {
-		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
+	if provider.ShouldTakeAnnualSnapshot(lastDate, eventDate, snapshotMonth, snapshotDay) {
+		snapshotDate := eventDate
 
 		constituents := make([]data.IndexConstituent, 0, len(currentHoldings))
 		for ticker, member := range currentHoldings {

@@ -36,6 +36,14 @@ import (
 
 type TradingView struct{}
 
+// snapshotMonth and snapshotDay define the annual snapshot anchor date so
+// runs are reproducible: ShouldTakeAnnualSnapshot fires once per calendar
+// year on or after this date regardless of when the cron actually runs.
+const (
+	snapshotMonth = time.January
+	snapshotDay   = 1
+)
+
 type tvIndex struct {
 	Symbol   string `json:"symbol"`
 	Name     string `json:"indexName"`
@@ -428,7 +436,7 @@ func downloadSingleIndex(
 	numObs += len(added) + len(removed)
 
 	// Check if snapshot is due.
-	if provider.ShouldTakeSnapshot(memLastSnapshotDate, eventDate, "yearly") {
+	if provider.ShouldTakeAnnualSnapshot(memLastSnapshotDate, eventDate, snapshotMonth, snapshotDay) {
 		constituents := make([]data.IndexConstituent, 0, len(currentHoldings))
 		for t, member := range currentHoldings {
 			constituents = append(constituents, data.IndexConstituent{

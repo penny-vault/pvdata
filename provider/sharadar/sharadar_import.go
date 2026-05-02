@@ -978,6 +978,16 @@ func importTickersRows(ctx context.Context, sub *library.Subscription, rows <-ch
 
 const sp500IndexTicker = "SPX"
 
+// sp500SnapshotMonth and sp500SnapshotDay define the annual snapshot anchor
+// date. The yearly replay loop steps snapshotDate by exactly one year from
+// the dataset's earliest historical date, so anchoring to Jan 1 keeps the
+// emit cadence consistent with the other index providers and ensures the
+// guard is reproducible across re-runs.
+const (
+	sp500SnapshotMonth = time.January
+	sp500SnapshotDay   = 1
+)
+
 // importSP500Rows processes rows for the SP500 dataset.
 // Rows with action "current" or "historical" are grouped by date into IndexSnapshots.
 // Rows with action "added" or "removed" become IndexChange observations.
@@ -1151,7 +1161,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows <-chan
 	changeIdx := 0
 
 	// Emit the baseline snapshot first if due
-	if provider.ShouldTakeSnapshot(lastSnapshotDate, baselineDate, "yearly") {
+	if provider.ShouldTakeAnnualSnapshot(lastSnapshotDate, baselineDate, sp500SnapshotMonth, sp500SnapshotDay) {
 		constituents := make([]data.IndexConstituent, 0, len(membership))
 		for ticker, compositeFigi := range membership {
 			constituents = append(constituents, data.IndexConstituent{
@@ -1198,7 +1208,7 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows <-chan
 				changeIdx++
 			}
 
-			if provider.ShouldTakeSnapshot(lastSnapshotDate, snapshotDate, "yearly") {
+			if provider.ShouldTakeAnnualSnapshot(lastSnapshotDate, snapshotDate, sp500SnapshotMonth, sp500SnapshotDay) {
 				constituents := make([]data.IndexConstituent, 0, len(membership))
 				for ticker, compositeFigi := range membership {
 					constituents = append(constituents, data.IndexConstituent{
