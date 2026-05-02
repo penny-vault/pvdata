@@ -24,6 +24,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -61,6 +63,7 @@ func (tiingo *Tiingo) ConfigDescription() map[string]string {
 	return map[string]string{
 		"apiKey":     "Enter your tiingo API key:",
 		"rateLimit":  "What is the maximum number of requests per minute?",
+		"workers":    "How many concurrent EOD download workers to run (default 10). Total request rate is still capped by rateLimit.",
 		"assetTypes": "Comma-separated asset types to include for EOD and Stock Tickers (e.g. CS,ETF,MF). Leave blank for all.",
 	}
 }
@@ -258,68 +261,142 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 	startDate := time.Now().Add(-lookback)
 	startDateStr := startDate.Format("2006-01-02")
 
+	workerCount := defaultEODWorkers
+	if w, err := strconv.Atoi(subscription.Config["workers"]); err == nil && w > 0 {
+		workerCount = w
+	}
+
+	if workerCount > len(assets) {
+		workerCount = len(assets)
+	}
+
+	logger.Info().Int("workers", workerCount).Int("assets", len(assets)).Msg("starting tiingo EOD worker pool")
+
+	// Derive a cancellable context so any worker that exhausts the daily
+	// quota can fan out abort to its peers via cancelWorkers().
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+
+	jobCh := make(chan *data.Asset)
+
+	var (
+		wg             sync.WaitGroup
+		numObsAtomic   atomic.Int64
+		dailyLimitFlag atomic.Bool
+	)
+
+	for range workerCount {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for asset := range jobCh {
+				if err := limiter.Wait(workerCtx); err != nil {
+					return
+				}
+
+				// reformat ticker for tiingo
+				ticker := strings.ReplaceAll(asset.Ticker, "/", "-")
+				url := fmt.Sprintf("https://api.tiingo.com/tiingo/daily/%s/prices", ticker)
+
+				respContent := make([]*tiingoEod, 0)
+
+				resp, err := doWithRateLimit(workerCtx, func() (*resty.Response, error) {
+					return client.R().
+						SetContext(workerCtx).
+						SetQueryParam("startDate", startDateStr).
+						SetResult(&respContent).
+						Get(url)
+				})
+				if errors.Is(err, errDailyRateLimit) {
+					dailyLimitFlag.Store(true)
+					cancelWorkers()
+
+					return
+				}
+
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+
+					logger.Error().Err(err).Str("Ticker", ticker).Msg("resty returned an error when querying eod prices")
+
+					continue
+				}
+
+				if resp.StatusCode() >= 300 {
+					logger.Error().Int("StatusCode", resp.StatusCode()).Str("Ticker", ticker).Str("URL", resp.Request.URL).Msg("tiigno returned an invalid HTTP response")
+					continue
+				}
+
+				for _, quote := range respContent {
+					quoteDate, err := time.Parse(time.RFC3339Nano, quote.Date)
+					if err != nil {
+						logger.Error().Err(err).Str("tiingoDate", quote.Date).Msg("could not parse date from tiingo eod object")
+						continue
+					}
+
+					// set tiingo date to correct time zone and market close
+					quoteDate = time.Date(quoteDate.Year(), quoteDate.Month(), quoteDate.Day(), 16, 0, 0, 0, nyc)
+
+					eodQuote := &data.Eod{
+						Date:          quoteDate,
+						Ticker:        asset.Ticker,
+						CompositeFigi: asset.CompositeFigi,
+						Open:          quote.Open,
+						High:          quote.High,
+						Low:           quote.Low,
+						Close:         quote.Close,
+						Volume:        quote.Volume,
+						Dividend:      quote.Dividend,
+						Split:         quote.Split,
+					}
+
+					select {
+					case <-workerCtx.Done():
+						return
+					case out <- &data.Observation{
+						EodQuote:         eodQuote,
+						ObservationDate:  time.Now(),
+						SubscriptionID:   subscription.ID,
+						SubscriptionName: subscription.Name,
+					}:
+						numObsAtomic.Add(1)
+					}
+				}
+			}
+		}()
+	}
+
+	// Feed the job channel; abort feeding if the worker context is cancelled
+	// (e.g. daily quota exhausted) so workers can drain and exit promptly.
+feed:
 	for _, asset := range assets {
-		// reformat ticker for tiingo
-		ticker := strings.ReplaceAll(asset.Ticker, "/", "-")
-		url := fmt.Sprintf("https://api.tiingo.com/tiingo/daily/%s/prices", ticker)
-
-		respContent := make([]*tiingoEod, 0)
-
-		resp, err := doWithRateLimit(ctx, func() (*resty.Response, error) {
-			return client.R().
-				SetQueryParam("startDate", startDateStr).
-				SetResult(&respContent).
-				Get(url)
-		})
-		if errors.Is(err, errDailyRateLimit) {
-			runSummary.Status = data.RunFailed
-			return
-		}
-
-		if err != nil {
-			logger.Error().Err(err).Msg("resty returned an error when querying eod prices")
-			return
-		}
-
-		if resp.StatusCode() >= 300 {
-			logger.Error().Int("StatusCode", resp.StatusCode()).Str("Ticker", ticker).Str("URL", resp.Request.URL).Msg("tiigno returned an invalid HTTP response")
-			continue
-		}
-
-		for _, quote := range respContent {
-			quoteDate, err := time.Parse(time.RFC3339Nano, quote.Date)
-			if err != nil {
-				logger.Error().Err(err).Str("tiingoDate", quote.Date).Msg("could not parse date from tiingo eod object")
-				continue
-			}
-
-			// set tiingo date to correct time zone and market close
-			quoteDate = time.Date(quoteDate.Year(), quoteDate.Month(), quoteDate.Day(), 16, 0, 0, 0, nyc)
-
-			eodQuote := &data.Eod{
-				Date:          quoteDate,
-				Ticker:        asset.Ticker,
-				CompositeFigi: asset.CompositeFigi,
-				Open:          quote.Open,
-				High:          quote.High,
-				Low:           quote.Low,
-				Close:         quote.Close,
-				Volume:        quote.Volume,
-				Dividend:      quote.Dividend,
-				Split:         quote.Split,
-			}
-
-			out <- &data.Observation{
-				EodQuote:         eodQuote,
-				ObservationDate:  time.Now(),
-				SubscriptionID:   subscription.ID,
-				SubscriptionName: subscription.Name,
-			}
-
-			numObs++
+		select {
+		case <-workerCtx.Done():
+			break feed
+		case jobCh <- asset:
 		}
 	}
+
+	close(jobCh)
+	wg.Wait()
+
+	numObs = int(numObsAtomic.Load())
+
+	if dailyLimitFlag.Load() {
+		runSummary.Status = data.RunFailed
+		return
+	}
 }
+
+// defaultEODWorkers is the per-subscription concurrency for the EOD fetch
+// pool when the operator has not set a workers config value. Empirically
+// 10 saturates a 5,000 req/min rate budget without overwhelming the
+// shared observation channel or the downstream batched DB writer.
+const defaultEODWorkers = 10
 
 func downloadTiingoAssets(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	logger := zerolog.Ctx(ctx)
