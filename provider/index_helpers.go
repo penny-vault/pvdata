@@ -133,6 +133,32 @@ func LastSnapshotDate(ctx context.Context, pool *pgxpool.Pool, table, indexTicke
 	return snapshotDate
 }
 
+// LastSnapshotDateAsOf returns the most recent snapshot date on or before asOf
+// for the given index. Use this when deciding whether to take a new annual
+// snapshot while walking history forward: the global MAX (LastSnapshotDate)
+// can be in the future of the date being processed, which makes
+// ShouldTakeAnnualSnapshot incorrectly return false for every historical year.
+func LastSnapshotDateAsOf(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string, asOf time.Time) time.Time {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("could not acquire db connection for lastSnapshotDateAsOf")
+		return time.Time{}
+	}
+	defer conn.Release()
+
+	var snapshotDate time.Time
+
+	sql := fmt.Sprintf(`SELECT COALESCE(MAX(snapshot_date), '0001-01-01') FROM %s WHERE index_ticker = $1 AND snapshot_date <= $2`, table)
+
+	err = conn.QueryRow(ctx, sql, indexTicker, asOf).Scan(&snapshotDate)
+	if err != nil {
+		log.Error().Err(err).Msg("could not query last snapshot date as of")
+		return time.Time{}
+	}
+
+	return snapshotDate
+}
+
 // PreviousSnapshotTickers queries the database for all tickers in the most recent
 // snapshot for the given index name, returning a map of ticker->compositeFigi.
 func PreviousSnapshotTickers(ctx context.Context, pool *pgxpool.Pool, table, indexTicker string) map[string]string {

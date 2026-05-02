@@ -145,6 +145,15 @@ func fetchTradableUniverse(ctx context.Context, sub *library.Subscription, out c
 	totalObs := 0
 	state := newChunkState()
 
+	// Seed the in-memory last-snapshot tracker with the most recent snapshot
+	// strictly before the run's start date. The per-day annual-snapshot check
+	// must use this scoped value rather than a global MAX, because a global
+	// MAX could be in the future of the date being processed (e.g. when a
+	// re-run touches historical years while a recent snapshot is already in
+	// the table) and would suppress every historical annual snapshot the run
+	// is meant to write.
+	state.LastSnapshot = provider.LastSnapshotDateAsOf(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], indexTicker, startDate.AddDate(0, 0, -1))
+
 	for _, chunk := range chunks {
 		if err := processChunk(ctx, pool, sub, indexTicker, chunk, candidates, state, out); err != nil {
 			logger.Error().Err(err).Time("chunk_start", chunk[0]).Msg("process chunk failed")

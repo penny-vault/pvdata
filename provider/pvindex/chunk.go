@@ -288,6 +288,14 @@ type chunkState struct {
 	PendingAdd      map[string]int
 	PendingRemove   map[string]int
 	EarlyEntryGrace map[string]time.Time
+	// LastSnapshot is the most recent snapshot date that has either been
+	// observed in the database (seeded once before processing begins, scoped
+	// to dates strictly before the run's start) or emitted during this run.
+	// It must be tracked in memory rather than re-queried per day because a
+	// global MAX(snapshot_date) lookup can return a date in the future of the
+	// day being processed, which would suppress every historical annual
+	// snapshot the run is meant to write.
+	LastSnapshot time.Time
 }
 
 func newChunkState() *chunkState {
@@ -571,9 +579,12 @@ func processChunk(
 		provider.EmitChangelog(confirmedAdds, confirmedRemoves, indexTicker, d, obsTemplate, out)
 
 		// Emit annual snapshot on the first trading day on or after December 21
-		// (winter solstice), or on cold start.
-		lastSnapshot := provider.LastSnapshotDate(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], indexTicker)
-		if provider.ShouldTakeAnnualSnapshot(lastSnapshot, d, snapshotMonth, snapshotDay) {
+		// (winter solstice), or on cold start. state.LastSnapshot is tracked
+		// in memory and updated below when a snapshot is emitted; querying the
+		// DB here would return a global MAX that may be in the future of d
+		// (e.g. when re-running history with a recent snapshot already in the
+		// table) and would suppress every historical snapshot.
+		if provider.ShouldTakeAnnualSnapshot(state.LastSnapshot, d, snapshotMonth, snapshotDay) {
 			// Recompute cap weights for all current members using today's market caps.
 			snapshotCaps := make(map[string]int64, len(prevState))
 			for _, m := range prevState {
@@ -603,6 +614,8 @@ func processChunk(
 				SubscriptionID:   sub.ID,
 				SubscriptionName: sub.Name,
 			}
+
+			state.LastSnapshot = d
 		}
 	}
 
