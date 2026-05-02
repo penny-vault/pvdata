@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-02
+
+### Fixed
+
+- pvindex re-runs now emit the full history of annual snapshots instead of leaving only the most recent one in the table. Backtests and other downstream consumers that reconstruct universe membership at historical dates were silently receiving drastically under-populated universes (for example, around 400 names in 2010 instead of the expected 3,000+) because the per-day window-replace deleted old snapshots while the trigger to write new ones compared against a global "latest snapshot" that was already in the future. After upgrading, delete the affected `pvindex_*_index_snapshot_*` rows and re-run pvindex with a long enough lookback to rebuild the annual snapshots.
+- Per-run logs in the web UI are now flushed to the database every five seconds while a run is in progress, instead of only at the end. If `pvdata serve` is killed, panics, or restarts mid-run, the captured log up to the last flush is preserved on the run's history row instead of being lost.
+
+### Changed
+
+- The 4 MiB cap on captured run logs has been removed. Long-running providers no longer have their log silently truncated; the full log is retained until the existing 30-day database sweep clears it.
+
 ## [0.5.1] - 2026-05-02
 
 ### Changed
@@ -165,7 +176,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` now respects the `--lookback` flag for SEC imports
 - SEC fundamentals accuracy improvements across many filer types: industrial-financial conglomerates, full-cost E&P energy companies, integrated energy majors, large retailers, restaurant chains, and consumer staples companies
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/penny-vault/pvdata/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/penny-vault/pvdata/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/penny-vault/pvdata/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/penny-vault/pvdata/compare/v0.4.2...v0.4.3
