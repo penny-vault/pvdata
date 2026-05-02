@@ -306,6 +306,40 @@ func TradingDays(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) 
 	return days, nil
 }
 
+// DeleteIndexRange removes all snapshot and changelog rows for indexTicker
+// where the date column falls within [start, end] (inclusive). Index providers
+// call this before emitting fresh rows so re-runs are window-replace, not
+// append: stale rows from prior runs (with different parser output, dirty
+// upstream metrics, source revisions, etc.) are cleared so the on-disk state
+// always equals what the current run believes for the date range.
+func DeleteIndexRange(ctx context.Context, pool *pgxpool.Pool, snapshotTable, changelogTable, indexTicker string, start, end time.Time) error {
+	if pool == nil {
+		return fmt.Errorf("database pool is nil")
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn for DeleteIndexRange: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE index_ticker = $1 AND snapshot_date >= $2 AND snapshot_date <= $3`, snapshotTable),
+		indexTicker, start, end,
+	); err != nil {
+		return fmt.Errorf("delete snapshots for %s [%s, %s]: %w", indexTicker, start.Format("2006-01-02"), end.Format("2006-01-02"), err)
+	}
+
+	if _, err := conn.Exec(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE index_ticker = $1 AND event_date >= $2 AND event_date <= $3`, changelogTable),
+		indexTicker, start, end,
+	); err != nil {
+		return fmt.Errorf("delete changelog for %s [%s, %s]: %w", indexTicker, start.Format("2006-01-02"), end.Format("2006-01-02"), err)
+	}
+
+	return nil
+}
+
 // EmitChangelog emits IndexChange observations for adds and removes.
 func EmitChangelog(adds, removes map[string]IndexMember, indexTicker string, eventDate time.Time, subscription *data.Observation, out chan<- *data.Observation) {
 	for ticker, member := range adds {

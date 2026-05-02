@@ -1155,9 +1155,28 @@ func importSP500Rows(ctx context.Context, sub *library.Subscription, rows <-chan
 
 	// Emit yearly snapshots by replaying changes forward from the baseline
 	snapshotTable := sub.DataTablesMap[data.IndexSnapshotKey]
-	lastSnapshotDate := provider.LastSnapshotDate(ctx, sub.Library.Pool, snapshotTable, sp500IndexTicker)
+	changelogTable := sub.DataTablesMap[data.IndexChangelogKey]
 
 	baselineDate, _ := time.Parse("2006-01-02", earliestHistoricalDate)
+
+	// Window-replace: every SP500 import rebuilds the entire history from the
+	// source CSV, so clear all SPX rows in [baselineDate, lastChangeDate]
+	// before re-emitting. Without this, stale rows from prior runs (with
+	// different source data, FIGI resolutions, or parser logic) accumulate
+	// because upsert cannot remove rows the new run no longer emits.
+	deleteEnd := baselineDate
+	if len(changes) > 0 {
+		deleteEnd = changes[len(changes)-1].EventDate
+	}
+
+	if err := provider.DeleteIndexRange(ctx, sub.Library.Pool, snapshotTable, changelogTable, sp500IndexTicker, baselineDate, deleteEnd); err != nil {
+		return count, fmt.Errorf("clear prior SPX rows: %w", err)
+	}
+
+	// Query lastSnapshotDate AFTER the delete so it reflects post-delete
+	// state (will be zero in practice; cold-start emit follows).
+	lastSnapshotDate := provider.LastSnapshotDate(ctx, sub.Library.Pool, snapshotTable, sp500IndexTicker)
+
 	changeIdx := 0
 
 	// Emit the baseline snapshot first if due

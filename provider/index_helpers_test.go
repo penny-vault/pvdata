@@ -233,3 +233,12 @@ var _ = Describe("currentIndexMembers", func() {
 		Expect(result).To(BeEmpty())
 	})
 })
+
+var _ = Describe("DeleteIndexRange", func() {
+	It("returns an error when pool is nil", func() {
+		start := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+		end := time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)
+		err := DeleteIndexRange(context.Background(), nil, "test_snapshot", "test_changelog", "SPX", start, end)
+		Expect(err).To(HaveOccurred())
+	})
+})

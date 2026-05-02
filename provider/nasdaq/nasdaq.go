@@ -257,6 +257,7 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 
 	// Get previous snapshot and emit changelog
 	snapshotTable := subscription.DataTablesMap[data.IndexSnapshotKey]
+	changelogTable := subscription.DataTablesMap[data.IndexChangelogKey]
 
 	prevRaw := provider.PreviousSnapshotTickers(ctx, subscription.Library.Pool, snapshotTable, "NDX")
 
@@ -268,6 +269,17 @@ func downloadNasdaqHoldings(ctx context.Context, subscription *library.Subscript
 	added, removed, _ := provider.DiffSnapshots(currentHoldings, previous)
 
 	eventDate := time.Now().UTC().Truncate(24 * time.Hour)
+
+	// Window-replace: clear any prior NDX rows for eventDate before emitting
+	// fresh ones so re-runs converge even when the new run produces a
+	// different set of events (source revisions, FIGI resolver fixes).
+	if err := provider.DeleteIndexRange(ctx, subscription.Library.Pool, snapshotTable, changelogTable, "NDX", eventDate, eventDate); err != nil {
+		logger.Error().Err(err).Time("Date", eventDate).Msg("failed to clear prior NDX rows")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
 
 	provider.EmitChangelog(added, removed, "NDX", eventDate, &data.Observation{
 		ObservationDate:  time.Now(),

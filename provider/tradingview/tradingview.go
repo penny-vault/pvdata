@@ -431,6 +431,14 @@ func downloadSingleIndex(
 
 	added, removed, _ := provider.DiffSnapshots(currentHoldings, state)
 
+	// Window-replace: clear any prior changelog/snapshot rows for
+	// (idx.Symbol, eventDate) before emitting fresh ones, so re-runs converge
+	// even when the new run produces a different set of events (source
+	// revisions, FIGI resolver fixes, parser changes).
+	if err := provider.DeleteIndexRange(ctx, subscription.Library.Pool, snapshotTable, changelogTable, idx.Symbol, eventDate, eventDate); err != nil {
+		return numObs, fmt.Errorf("clear prior index rows for %s on %s: %w", idx.Symbol, eventDate.Format("2006-01-02"), err)
+	}
+
 	// Emit changelog: adds and removes.
 	provider.EmitChangelog(added, removed, idx.Symbol, eventDate, obsTemplate, out)
 	numObs += len(added) + len(removed)

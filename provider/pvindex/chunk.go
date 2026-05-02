@@ -59,6 +59,16 @@ const (
 	// (winter solstice, December 21).
 	snapshotMonth = time.December
 	snapshotDay   = 21
+
+	// minBroadMcaps is the minimum number of distinct CS market-cap rows the
+	// metrics table must have for a trading day before pvindex will compute
+	// the universe for that day. The active US CS universe on whitelisted
+	// exchanges is roughly 4000-7000 names; if we see fewer than this floor
+	// the metrics importer hasn't run (or only partially ran), in which case
+	// the universe computation would emit spurious add/remove changelog
+	// events driven by data-pipeline state rather than real index movement.
+	// Skipping cleanly is preferable to writing dirt.
+	minBroadMcaps = 500
 )
 
 // perDayInput is the data needed to compute the universe for a single date.
@@ -388,6 +398,16 @@ func processChunk(
 			return fmt.Errorf("load broad mcaps for %s: %w", d.Format("2006-01-02"), err)
 		}
 
+		if len(broadMcaps) < minBroadMcaps {
+			logger.Warn().
+				Time("date", d).
+				Int("count", len(broadMcaps)).
+				Int("minRequired", minBroadMcaps).
+				Msg("metrics data incomplete for date; skipping pvindex day")
+
+			continue
+		}
+
 		input := perDayInput{
 			Date:            d,
 			WindowStart:     windowStart,
@@ -536,6 +556,16 @@ func processChunk(
 			ObservationDate:  d,
 			SubscriptionID:   sub.ID,
 			SubscriptionName: sub.Name,
+		}
+
+		// Window-replace: clear any prior changelog/snapshot rows for d before
+		// emitting fresh ones, so re-runs converge even when the new run emits
+		// a different set of events than a previous run did (e.g. previously
+		// missing metrics now loaded). Without this, upsert can reconcile
+		// same-key value drift but cannot remove orphan rows the new run no
+		// longer emits.
+		if err := provider.DeleteIndexRange(ctx, pool, sub.DataTablesMap[data.IndexSnapshotKey], sub.DataTablesMap[data.IndexChangelogKey], indexTicker, d, d); err != nil {
+			return fmt.Errorf("clear prior index rows for %s on %s: %w", indexTicker, d.Format("2006-01-02"), err)
 		}
 
 		provider.EmitChangelog(confirmedAdds, confirmedRemoves, indexTicker, d, obsTemplate, out)

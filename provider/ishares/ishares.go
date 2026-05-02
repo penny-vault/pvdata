@@ -453,6 +453,16 @@ func downloadSingleISharesETF(
 			eventDate = fd.date
 		}
 
+		// Window-replace: clear any prior changelog/snapshot rows for
+		// (etf.IndexTicker, eventDate) before emitting fresh ones, so re-runs
+		// converge even when the new run produces a different set of events
+		// (BlackRock revisions, FIGI resolver fixes, parser changes). Upsert
+		// alone cannot remove orphan rows the new run no longer emits.
+		if err := provider.DeleteIndexRange(ctx, subscription.Library.Pool, snapshotTable, changelogTable, etf.IndexTicker, eventDate, eventDate); err != nil {
+			logger.Error().Err(err).Str("IndexTicker", etf.IndexTicker).Time("Date", eventDate).Msg("failed to clear prior index rows; skipping date")
+			continue
+		}
+
 		// Emit changelog: adds and removes
 		provider.EmitChangelog(added, removed, etf.IndexTicker, eventDate, obsTemplate, out)
 		numObs += len(added) + len(removed)
