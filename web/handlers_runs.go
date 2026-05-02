@@ -15,7 +15,10 @@
 package web
 
 import (
+	"fmt"
+
 	"github.com/gofiber/fiber/v2"
+	"github.com/gosimple/slug"
 	"github.com/rs/zerolog/log"
 )
 
@@ -70,6 +73,50 @@ func GetRunLog(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"log": runLog})
+}
+
+// DownloadRunLog returns the captured log text for a run as an attachment.
+// The body is raw newline-delimited JSON (the underlying zerolog format).
+// Returns 404 when the subscription is unknown, 204 when no log was captured
+// or it has been swept by the 30-day retention.
+func DownloadRunLog(c *fiber.Ctx) error {
+	id := c.Params("id")
+	runID := c.Params("runID")
+	myLibrary := getLibrary(c)
+
+	sub, err := myLibrary.SubscriptionFromID(c.UserContext(), id)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	runLog, err := myLibrary.RunHistoryLog(c.UserContext(), runID)
+	if err != nil {
+		log.Error().Err(err).Str("runID", runID).Msg("could not load run log")
+
+		return c.Status(fiber.StatusInternalServerError).JSON(HttpError{
+			Code:    "500",
+			Message: "could not load run log",
+		})
+	}
+
+	if runLog == "" {
+		return c.SendStatus(fiber.StatusNoContent)
+	}
+
+	safeName := slug.Make(sub.Name)
+	if safeName == "" {
+		safeName = "run"
+	}
+
+	filename := fmt.Sprintf("%s-%s.ndjson", safeName, runID)
+
+	c.Set(fiber.HeaderContentType, "application/x-ndjson")
+	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
+
+	return c.SendString(runLog)
 }
 
 // GetRunSparkline returns daily aggregated observation counts for sparkline display.

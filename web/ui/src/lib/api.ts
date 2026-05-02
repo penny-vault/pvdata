@@ -154,6 +154,39 @@ export async function runSubscription(id: string, lookback?: string): Promise<vo
   }
 }
 
+export async function cancelSubscriptionRun(id: string, force = false): Promise<void> {
+  const qs = force ? '?force=true' : ''
+  const res = await authFetch(`/subscriptions/${id}/run/cancel${qs}`, { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
+}
+
+export async function downloadRunLog(subscriptionId: string, runId: string, filename?: string): Promise<void> {
+  const res = await authFetch(`/subscriptions/${subscriptionId}/runs/${runId}/log/download`)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(body.message || `HTTP ${res.status}`)
+  }
+  if (res.status === 204) {
+    throw new Error('No log captured for this run')
+  }
+
+  const disposition = res.headers.get('Content-Disposition') || ''
+  const match = disposition.match(/filename="?([^";]+)"?/i)
+  const fallback = filename || `run-${runId}.ndjson`
+  const name = match ? match[1] : fallback
+
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export async function subscribeRunEvents(id: string): Promise<EventSource> {
   const token = await getAccessToken()
   const qs = token ? `?token=${encodeURIComponent(token)}` : ''

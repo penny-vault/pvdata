@@ -15,44 +15,68 @@
 package web
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // sseEvent represents a single Server-Sent Event to write to clients.
 type sseEvent struct {
-	Event string `json:"event"` // "started", "record", "completed", "failed"
+	Event string `json:"event"` // "started", "record", "completed", "failed", "cancelled"
 	Data  string `json:"data"`  // JSON payload
 }
 
 // activeRun tracks an in-progress subscription run and its SSE broadcast channel.
 type activeRun struct {
 	events   chan sseEvent // buffered channel of events for SSE clients
-	done     chan struct{} // closed when the run is finished
-	registry *RunRegistry  // back-reference for self-cleanup
+	done     chan struct{} // closed when the run is finished or detached
+	doneOnce sync.Once     // guards close(done) so soft+natural exit can both call it
+
+	cancel    context.CancelFunc // cancels the fetch context
+	cancelled atomic.Bool        // set by either soft- or force-cancel
+	detached  atomic.Bool        // force-cancel freed the slot before goroutine exit
+
+	runID    atomic.Pointer[string] // run_history row id, set by RunSubscription after BeginRun
+	registry *RunRegistry           // back-reference for self-cleanup
 	subID    string
 }
 
 // publish enqueues an SSE event without blocking the producer when no
-// consumer is reading. Events are dropped on a full buffer.
+// consumer is reading. Events are dropped on a full buffer or on a closed
+// channel (force-cancel never closes events but a panic recovery keeps
+// publish safe in any future closure scenario).
 func (a *activeRun) publish(evt sseEvent) {
+	defer func() { _ = recover() }()
+
 	select {
 	case a.events <- evt:
 	default:
 	}
 }
 
-// finish closes the done channel, waits a short grace period so any attached
-// SSE client can drain remaining events, then unregisters and closes events.
+// signalDone closes the done channel exactly once.
+func (a *activeRun) signalDone() {
+	a.doneOnce.Do(func() { close(a.done) })
+}
+
+// finish is called by the run goroutine on natural exit. It closes done so
+// SSE clients can drain, waits a short grace period, releases the registry
+// slot only if we still own it, and closes events. When a force-cancel
+// already detached the run, the registry slot release is a no-op and the
+// events channel is left open so any late publishes from the still-running
+// fetch goroutine remain safe.
 func (a *activeRun) finish() {
-	close(a.done)
+	a.signalDone()
 	time.Sleep(5 * time.Second)
 
 	if a.registry != nil {
-		a.registry.Delete(a.subID)
+		a.registry.DeleteIf(a.subID, a)
 	}
 
-	close(a.events)
+	if !a.detached.Load() {
+		close(a.events)
+	}
 }
 
 // RunRegistry manages active subscription runs (scheduled and on-demand),
@@ -111,10 +135,22 @@ func (r *RunRegistry) IsActive(subscriptionID string) bool {
 	return ok
 }
 
-// Delete removes an active run entry.
+// Delete removes an active run entry unconditionally.
 func (r *RunRegistry) Delete(subscriptionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	delete(r.runs, subscriptionID)
+}
+
+// DeleteIf removes the entry only if the current value matches run. Used by
+// finish() so a force-cancel that already replaced or freed the slot is not
+// double-released by the eventually-exiting goroutine.
+func (r *RunRegistry) DeleteIf(subscriptionID string, run *activeRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if cur, ok := r.runs[subscriptionID]; ok && cur == run {
+		delete(r.runs, subscriptionID)
+	}
 }

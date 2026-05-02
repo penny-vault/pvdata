@@ -25,6 +25,7 @@ import (
 	"github.com/penny-vault/pvdata/healthcheck"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -77,6 +78,15 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		defer opts.Run.finish()
 	}
 
+	// Derive a cancellable context so the cancel handler can stop the fetch.
+	// Stored on the activeRun so external HTTP cancel calls reach this run.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	if opts.Run != nil {
+		opts.Run.cancel = cancel
+	}
+
 	source := opts.Source
 	if source == "" {
 		source = RunSourceManual
@@ -123,6 +133,11 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 	})
 	if beginErr != nil {
 		logger.Error().Err(beginErr).Msg("could not insert running run_history row")
+	}
+
+	if opts.Run != nil && runID != "" {
+		ridCopy := runID
+		opts.Run.runID.Store(&ridCopy)
 	}
 
 	// Throttle progress updates so high-throughput providers (FRED-style)
@@ -223,7 +238,17 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 	progress.Flush()
 
-	if err := lib.FinalizeRun(ctx, runID, summary); err != nil {
+	// If the run was cancelled (soft or force), record cancelled status
+	// rather than whatever the provider reported on its way out.
+	cancelled := opts.Run != nil && opts.Run.cancelled.Load()
+	if cancelled {
+		summary.Status = data.RunCancelled
+	}
+
+	// FinalizeRun is conditional on status='running' so a force-cancel that
+	// already wrote 'cancelled' is preserved. Use a background context so
+	// the write still happens even if the run's context was cancelled.
+	if err := lib.FinalizeRun(context.Background(), runID, summary); err != nil {
 		logger.Error().Err(err).Msg("failed to finalise run history")
 	}
 
@@ -243,28 +268,45 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 	// Healthcheck ping first — any warning it logs should land in both the
 	// live stream and the persisted log.
-	if summary.Status == data.RunFailed {
+	switch summary.Status {
+	case data.RunCancelled:
+		pingHealthcheck(sub, healthcheck.PingFail,
+			fmt.Sprintf("%s run of %s cancelled after %s (%d observations)",
+				source, sub.Name, duration, summary.NumObservations))
+	case data.RunFailed:
 		pingHealthcheck(sub, healthcheck.PingFail,
 			fmt.Sprintf("%s run of %s failed after %s (%d observations)",
 				source, sub.Name, duration, summary.NumObservations))
-	} else {
+	default:
 		pingHealthcheck(sub, healthcheck.PingSuccess,
 			fmt.Sprintf("%s run of %s succeeded in %s (%d observations)",
 				source, sub.Name, duration, summary.NumObservations))
 	}
 
+	// After a successful run, retune the healthcheck grace period from
+	// observed history so monitoring tracks the workload over time.
+	if summary.Status == data.RunSuccess {
+		updateHealthcheckGrace(ctx, lib, sub, subDataset.ExpectedDuration, logger)
+	}
+
 	// Final summary line is the last log we emit for the run.
-	if summary.Status == data.RunFailed {
+	switch summary.Status {
+	case data.RunCancelled:
+		logger.Warn().Int("observations", summary.NumObservations).Msg("subscription run cancelled")
+	case data.RunFailed:
 		logger.Error().Int("observations", summary.NumObservations).Msg("subscription run failed")
-	} else {
+	default:
 		logger.Info().Int("observations", summary.NumObservations).Msg("subscription run completed")
 	}
 
 	// Emit the final SSE event LAST — after this, attached UIs close the
 	// connection, so any later log lines wouldn't reach them.
-	if summary.Status == data.RunFailed {
+	switch summary.Status {
+	case data.RunCancelled:
+		emitCancelled(opts.Run, summary.NumObservations)
+	case data.RunFailed:
 		emitFinal(opts.Run, sub, summary.NumObservations, false, "run failed")
-	} else {
+	default:
 		emitFinal(opts.Run, sub, summary.NumObservations, true, "")
 	}
 
@@ -272,13 +314,15 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 	// pings, and the final "subscription run completed" line are all
 	// included — matching what live SSE clients saw. Stop the periodic
 	// flusher first so its UPDATE cannot race with this final write.
+	// Use a background context so the final log is persisted even when
+	// the run was cancelled (which cancelled ctx).
 	if opts.LogCapture != nil && runID != "" {
 		close(stopFlusher)
 		flusherDone.Wait()
 
 		runLog := opts.LogCapture.Drain(sub.ID.String())
 		if runLog != "" {
-			if err := lib.UpdateRunLog(ctx, runID, runLog); err != nil {
+			if err := lib.UpdateRunLog(context.Background(), runID, runLog); err != nil {
 				logger.Error().Err(err).Msg("failed to save run log")
 			}
 		}
@@ -295,6 +339,18 @@ func emitStarted(run *activeRun, sub *library.Subscription) {
 		"name":            sub.Name,
 	})
 	run.publish(sseEvent{Event: "started", Data: string(d)})
+}
+
+func emitCancelled(run *activeRun, count int) {
+	if run == nil {
+		return
+	}
+
+	d, _ := json.Marshal(map[string]interface{}{
+		"count":  count,
+		"status": "cancelled",
+	})
+	run.publish(sseEvent{Event: "cancelled", Data: string(d)})
 }
 
 func emitFinal(run *activeRun, _ *library.Subscription, count int, success bool, errMsg string) {
@@ -317,6 +373,47 @@ func emitFinal(run *activeRun, _ *library.Subscription, count int, success bool,
 		"error": errMsg,
 	})
 	run.publish(sseEvent{Event: "failed", Data: string(d)})
+}
+
+// graceHistoryWindow bounds how many recent successful runs feed the
+// rolling average used to retune the healthcheck grace. Small enough
+// to adapt to genuine workload changes; large enough to smooth one-off
+// fast or slow runs.
+const graceHistoryWindow = 10
+
+// updateHealthcheckGrace recomputes the healthcheck grace period from the
+// average of the last graceHistoryWindow successful runs (or falls back to
+// the dataset's declared expected duration when history is too thin) and
+// pushes the result to healthchecks.io. Errors are logged as warnings; a
+// failed grace update never aborts the surrounding run.
+func updateHealthcheckGrace(ctx context.Context, lib *library.Library, sub *library.Subscription, expected time.Duration, logger zerolog.Logger) {
+	if sub.HealthCheckID == "" {
+		return
+	}
+
+	avg, ok, err := lib.AvgSuccessfulRunDuration(ctx, sub.ID.String(), graceHistoryWindow)
+	if err != nil {
+		logger.Warn().Err(err).Msg("could not compute average run duration for healthcheck grace update")
+		return
+	}
+
+	baseline := avg
+	if !ok {
+		baseline = expected
+	}
+
+	grace := healthcheck.GraceFromExpected(baseline)
+
+	if err := healthcheck.UpdateGrace(sub.HealthCheckID, grace); err != nil {
+		logger.Warn().Err(err).Int("grace_seconds", grace).Msg("healthcheck grace update failed")
+		return
+	}
+
+	logger.Info().
+		Int("grace_seconds", grace).
+		Dur("baseline", baseline).
+		Bool("from_history", ok).
+		Msg("healthcheck grace retuned")
 }
 
 func pingHealthcheck(sub *library.Subscription, kind healthcheck.PingKind, body string) {

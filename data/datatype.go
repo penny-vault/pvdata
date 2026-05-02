@@ -28,6 +28,7 @@ const (
 	RunFailed
 	RunSuccess
 	RunInProgress
+	RunCancelled
 )
 
 type RunSummary struct {

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   getSubscription, getRunHistory,
   activateSubscription, deactivateSubscription, deleteSubscription,
-  runSubscription, subscribeRunEvents,
+  runSubscription, subscribeRunEvents, cancelSubscriptionRun, downloadRunLog,
   getRunStatus, getRunLog,
 } from '@/lib/api'
 import RevoGrid from '@revolist/vue3-datagrid'
@@ -48,7 +48,8 @@ const runsLimit = 20
 const activeTab = ref('0')
 const deleteConfirmText = ref('')
 
-const runStatus = ref<'idle' | 'running' | 'completed' | 'failed'>('idle')
+const runStatus = ref<'idle' | 'running' | 'completed' | 'failed' | 'cancelled'>('idle')
+const cancelling = ref(false)
 const runRecordCount = ref(0)
 const runRecords = ref<{ type: string; summary: string }[]>([])
 const maxRunRecords = 200
@@ -84,6 +85,7 @@ function parseLogLine(line: string): LogEntry {
 
 const showRunLogDialog = ref(false)
 const selectedRunLog = ref('')
+const selectedRunId = ref<string | null>(null)
 const selectedRunMeta = ref<{ start: string | null; status: string } | null>(null)
 const loadingRunLog = ref(false)
 const runMenuRef = ref()
@@ -246,6 +248,18 @@ async function attachEventSource() {
     loadRuns()
   })
 
+  eventSource.addEventListener('cancelled', (e: MessageEvent) => {
+    const data = JSON.parse(e.data)
+    runRecordCount.value = data.count
+    runStatus.value = 'cancelled'
+    cancelling.value = false
+    reconnectAttempts = 0
+    eventSource?.close()
+    eventSource = null
+    loadSubscription()
+    loadRuns()
+  })
+
   eventSource.onerror = async () => {
     eventSource?.close()
     eventSource = null
@@ -331,8 +345,36 @@ async function checkAndAttach() {
   }
 }
 
+async function cancelRun(force = false) {
+  try {
+    cancelling.value = true
+    await cancelSubscriptionRun(id.value, force)
+    if (force) {
+      runStatus.value = 'cancelled'
+      cancelling.value = false
+      eventSource?.close()
+      eventSource = null
+      await loadRuns()
+      await loadSubscription()
+    }
+  } catch (e: any) {
+    cancelling.value = false
+    error.value = e.message || 'Failed to cancel run'
+  }
+}
+
+async function downloadSelectedRunLog() {
+  if (!selectedRunId.value) return
+  try {
+    await downloadRunLog(id.value, selectedRunId.value)
+  } catch (e: any) {
+    error.value = e.message || 'Failed to download run log'
+  }
+}
+
 async function viewRunLog(runID: string, meta: { start: string | null; status: string }) {
   selectedRunMeta.value = meta
+  selectedRunId.value = runID
   selectedRunLog.value = ''
   loadingRunLog.value = true
   showRunLogDialog.value = true
@@ -432,18 +474,38 @@ onUnmounted(() => {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          background: runStatus === 'completed' ? 'var(--p-green-900)' : runStatus === 'failed' ? 'var(--p-red-900)' : 'var(--p-surface-800)',
+          background: runStatus === 'completed' ? 'var(--p-green-900)' : runStatus === 'failed' ? 'var(--p-red-900)' : runStatus === 'cancelled' ? 'var(--p-surface-700)' : 'var(--p-surface-800)',
         }">
           <div style="display: flex; align-items: center; gap: 0.5rem">
             <i v-if="runStatus === 'running'" class="pi pi-spin pi-spinner" />
             <i v-else-if="runStatus === 'completed'" class="pi pi-check-circle" />
+            <i v-else-if="runStatus === 'cancelled'" class="pi pi-ban" />
             <i v-else class="pi pi-times-circle" />
             <span style="font-weight: 600">
-              {{ runStatus === 'running' ? 'Running...' : runStatus === 'completed' ? 'Completed' : 'Failed' }}
+              {{ runStatus === 'running' ? (cancelling ? 'Cancelling...' : 'Running...') : runStatus === 'completed' ? 'Completed' : runStatus === 'cancelled' ? 'Cancelled' : 'Failed' }}
             </span>
           </div>
-          <div style="display: flex; align-items: center; gap: 1rem">
-            <span>Records: {{ runRecordCount.toLocaleString() }}</span>
+          <div style="display: flex; align-items: center; gap: 0.5rem">
+            <span style="margin-right: 0.5rem">Records: {{ runRecordCount.toLocaleString() }}</span>
+            <Button
+              v-if="runStatus === 'running' && !cancelling"
+              label="Cancel"
+              icon="pi pi-stop-circle"
+              severity="warn"
+              text
+              size="small"
+              @click="cancelRun(false)"
+            />
+            <Button
+              v-if="runStatus === 'running'"
+              label="Force Cancel"
+              icon="pi pi-times-circle"
+              severity="danger"
+              text
+              size="small"
+              :loading="cancelling"
+              @click="cancelRun(true)"
+            />
             <Button v-if="runStatus !== 'running'" icon="pi pi-times" text size="small" @click="dismissRunPanel" />
           </div>
         </div>
@@ -467,11 +529,21 @@ onUnmounted(() => {
 
       <Dialog v-model:visible="showRunLogDialog" :modal="true" :style="{ width: '80vw', maxWidth: '1200px' }">
         <template #header>
-          <div>
-            <div style="font-weight: 600">Run Log</div>
-            <div v-if="selectedRunMeta" style="font-size: 12px; opacity: 0.7">
-              <TimeDisplay :value="selectedRunMeta.start" /> &middot; {{ selectedRunMeta.status }}
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%">
+            <div>
+              <div style="font-weight: 600">Run Log</div>
+              <div v-if="selectedRunMeta" style="font-size: 12px; opacity: 0.7">
+                <TimeDisplay :value="selectedRunMeta.start" /> &middot; {{ selectedRunMeta.status }}
+              </div>
             </div>
+            <Button
+              v-if="selectedRunLog"
+              label="Download"
+              icon="pi pi-download"
+              size="small"
+              text
+              @click="downloadSelectedRunLog"
+            />
           </div>
         </template>
         <div v-if="loadingRunLog" style="display: flex; justify-content: center; padding: 2rem"><ProgressSpinner /></div>

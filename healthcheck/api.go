@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/spf13/viper"
@@ -26,6 +27,27 @@ import (
 var (
 	ErrStatus = errors.New("status code is invalid")
 )
+
+// MinGraceSeconds is the lower bound on a derived grace period. Healthchecks
+// resolution is one second; we set a sensible floor so a fast or zero
+// expected duration still leaves operators some buffer.
+const MinGraceSeconds = 300
+
+// GraceFromExpected returns the grace seconds to use for a check whose
+// expected runtime is `expected`. The grace is 2x the expected runtime
+// floored at MinGraceSeconds. A non-positive `expected` returns the floor.
+func GraceFromExpected(expected time.Duration) int {
+	if expected <= 0 {
+		return MinGraceSeconds
+	}
+
+	g := int((2 * expected).Seconds())
+	if g < MinGraceSeconds {
+		g = MinGraceSeconds
+	}
+
+	return g
+}
 
 type createReq struct {
 	APIKey      string `json:"api_key"`
@@ -42,14 +64,16 @@ type createResp struct {
 	PingURL string `json:"ping_url"`
 }
 
-// Create a new healthchecks.io check and return the id
-func Create(name string, slug string, tags []string, schedule string) (string, error) {
+// Create a new healthchecks.io check and return the id. The grace period is
+// set to 2 x expectedDuration (clamped to a 5-minute minimum). Subsequent
+// successful runs retune the grace via UpdateGrace based on observed history.
+func Create(name string, slug string, tags []string, schedule string, expectedDuration time.Duration) (string, error) {
 	command := createReq{
 		APIKey:   viper.GetString("healthchecks.apikey"),
 		Name:     name,
 		Slug:     slug,
 		Tags:     strings.Join(tags, " "),
-		Grace:    3600,
+		Grace:    GraceFromExpected(expectedDuration),
 		Schedule: schedule,
 		Timezone: "America/New_York",
 	}
@@ -95,6 +119,36 @@ func UpdateSchedule(id, schedule string) error {
 		SetHeader("Content-Type", "application/json").
 		SetHeader("X-Api-Key", viper.GetString("healthchecks.apikey")).
 		SetBody(updateReq{Schedule: schedule}).
+		Post(fmt.Sprintf("https://healthchecks.io/api/v3/checks/%s", id))
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode() >= 300 {
+		return fmt.Errorf("%w: %d", ErrStatus, resp.StatusCode())
+	}
+
+	return nil
+}
+
+type updateGraceReq struct {
+	Grace int `json:"grace"`
+}
+
+// UpdateGrace changes the grace period (in seconds) on an existing
+// healthchecks.io check. Returns nil silently when id is empty or grace
+// is non-positive.
+func UpdateGrace(id string, graceSeconds int) error {
+	if id == "" || graceSeconds <= 0 {
+		return nil
+	}
+
+	client := resty.New()
+
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetHeader("X-Api-Key", viper.GetString("healthchecks.apikey")).
+		SetBody(updateGraceReq{Grace: graceSeconds}).
 		Post(fmt.Sprintf("https://healthchecks.io/api/v3/checks/%s", id))
 	if err != nil {
 		return err

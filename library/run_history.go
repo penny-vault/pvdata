@@ -31,6 +31,8 @@ func StatusToString(s data.StatusType) string {
 		return "success"
 	case data.RunInProgress:
 		return "running"
+	case data.RunCancelled:
+		return "cancelled"
 	default:
 		return "failed"
 	}
@@ -199,14 +201,28 @@ func (myLibrary *Library) FinalizeRun(ctx context.Context, runID string, summary
 	}
 	defer conn.Release()
 
-	_, err = conn.Exec(ctx,
+	// status='running' guard: a force-cancel may have already terminated this
+	// row to 'cancelled'. We must not overwrite a terminal state when the
+	// fetch goroutine eventually finishes and calls FinalizeRun.
+	tag, err := conn.Exec(ctx,
 		`UPDATE run_history
 		 SET end_time = $1, num_observations = $2, status = $3
-		 WHERE id = $4`,
+		 WHERE id = $4 AND status = 'running'`,
 		summary.EndTime, summary.NumObservations, StatusToString(summary.Status), runID,
 	)
 	if err != nil {
 		return err
+	}
+
+	// If no row was updated (already terminal — e.g. force-cancelled) skip
+	// the success-only stats refresh; the cancel handler is responsible for
+	// any cleanup it wants.
+	if tag.RowsAffected() == 0 {
+		log.Info().
+			Str("RunID", runID).
+			Msg("run_history row already terminal; skipping FinalizeRun update")
+
+		return nil
 	}
 
 	log.Info().
@@ -224,6 +240,30 @@ func (myLibrary *Library) FinalizeRun(ctx context.Context, runID string, summary
 	}
 
 	return nil
+}
+
+// MarkRunCancelled flips a single run_history row from 'running' to
+// 'cancelled' and stamps end_time = now(). The status='running' guard
+// makes this idempotent — a row that has already terminated (via
+// FinalizeRun or a prior cancel) is left untouched.
+func (myLibrary *Library) MarkRunCancelled(ctx context.Context, runID string) error {
+	if runID == "" {
+		return nil
+	}
+
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx,
+		`UPDATE run_history SET status = 'cancelled', end_time = now()
+		 WHERE id = $1 AND status = 'running'`,
+		runID,
+	)
+
+	return err
 }
 
 // MarkAbandonedRunsFailed transitions every run_history row still
@@ -399,6 +439,46 @@ func (myLibrary *Library) SweepRunLogs(ctx context.Context, retention time.Durat
 	}
 
 	return tag.RowsAffected(), nil
+}
+
+// AvgSuccessfulRunDuration returns the average wall-clock duration of the
+// last `limit` successful runs for the given subscription. The boolean is
+// false when no qualifying runs were found, signalling the caller to fall
+// back to a declared expected duration.
+func (myLibrary *Library) AvgSuccessfulRunDuration(ctx context.Context, subscriptionID string, limit int) (time.Duration, bool, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	defer conn.Release()
+
+	var avgSeconds *float64
+
+	err = conn.QueryRow(ctx,
+		`SELECT AVG(EXTRACT(EPOCH FROM (end_time - start_time)))
+		 FROM (
+			SELECT end_time, start_time
+			FROM run_history
+			WHERE subscription_id = $1 AND status = 'success'
+			  AND end_time > start_time
+			ORDER BY start_time DESC
+			LIMIT $2
+		 ) t`,
+		subscriptionID, limit,
+	).Scan(&avgSeconds)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if avgSeconds == nil || *avgSeconds <= 0 {
+		return 0, false, nil
+	}
+
+	return time.Duration(*avgSeconds * float64(time.Second)), true, nil
 }
 
 // RunHistorySparkline returns daily aggregated observation counts for the last 30 days.

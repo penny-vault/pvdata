@@ -24,6 +24,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/rs/zerolog/log"
 )
 
 // getRegistry retrieves the RunRegistry from request context.
@@ -107,6 +108,67 @@ func TriggerRun(c *fiber.Ctx) error {
 	})
 
 	return c.JSON(fiber.Map{"status": "started"})
+}
+
+// CancelRun aborts an in-progress run. With ?force=true the run_history row
+// is marked cancelled and the registry slot is freed immediately; the
+// already-running goroutine continues until it observes ctx.Done() (or
+// completes its in-flight HTTP/sleep) and is detached from the registry so a
+// new run can be triggered. Without force the context is cancelled and the
+// goroutine is allowed to finalise the row itself on the way out.
+//
+// Returns 200 with `{status:"cancelled"|"cancelling"}` on success, 404 when
+// no run is active for the subscription.
+func CancelRun(c *fiber.Ctx) error {
+	id := c.Params("id")
+	myLibrary := getLibrary(c)
+	registry := getRegistry(c)
+
+	sub, err := myLibrary.SubscriptionFromID(c.UserContext(), id)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "subscription not found",
+		})
+	}
+
+	subID := sub.ID.String()
+
+	run, ok := registry.Load(subID)
+	if !ok {
+		return c.Status(fiber.StatusNotFound).JSON(HttpError{
+			Code:    "404",
+			Message: "no active run for this subscription",
+		})
+	}
+
+	force := c.QueryBool("force", false)
+
+	run.cancelled.Store(true)
+
+	if run.cancel != nil {
+		run.cancel()
+	}
+
+	if !force {
+		return c.JSON(fiber.Map{"status": "cancelling", "force": false})
+	}
+
+	// Force path: detach the run so a new one can start immediately, mark
+	// the row terminal, and notify any attached SSE clients to disconnect.
+	run.detached.Store(true)
+
+	if ridPtr := run.runID.Load(); ridPtr != nil && *ridPtr != "" {
+		if err := myLibrary.MarkRunCancelled(c.UserContext(), *ridPtr); err != nil {
+			log.Warn().Err(err).Str("subscription", sub.Name).Msg("could not mark run cancelled in DB")
+		}
+	}
+
+	emitCancelled(run, 0)
+	run.signalDone()
+	registry.DeleteIf(subID, run)
+
+	return c.JSON(fiber.Map{"status": "cancelled", "force": true})
 }
 
 // RunStatus reports whether a run is currently active for a subscription.

@@ -141,11 +141,20 @@ func CreateSubscription(c *fiber.Ctx) error {
 		idShort := sub.ID.String()[:5]
 		checkSlug := slug.Make(fmt.Sprintf("%s %s %s %s", sub.Name, sub.Provider, sub.Dataset, idShort))
 
+		expected := provider.DefaultExpectedDuration
+
+		if p, ok := provider.Map[sub.Provider]; ok {
+			if ds, ok := p.Datasets()[sub.Dataset]; ok && ds.ExpectedDuration > 0 {
+				expected = ds.ExpectedDuration
+			}
+		}
+
 		checkID, err := healthcheck.Create(
 			fmt.Sprintf("%s %s (%s)", sub.Name, sub.Dataset, idShort),
 			checkSlug,
 			sub.DataTypes,
 			sub.Schedule,
+			expected,
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("could not create healthchecks.io monitor")

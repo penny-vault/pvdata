@@ -89,8 +89,19 @@ type Dataset struct {
 	PostFetch   []PostFetchHook
 	TTL         time.Duration
 
+	// ExpectedDuration is the typical wall-clock time a successful Fetch
+	// takes for this dataset. Used to seed the healthcheck grace period
+	// when a subscription is first created and as a fallback when there
+	// are too few historical successful runs to derive a stable average.
+	// Leave as zero to fall back to DefaultExpectedDuration.
+	ExpectedDuration time.Duration
+
 	// Fetch is called when pvdata wants to retrieve measurements from the dataset. It
 	// passes a config with the provider configuration, a channel to write results to,
 	// a logger to write log messages to, and a channel to write progress.
 	Fetch func(context.Context, *library.Subscription, chan<- *data.Observation, chan<- data.RunSummary)
 }
+
+// DefaultExpectedDuration is the fallback expected run length when neither
+// the dataset declares one nor enough successful run history exists.
+const DefaultExpectedDuration = 30 * time.Minute

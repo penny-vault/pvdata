@@ -227,11 +227,20 @@ Also see: subscriptions, unsubscribe`,
 			if monitored {
 				checkSlug := slug.Make(fmt.Sprintf("%s %s %s %s", subscription.Name, subscription.Provider, subscription.Dataset, subscription.ID.String()[:5]))
 
+				expected := provider.DefaultExpectedDuration
+
+				if p, ok := provider.Map[subscription.Provider]; ok {
+					if ds, ok := p.Datasets()[subscription.Dataset]; ok && ds.ExpectedDuration > 0 {
+						expected = ds.ExpectedDuration
+					}
+				}
+
 				checkID, err := healthcheck.Create(
 					fmt.Sprintf("%s %s (%s)", subscription.Name, subscription.Dataset, subscription.ID.String()[:5]),
 					checkSlug,
 					subscription.DataTypes,
 					subscription.Schedule,
+					expected,
 				)
 				if err != nil {
 					log.Fatal().Err(err).Msg("creating healthcheck failed")

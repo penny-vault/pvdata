@@ -24,6 +24,7 @@ const chipClass = computed(() => {
     case 'success': return 'chip-success'
     case 'failed': return 'chip-failed'
     case 'running': return 'chip-running'
+    case 'cancelled': return 'chip-cancelled'
     default: return 'chip-secondary'
   }
 })
@@ -49,6 +50,10 @@ const chipClass = computed(() => {
 .chip-running {
   background: #78350f;
   color: #fcd34d;
+}
+.chip-cancelled {
+  background: #4b5563;
+  color: #e5e7eb;
 }
 .chip-secondary {
   background: #374151;
