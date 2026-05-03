@@ -174,6 +174,62 @@ Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,P
 		Expect(aapl.Name).To(Equal("APPLE INC"))
 	})
 
+	It("extracts holding price", func() {
+		result, err := parseISharesCSV(sampleCSV)
+		Expect(err).ToNot(HaveOccurred())
+		var aapl *iSharesHolding
+		for _, h := range result.Holdings {
+			if h.Ticker == "AAPL" {
+				aapl = &h
+				break
+			}
+		}
+		Expect(aapl).ToNot(BeNil())
+		Expect(aapl.Price).To(BeNumerically("~", 250.00, 0.0001))
+	})
+
+	It("parses comma-separated price values", func() {
+		csv := []byte(`iShares Test ETF
+Fund Holdings as of,"Jan 15, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"BIG","BIG CORP","Financials","Equity","1,234,567,890.00","1.00","1,234,567,890.00","100,000.00","12,345.68","United States","NYSE","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Price).To(BeNumerically("~", 12345.68, 0.0001))
+	})
+
+	It("falls back to zero price when Price column is missing", func() {
+		csv := []byte(`iShares No-Price ETF
+Fund Holdings as of,"Mar 01, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Exchange
+"FOO","FOO INC","Tech","Equity","100.00","50.00","NYSE"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Price).To(BeZero())
+	})
+
+	It("treats unparseable price as zero", func() {
+		csv := []byte(`iShares Test ETF
+Fund Holdings as of,"Apr 01, 2026"
+Inception Date,"Jan 01, 2020"
+
+Ticker,Name,Sector,Asset Class,Market Value,Weight (%),Notional Value,Quantity,Price,Location,Exchange,Currency,FX Rate,Market Currency,Accrual Date
+"BAD","BAD CORP","Tech","Equity","100.00","5.00","100.00","1.00","-","United States","NYSE","USD","1.00","USD","-"
+`)
+		result, err := parseISharesCSV(csv)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Holdings).To(HaveLen(1))
+		Expect(result.Holdings[0].Price).To(BeZero())
+	})
+
 	It("filters out dash ticker", func() {
 		csv := []byte(`iShares Test ETF
 Fund Holdings as of,"Jun 01, 2026"

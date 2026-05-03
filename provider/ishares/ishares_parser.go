@@ -28,6 +28,7 @@ type iSharesHolding struct {
 	Name     string
 	Exchange string
 	Weight   float64
+	Price    float64
 }
 
 type iSharesParseResult struct {
@@ -114,6 +115,7 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 	nameCol := colIdx["Name"]
 	assetClassCol := colIdx["Asset Class"]
 	exchangeCol := colIdx["Exchange"]
+	priceCol, hasPrice := colIdx["Price"]
 
 	// Some iShares CSVs use "Weight (%)" while others use "Market Weight"
 	weightCol := -1
@@ -130,6 +132,9 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 	}
 
 	minCols := max(tickerCol, nameCol, assetClassCol, weightCol, exchangeCol) + 1
+	if hasPrice && priceCol+1 > minCols {
+		minCols = priceCol + 1
+	}
 
 	// Parse data rows
 	for _, record := range records[headerIdx+1:] {
@@ -167,11 +172,21 @@ func parseISharesCSV(csvData []byte) (*iSharesParseResult, error) {
 			continue
 		}
 
+		var price float64
+
+		if hasPrice {
+			priceStr := strings.ReplaceAll(record[priceCol], ",", "")
+			if p, perr := strconv.ParseFloat(strings.TrimSpace(priceStr), 64); perr == nil {
+				price = p
+			}
+		}
+
 		result.Holdings = append(result.Holdings, iSharesHolding{
 			Ticker:   ticker,
 			Name:     name,
 			Exchange: exchange,
 			Weight:   weightPct / 100.0,
+			Price:    price,
 		})
 	}
 

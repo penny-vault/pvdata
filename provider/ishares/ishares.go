@@ -107,6 +107,8 @@ func (ishares *IShares) Datasets() map[string]provider.Dataset {
 			DataTypes: []*data.DataType{
 				data.DataTypes[data.IndexSnapshotKey],
 				data.DataTypes[data.IndexChangelogKey],
+				data.DataTypes[data.AssetKey],
+				data.DataTypes[data.EODKey],
 			},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
@@ -117,6 +119,29 @@ func (ishares *IShares) Datasets() map[string]provider.Dataset {
 }
 
 const iSharesHoldingsURLTemplate = "https://www.ishares.com/us/products/%s/%s/1467271812596.ajax?fileType=csv&fileName=%s_holdings&dataType=fund"
+
+// iSharesExchangeMap converts the human-readable exchange names BlackRock
+// emits in iShares holdings CSVs to the MIC codes pv-data stores.
+var iSharesExchangeMap = map[string]data.Exchange{
+	"NASDAQ":    data.NasdaqExchange,
+	"NYSE":      data.NYSEExchange,
+	"NYSE ARCA": data.ARCAExchange,
+	"NYSE MKT":  data.NYSEMktExchange,
+	"BATS":      data.BATSExchange,
+}
+
+func mapISharesExchange(name string) data.Exchange {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	if e, ok := iSharesExchangeMap[upper]; ok {
+		return e
+	}
+
+	if strings.Contains(upper, "NNQS") || strings.Contains(upper, "NMFQS") {
+		return data.NMFQSExchange
+	}
+
+	return data.UnknownExchange
+}
 
 func downloadISharesHoldings(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	logger := zerolog.Ctx(ctx)
@@ -251,6 +276,22 @@ func downloadSingleISharesETF(
 	snapshotTable := subscription.DataTablesMap[data.IndexSnapshotKey]
 	changelogTable := subscription.DataTablesMap[data.IndexChangelogKey]
 
+	// Snapshot the FIGIs already known before this run started. Anything
+	// resolving to one of these is a pre-existing asset already covered by
+	// other providers (Tiingo, Sharadar, ...), so iShares should not emit
+	// an asset or EOD for it. Anything resolving to a FIGI NOT in this set
+	// — either a Bloomberg composite freshly returned by OpenFIGI, or a
+	// synthetic PV FIGI we mint below — is iShares's responsibility to
+	// emit (asset and EOD).
+	preRunFIGIs := make(map[string]struct{}, len(figiMap))
+	for _, f := range figiMap {
+		if f != "" {
+			preRunFIGIs[f] = struct{}{}
+		}
+	}
+
+	emittedAssets := make(map[string]struct{})
+
 	lookback := provider.LookbackFromContext(ctx, 14*24*time.Hour)
 
 	// Build the list of dates to fetch.
@@ -348,6 +389,7 @@ func downloadSingleISharesETF(
 		// Resolve tickers missing from figiMap:
 		// 1. Try share class match (e.g. BRKB -> BRK/B) verified by name similarity
 		// 2. Fall back to OpenFIGI for truly unknown tickers
+		// 3. Mint a synthetic PV FIGI for anything still unresolved
 		var unknownAssets []*data.Asset
 
 		for _, holding := range parseResult.Holdings {
@@ -360,6 +402,14 @@ func downloadSingleISharesETF(
 			}
 
 			unknownAssets = append(unknownAssets, &data.Asset{Ticker: holding.Ticker, Name: holding.Name})
+		}
+
+		// keep originally-typed metadata (Name, Exchange, AssetType) per
+		// ticker so the centralized emission below can build asset rows
+		// even when figi.Enrich did not populate AssetType.
+		assetMetadata := make(map[string]*data.Asset, len(unknownAssets))
+		for _, a := range unknownAssets {
+			assetMetadata[a.Ticker] = a
 		}
 
 		if len(unknownAssets) > 0 {
@@ -379,79 +429,38 @@ func downloadSingleISharesETF(
 			for _, asset := range unknownAssets {
 				if asset.CompositeFigi != "" {
 					figiMap[asset.Ticker] = asset.CompositeFigi
-
-					// Emit asset so it gets saved to the database
-					out <- &data.Observation{
-						AssetObject:      asset,
-						ObservationDate:  obsTemplate.ObservationDate,
-						SubscriptionID:   obsTemplate.SubscriptionID,
-						SubscriptionName: obsTemplate.SubscriptionName,
-					}
-
-					numObs++
 				}
 			}
 		}
-
-		// Build current holdings map -- fail this index if any ticker is unresolved
-		currentHoldings := make(map[string]provider.IndexMember, len(parseResult.Holdings))
-
-		var unresolvedHoldings []iSharesHolding
-
-		for _, holding := range parseResult.Holdings {
-			f := figiMap[holding.Ticker]
-			if f != "" {
-				currentHoldings[holding.Ticker] = provider.IndexMember{
-					CompositeFigi: f,
-					Weight:        holding.Weight,
-				}
-			} else {
-				unresolvedHoldings = append(unresolvedHoldings, holding)
-			}
-		}
-
-		if len(unresolvedHoldings) > 0 {
-			// Separate near-zero weight holdings (safe to omit) from
-			// significant holdings (must abort).
-			var significant, negligible []string
-
-			for _, h := range unresolvedHoldings {
-				detail := h.Ticker + " (" + h.Name + " / " + h.Exchange + ")"
-
-				if h.Weight < 0.0001 { // < 0.01%
-					negligible = append(negligible, detail)
-				} else {
-					significant = append(significant, detail)
-				}
-			}
-
-			if len(negligible) > 0 {
-				logger.Warn().
-					Int("Count", len(negligible)).
-					Strs("Holdings", negligible).
-					Str("IndexTicker", etf.IndexTicker).
-					Msg("omitting near-zero weight holdings with unresolved FIGIs")
-			}
-
-			if len(significant) > 0 {
-				logger.Error().
-					Int("Unresolved", len(significant)).
-					Int("TotalHoldings", len(parseResult.Holdings)).
-					Strs("Holdings", significant).
-					Str("IndexTicker", etf.IndexTicker).
-					Msg("aborting index update -- holdings have unresolved FIGIs even after OpenFIGI lookup")
-
-				return numObs, fmt.Errorf("%d holdings for %s have no FIGI", len(significant), etf.IndexTicker)
-			}
-		}
-
-		// Diff against in-memory state
-		added, removed, weightChanged := provider.DiffSnapshots(currentHoldings, state)
 
 		eventDate := parseResult.SnapshotDate
 		if eventDate.IsZero() {
 			eventDate = fd.date
 		}
+
+		numObs += mintAndEmitISharesNew(
+			parseResult.Holdings, eventDate, etf.IndexTicker,
+			figiMap, preRunFIGIs, emittedAssets, assetMetadata,
+			obsTemplate, logger, out,
+		)
+
+		// Build current holdings map -- with synthetic FIGIs minted
+		// above, every holding now has a FIGI and the chain is whole.
+		currentHoldings := make(map[string]provider.IndexMember, len(parseResult.Holdings))
+		for _, holding := range parseResult.Holdings {
+			f := figiMap[holding.Ticker]
+			if f == "" {
+				continue
+			}
+
+			currentHoldings[holding.Ticker] = provider.IndexMember{
+				CompositeFigi: f,
+				Weight:        holding.Weight,
+			}
+		}
+
+		// Diff against in-memory state
+		added, removed, weightChanged := provider.DiffSnapshots(currentHoldings, state)
 
 		// Window-replace: clear any prior changelog/snapshot rows for
 		// (etf.IndexTicker, eventDate) before emitting fresh ones, so re-runs
@@ -526,4 +535,110 @@ func downloadSingleISharesETF(
 	}
 
 	return numObs, nil
+}
+
+// mintAndEmitISharesNew mints synthetic PV FIGIs for any holdings still
+// unresolved after share-class and OpenFIGI resolution, then emits asset
+// (once per ticker via emittedAssets) and EOD observations for every
+// holding whose FIGI is NOT in preRunFIGIs. Pre-run FIGIs are owned by
+// other providers (Tiingo/Sharadar/...); iShares only takes responsibility
+// for names it discovers itself. Returns the number of observations sent.
+func mintAndEmitISharesNew(
+	holdings []iSharesHolding,
+	eventDate time.Time,
+	indexTicker string,
+	figiMap map[string]string,
+	preRunFIGIs map[string]struct{},
+	emittedAssets map[string]struct{},
+	assetMetadata map[string]*data.Asset,
+	obsTemplate *data.Observation,
+	logger *zerolog.Logger,
+	out chan<- *data.Observation,
+) int {
+	for _, holding := range holdings {
+		if figiMap[holding.Ticker] != "" {
+			continue
+		}
+
+		synth := figi.GenerateSyntheticFIGI(holding.Ticker, holding.Name)
+		figiMap[holding.Ticker] = synth
+
+		meta, ok := assetMetadata[holding.Ticker]
+		if !ok {
+			meta = &data.Asset{Ticker: holding.Ticker, Name: holding.Name}
+			assetMetadata[holding.Ticker] = meta
+		}
+
+		meta.CompositeFigi = synth
+	}
+
+	emitted := 0
+
+	for _, holding := range holdings {
+		f := figiMap[holding.Ticker]
+		if f == "" {
+			continue
+		}
+
+		if _, isPreRun := preRunFIGIs[f]; isPreRun {
+			continue
+		}
+
+		isSynthetic := figi.IsSyntheticFIGI(f)
+
+		if _, alreadyEmitted := emittedAssets[holding.Ticker]; !alreadyEmitted {
+			asset := assetMetadata[holding.Ticker]
+			if asset == nil {
+				asset = &data.Asset{Ticker: holding.Ticker, Name: holding.Name, CompositeFigi: f}
+			}
+
+			asset.PrimaryExchange = mapISharesExchange(holding.Exchange)
+			if asset.AssetType == "" || asset.AssetType == data.UnknownAsset {
+				asset.AssetType = data.CommonStock
+			}
+
+			asset.LastUpdated = time.Now()
+
+			if !isSynthetic {
+				logger.Warn().
+					Str("Ticker", holding.Ticker).
+					Str("FIGI", f).
+					Str("Name", holding.Name).
+					Str("IndexTicker", indexTicker).
+					Msg("iShares acting as primary EOD source for OpenFIGI-discovered name; Tiingo coverage is unlikely")
+			}
+
+			out <- &data.Observation{
+				AssetObject:      asset,
+				ObservationDate:  obsTemplate.ObservationDate,
+				SubscriptionID:   obsTemplate.SubscriptionID,
+				SubscriptionName: obsTemplate.SubscriptionName,
+			}
+
+			emittedAssets[holding.Ticker] = struct{}{}
+			emitted++
+		}
+
+		if holding.Price > 0 {
+			out <- &data.Observation{
+				EodQuote: &data.Eod{
+					Date:          eventDate,
+					Ticker:        holding.Ticker,
+					CompositeFigi: f,
+					Open:          holding.Price,
+					High:          holding.Price,
+					Low:           holding.Price,
+					Close:         holding.Price,
+					Split:         1.0,
+				},
+				ObservationDate:  obsTemplate.ObservationDate,
+				SubscriptionID:   obsTemplate.SubscriptionID,
+				SubscriptionName: obsTemplate.SubscriptionName,
+			}
+
+			emitted++
+		}
+	}
+
+	return emitted
 }
