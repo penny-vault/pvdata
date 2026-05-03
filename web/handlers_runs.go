@@ -19,6 +19,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gosimple/slug"
+	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
 )
 
@@ -47,9 +48,24 @@ func GetRunHistory(c *fiber.Ctx) error {
 	})
 }
 
-// GetRunLog returns the captured log text for a specific run_history row.
-// Returns 200 with `{"log": "..."}`. The log is empty if it was never
-// captured or has been cleared by the 30-day retention sweep.
+// GetRunLog returns a paged slice of the captured log text for a specific
+// run_history row. The response shape is:
+//
+//	{
+//	  "lines":      ["..."],   // chronological order
+//	  "total":      <int>,     // total line count across the full log
+//	  "start_line": <int>,     // 1-indexed lineno of lines[0] (0 when empty)
+//	  "limit":      <int>      // applied page size
+//	}
+//
+// Query parameters:
+//   - limit  -- page size (default 1000, capped at 5000)
+//   - before -- upper-bound line cursor (exclusive) for "load earlier"
+//     paging. Omit or set to 0 to fetch the tail (newest lines).
+//
+// `lines` is empty when no log was ever captured or the 30-day retention
+// has cleared it. To download the full log unpaged, use the
+// /log/download endpoint.
 func GetRunLog(c *fiber.Ctx) error {
 	id := c.Params("id")
 	runID := c.Params("runID")
@@ -62,7 +78,11 @@ func GetRunLog(c *fiber.Ctx) error {
 		})
 	}
 
-	runLog, err := myLibrary.RunHistoryLog(c.UserContext(), runID)
+	page, err := myLibrary.RunHistoryLogPageFor(c.UserContext(), library.RunHistoryLogPageQuery{
+		RunID:  runID,
+		Before: c.QueryInt("before", 0),
+		Limit:  c.QueryInt("limit", 0),
+	})
 	if err != nil {
 		log.Error().Err(err).Str("runID", runID).Msg("could not load run log")
 
@@ -72,7 +92,12 @@ func GetRunLog(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(fiber.Map{"log": runLog})
+	return c.JSON(fiber.Map{
+		"lines":      page.Lines,
+		"total":      page.Total,
+		"start_line": page.StartLine,
+		"limit":      len(page.Lines),
+	})
 }
 
 // DownloadRunLog returns the captured log text for a run as an attachment.

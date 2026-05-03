@@ -84,10 +84,14 @@ function parseLogLine(line: string): LogEntry {
 }
 
 const showRunLogDialog = ref(false)
-const selectedRunLog = ref('')
+const selectedRunLogEntries = ref<LogEntry[]>([])
+const selectedRunLogTotal = ref(0)
+const selectedRunLogStart = ref(0)
 const selectedRunId = ref<string | null>(null)
 const selectedRunMeta = ref<{ start: string | null; status: string } | null>(null)
 const loadingRunLog = ref(false)
+const loadingEarlierRunLog = ref(false)
+const runLogPageSize = 1000
 const runMenuRef = ref()
 const showCustomLookback = ref(false)
 const customLookbackInput = ref('')
@@ -375,16 +379,42 @@ async function downloadSelectedRunLog() {
 async function viewRunLog(runID: string, meta: { start: string | null; status: string }) {
   selectedRunMeta.value = meta
   selectedRunId.value = runID
-  selectedRunLog.value = ''
+  selectedRunLogEntries.value = []
+  selectedRunLogTotal.value = 0
+  selectedRunLogStart.value = 0
   loadingRunLog.value = true
   showRunLogDialog.value = true
   try {
-    selectedRunLog.value = await getRunLog(id.value, runID)
+    const page = await getRunLog(id.value, runID, { limit: runLogPageSize })
+    selectedRunLogEntries.value = page.lines.map(parseLogLine)
+    selectedRunLogTotal.value = page.total
+    selectedRunLogStart.value = page.startLine
   } catch (e: any) {
     error.value = e.message || 'Failed to load run log'
     showRunLogDialog.value = false
   } finally {
     loadingRunLog.value = false
+  }
+}
+
+async function loadEarlierRunLog() {
+  if (!selectedRunId.value || selectedRunLogStart.value <= 1) return
+  loadingEarlierRunLog.value = true
+  try {
+    const page = await getRunLog(id.value, selectedRunId.value, {
+      before: selectedRunLogStart.value,
+      limit: runLogPageSize,
+    })
+    if (page.lines.length > 0) {
+      const earlier = page.lines.map(parseLogLine)
+      selectedRunLogEntries.value = [...earlier, ...selectedRunLogEntries.value]
+      selectedRunLogStart.value = page.startLine
+      selectedRunLogTotal.value = page.total
+    }
+  } catch (e: any) {
+    error.value = e.message || 'Failed to load earlier log lines'
+  } finally {
+    loadingEarlierRunLog.value = false
   }
 }
 
@@ -537,7 +567,7 @@ onUnmounted(() => {
               </div>
             </div>
             <Button
-              v-if="selectedRunLog"
+              v-if="selectedRunLogTotal > 0"
               label="Download"
               icon="pi pi-download"
               size="small"
@@ -547,10 +577,17 @@ onUnmounted(() => {
           </div>
         </template>
         <div v-if="loadingRunLog" style="display: flex; justify-content: center; padding: 2rem"><ProgressSpinner /></div>
-        <div v-else-if="!selectedRunLog" style="padding: 2rem; text-align: center; opacity: 0.7">
+        <div v-else-if="selectedRunLogTotal === 0" style="padding: 2rem; text-align: center; opacity: 0.7">
           No log was captured for this run, or the 30-day retention has cleared it.
         </div>
-        <LogViewer v-else :text="selectedRunLog" :compact="true" />
+        <LogViewer
+          v-else
+          :entries="selectedRunLogEntries"
+          :total="selectedRunLogTotal"
+          :on-load-earlier="loadEarlierRunLog"
+          :loading-earlier="loadingEarlierRunLog"
+          :compact="true"
+        />
       </Dialog>
 
       <div v-if="!editing" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1rem">

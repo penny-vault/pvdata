@@ -418,6 +418,142 @@ func (myLibrary *Library) RunHistoryLog(ctx context.Context, runID string) (stri
 	return *runLog, nil
 }
 
+// RunHistoryLogPage holds a paged slice of captured log lines.
+//
+// Lines are returned in chronological order (oldest first). StartLine is
+// the 1-indexed line number of Lines[0] within the full log; pass it back
+// as `before` to fetch the page immediately preceding this one. Total is
+// the total number of lines across the entire captured log.
+type RunHistoryLogPage struct {
+	Lines     []string `json:"lines"`
+	Total     int      `json:"total"`
+	StartLine int      `json:"start_line"`
+}
+
+// RunHistoryLogPageQuery requests a slice of a captured log addressed by
+// run_history UUID.
+//
+// Before is the upper-bound cursor (exclusive) on line numbers, in the
+// 1-indexed line space of the full log. A non-positive value asks for the
+// tail — the last `Limit` lines. Limit is clamped to [1, 5000]; zero
+// becomes the default 1000.
+type RunHistoryLogPageQuery struct {
+	RunID  string
+	Before int
+	Limit  int
+}
+
+const (
+	defaultLogPageLimit = 1000
+	maxLogPageLimit     = 5000
+)
+
+// LogPageRow is one row returned by the page SQL: a single log line, its
+// 1-indexed line number, and the total line count. Exposed for the
+// finalizer below to be unit-testable without a database.
+type LogPageRow struct {
+	Line   string
+	Lineno int
+	Total  int
+}
+
+// NormalizeLogPageBounds applies clamping and sentinels to a page request:
+// limit is clamped to [1, maxLogPageLimit] (zero becomes the default), and
+// a non-positive `before` becomes a sentinel that selects the tail.
+func NormalizeLogPageBounds(limit, before int) (int, int) {
+	if limit <= 0 {
+		limit = defaultLogPageLimit
+	}
+
+	if limit > maxLogPageLimit {
+		limit = maxLogPageLimit
+	}
+
+	if before <= 0 {
+		before = 1<<31 - 1
+	}
+
+	return limit, before
+}
+
+// FinalizeLogPage flips a tail-first (DESC) batch of rows into chronological
+// order and packages it as a RunHistoryLogPage. An empty input yields an
+// empty page with Total=0.
+func FinalizeLogPage(rows []LogPageRow) RunHistoryLogPage {
+	if len(rows) == 0 {
+		return RunHistoryLogPage{Lines: []string{}}
+	}
+
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		lines[len(rows)-1-i] = r.Line
+	}
+
+	return RunHistoryLogPage{
+		Lines:     lines,
+		Total:     rows[0].Total,
+		StartLine: rows[len(rows)-1].Lineno,
+	}
+}
+
+// RunHistoryLogPageFor returns a tail-first slice of the captured log for
+// a run, plus the total line count. The page is computed in Postgres so
+// only the requested lines cross the wire — large logs are not pulled into
+// memory in full.
+//
+// A missing run_history row, NULL log, or empty log all return an empty
+// page with Total=0.
+func (myLibrary *Library) RunHistoryLogPageFor(ctx context.Context, q RunHistoryLogPageQuery) (RunHistoryLogPage, error) {
+	limit, before := NormalizeLogPageBounds(q.Limit, q.Before)
+
+	conn, err := myLibrary.AcquireWithTimeout(ctx)
+	if err != nil {
+		return RunHistoryLogPage{}, err
+	}
+	defer conn.Release()
+
+	rows, err := conn.Query(ctx, `
+WITH numbered AS MATERIALIZED (
+  SELECT t.line, t.lineno
+  FROM run_history,
+       LATERAL unnest(
+         CASE
+           WHEN log IS NULL OR log = '' THEN ARRAY[]::text[]
+           ELSE string_to_array(rtrim(log, E'\n'), E'\n')
+         END
+       ) WITH ORDINALITY AS t(line, lineno)
+  WHERE id = $1
+)
+SELECT line, lineno::int, (SELECT count(*) FROM numbered)::int AS total
+FROM numbered
+WHERE lineno < $2
+ORDER BY lineno DESC
+LIMIT $3`,
+		q.RunID, before, limit,
+	)
+	if err != nil {
+		return RunHistoryLogPage{}, err
+	}
+	defer rows.Close()
+
+	var collected []LogPageRow
+
+	for rows.Next() {
+		var r LogPageRow
+		if err := rows.Scan(&r.Line, &r.Lineno, &r.Total); err != nil {
+			return RunHistoryLogPage{}, err
+		}
+
+		collected = append(collected, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return RunHistoryLogPage{}, err
+	}
+
+	return FinalizeLogPage(collected), nil
+}
+
 // SweepRunLogs nulls out captured log text on run_history rows older than
 // retention. Returns the number of rows whose log was cleared.
 func (myLibrary *Library) SweepRunLogs(ctx context.Context, retention time.Duration) (int64, error) {

@@ -18,6 +18,14 @@ const props = defineProps<{
   text?: string
   // Show a heading + smaller layout when used inside a dialog.
   compact?: boolean
+  // Total line count across the full log, when only a paged subset is in
+  // `entries`. When greater than entries.length, the viewer shows a
+  // "Load earlier" button driven by `onLoadEarlier`.
+  total?: number
+  // Called when the user clicks "Load earlier". Should resolve once the
+  // earlier page has been merged into `entries`.
+  onLoadEarlier?: () => Promise<void>
+  loadingEarlier?: boolean
 }>()
 
 const search = ref('')
@@ -34,6 +42,14 @@ const allEntries = computed<LogEntry[]>(() => {
     .filter(line => line.length > 0)
     .map(parseLogLine)
 })
+
+const hasEarlier = computed(() =>
+  typeof props.total === 'number'
+  && props.total > allEntries.value.length
+  && typeof props.onLoadEarlier === 'function',
+)
+
+const remainingEarlier = computed(() => Math.max(0, (props.total ?? 0) - allEntries.value.length))
 
 const levels = computed(() => {
   const set = new Set<string>()
@@ -124,8 +140,17 @@ watch(() => filtered.value.length, async () => {
         <template #value="{ value }">{{ value || 'All levels' }}</template>
       </Select>
       <span style="opacity: 0.7; font-size: 12px">
-        {{ filtered.length.toLocaleString() }} / {{ allEntries.length.toLocaleString() }}
+        {{ filtered.length.toLocaleString() }} / {{ allEntries.length.toLocaleString() }}<template v-if="typeof total === 'number' && total > allEntries.length"> of {{ total.toLocaleString() }}</template>
       </span>
+      <Button
+        v-if="hasEarlier"
+        :label="`Load earlier (${remainingEarlier.toLocaleString()} more)`"
+        icon="pi pi-arrow-up"
+        size="small"
+        text
+        :loading="loadingEarlier"
+        @click="onLoadEarlier && onLoadEarlier()"
+      />
     </div>
 
     <div ref="containerRef" style="flex: 1; overflow: auto; border: 1px solid var(--p-content-border-color); border-radius: 4px; background: var(--p-surface-900)">

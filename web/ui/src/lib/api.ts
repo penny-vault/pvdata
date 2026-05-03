@@ -90,10 +90,29 @@ export async function getSparkline(subscriptionId: string) {
   return handleResponse<any[]>(res)
 }
 
-export async function getRunLog(subscriptionId: string, runId: string): Promise<string> {
-  const res = await authFetch(`/subscriptions/${subscriptionId}/runs/${runId}/log`)
-  const body = await handleResponse<{ log: string }>(res)
-  return body.log || ''
+export interface RunLogPage {
+  lines: string[]
+  total: number
+  // 1-indexed line number of lines[0] within the full log; 0 when empty.
+  startLine: number
+}
+
+export async function getRunLog(
+  subscriptionId: string,
+  runId: string,
+  opts: { before?: number; limit?: number } = {},
+): Promise<RunLogPage> {
+  const params = new URLSearchParams()
+  if (opts.before && opts.before > 0) params.set('before', String(opts.before))
+  if (opts.limit && opts.limit > 0) params.set('limit', String(opts.limit))
+  const qs = params.toString()
+  const res = await authFetch(`/subscriptions/${subscriptionId}/runs/${runId}/log${qs ? '?' + qs : ''}`)
+  const body = await handleResponse<{ lines: string[]; total: number; start_line: number }>(res)
+  return {
+    lines: body.lines || [],
+    total: body.total || 0,
+    startLine: body.start_line || 0,
+  }
 }
 
 export async function getRunStatus(subscriptionId: string): Promise<{ active: boolean }> {
