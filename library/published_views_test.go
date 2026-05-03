@@ -71,9 +71,10 @@ var _ = Describe("PublishedViews", func() {
 			Expect(sqls).To(HaveLen(1))
 			Expect(sqls[0]).NotTo(ContainSubstring("WHERE"))
 			Expect(sqls[0]).NotTo(ContainSubstring("event_date"))
-			Expect(sqls[0]).To(Equal(
-				"CREATE OR REPLACE VIEW assets AS SELECT * FROM massive_assets_abc12",
-			))
+			// AssetKey uses an explicit column-list ViewGenerator (so source
+			// tables with differing physical column orders can still UNION).
+			Expect(sqls[0]).To(HavePrefix("CREATE OR REPLACE VIEW assets AS SELECT ticker, composite_figi"))
+			Expect(sqls[0]).To(HaveSuffix("FROM massive_assets_abc12"))
 		})
 
 		It("emits the priority-dedup anti-join form for asset views with multiple sources", func() {
@@ -89,7 +90,7 @@ var _ = Describe("PublishedViews", func() {
 			Expect(sqls).To(HaveLen(1))
 			Expect(sqls[0]).To(ContainSubstring("UNION ALL"))
 			Expect(sqls[0]).To(ContainSubstring(
-				"SELECT * FROM sharadar_assets_def WHERE NOT EXISTS (SELECT 1 FROM tiingo_assets_abc WHERE tiingo_assets_abc.ticker = sharadar_assets_def.ticker AND tiingo_assets_abc.composite_figi = sharadar_assets_def.composite_figi)",
+				"FROM sharadar_assets_def WHERE NOT EXISTS (SELECT 1 FROM tiingo_assets_abc WHERE tiingo_assets_abc.ticker = sharadar_assets_def.ticker AND tiingo_assets_abc.composite_figi = sharadar_assets_def.composite_figi)",
 			))
 		})
 
