@@ -163,8 +163,38 @@ var _ = Describe("DataType.GenerateViewSQL", func() {
 		It("DROP VIEW for zero sources still wins over dedup", func() {
 			Expect(asset.GenerateViewSQL("assets", nil)).To(Equal("DROP VIEW IF EXISTS assets"))
 		})
+
+		It("uses ViewGenerator for the SELECT portion of each leg when set", func() {
+			dt := &data.DataType{
+				Name:          "a",
+				ViewName:      "assets",
+				DedupKeys:     []string{"ticker", "composite_figi"},
+				ViewGenerator: explicitColsVG{},
+			}
+			sql := dt.GenerateViewSQL("assets", []data.ViewSource{
+				{TableName: "tiingo_assets_abc"},
+				{TableName: "sharadar_assets_def"},
+			})
+			Expect(sql).To(Equal(
+				"CREATE OR REPLACE VIEW assets AS " +
+					"SELECT ticker, composite_figi, name FROM tiingo_assets_abc " +
+					"UNION ALL " +
+					"SELECT ticker, composite_figi, name FROM sharadar_assets_def " +
+					"WHERE NOT EXISTS (" +
+					"SELECT 1 FROM tiingo_assets_abc " +
+					"WHERE tiingo_assets_abc.ticker = sharadar_assets_def.ticker " +
+					"AND tiingo_assets_abc.composite_figi = sharadar_assets_def.composite_figi" +
+					")",
+			))
+		})
 	})
 })
+
+type explicitColsVG struct{}
+
+func (explicitColsVG) SelectFrom(tableName string) string {
+	return "SELECT ticker, composite_figi, name FROM " + tableName
+}
 
 type ratingTestVG struct{}
 

@@ -94,10 +94,10 @@ func (dt *DataType) buildWhereClause(s ViewSource) string {
 // Date bounds (FromDate/UntilDate) are not applied in dedup mode -- there is
 // no real-world data type today that uses both DedupKeys and a DateColumn,
 // and the asset case explicitly has DateColumn == "". A non-nil
-// ViewGenerator is also ignored: dedup mode emits plain "SELECT * FROM <t>"
-// per leg so the NOT EXISTS clauses can reference columns by table name
-// without alias bookkeeping. AssetKey has no ViewGenerator, so this
-// limitation is moot for the only configured dedup type.
+// ViewGenerator is honored for the SELECT portion of each leg; the
+// NOT EXISTS clauses always qualify dedup keys with the bare table name, so
+// the generator must not introduce a table alias (i.e. emit
+// "SELECT cols FROM <table>" with no AS).
 func (dt *DataType) buildDedupedUnion(viewName string, sources []ViewSource) string {
 	legs := make([]string, len(sources))
 
@@ -109,7 +109,13 @@ func (dt *DataType) buildDedupedUnion(viewName string, sources []ViewSource) str
 }
 
 func (dt *DataType) buildDedupLeg(table string, higher []ViewSource) string {
-	sel := fmt.Sprintf("SELECT * FROM %s", table)
+	var sel string
+	if dt.ViewGenerator != nil {
+		sel = dt.ViewGenerator.SelectFrom(table)
+	} else {
+		sel = fmt.Sprintf("SELECT * FROM %s", table)
+	}
+
 	if len(higher) == 0 {
 		return sel
 	}

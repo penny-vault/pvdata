@@ -115,10 +115,11 @@ const (
 
 var DataTypes = map[string]*DataType{
 	AssetKey: {
-		Name:       AssetKey,
-		ViewName:   "assets",
-		DateColumn: "",
-		DedupKeys:  []string{"ticker", "composite_figi"},
+		Name:          AssetKey,
+		ViewName:      "assets",
+		DateColumn:    "",
+		DedupKeys:     []string{"ticker", "composite_figi"},
+		ViewGenerator: assetViewGenerator{},
 		Schema: `CREATE TABLE %[1]s (
 ticker TEXT,
 composite_figi TEXT,

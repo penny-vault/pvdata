@@ -26,6 +26,25 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// assetViewGenerator emits an explicit column list for the assets published
+// view. Required because a SELECT * UNION ALL across asset source tables
+// aligns columns positionally, and the search tsvector lands in different
+// physical positions depending on whether the table was created fresh at
+// schema v1 (search appended last) or migrated from v0 (search appended
+// before icon_url/logo_url, which are then added by the migration). Listing
+// columns by name makes physical order irrelevant.
+//
+// Column order here defines the resulting view's column order; keep it
+// stable so downstream consumers do not break.
+type assetViewGenerator struct{}
+
+func (assetViewGenerator) SelectFrom(tableName string) string {
+	return "SELECT ticker, composite_figi, share_class_figi, primary_exchange, " +
+		"asset_type, active, name, description, corporate_url, sector, industry, " +
+		"sic_code, cik, cusips, isins, other_identifiers, similar_tickers, tags, " +
+		"listed, delisted, last_updated, icon_url, logo_url, search FROM " + tableName
+}
+
 type AssetType string
 
 const (
