@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-03
+
+### Added
+
+- iShares index-constituent runs save asset records and daily prices for delisted historical holdings the existing assets table and OpenFIGI cannot identify. The new rows use a synthetic `PVG`-prefixed FIGI so they sort cleanly alongside Bloomberg-issued composites. **Note:** existing iShares subscriptions need to be re-subscribed (or have their `data_types`/`data_tables` extended with `asset-description` and `eod`) for the new rows to land.
+
+### Fixed
+
+- iShares index runs no longer abort an entire index when one historical date contains delisted tickers OpenFIGI cannot resolve. Previously 37 of 38 indexes failed on the first such date and saved nothing for any date; now every date's snapshot and changelog is emitted.
+
 ## [0.5.2] - 2026-05-02
 
 ### Fixed
@@ -141,7 +151,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` respects the `--lookback` flag for SEC imports.
 - SEC fundamentals accuracy improvements across many filer types.
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/penny-vault/pvdata/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/penny-vault/pvdata/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/penny-vault/pvdata/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/penny-vault/pvdata/compare/v0.4.3...v0.5.0
