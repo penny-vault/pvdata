@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/penny-vault/pvdata/data"
 )
 
 var _ = Describe("parseIntradayResponse", func() {
@@ -77,45 +78,106 @@ var _ = Describe("chunkRange", func() {
 	})
 })
 
-var _ = Describe("parseIntradayTickers", func() {
-	It("splits a plain ticker list and applies the default exchange", func() {
-		entries := parseIntradayTickers("AAPL,MSFT", "US")
-		Expect(entries).To(HaveLen(2))
-		Expect(entries[0].Ticker).To(Equal("AAPL"))
-		Expect(entries[0].Exchange).To(Equal("US"))
-		Expect(entries[1].Ticker).To(Equal("MSFT"))
-		Expect(entries[1].Exchange).To(Equal("US"))
+var _ = Describe("assetsActiveInWindow", func() {
+	windowStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	It("includes every currently-active asset", func() {
+		assets := []*data.Asset{
+			{Ticker: "AAPL", Active: true},
+			{Ticker: "MSFT", Active: true},
+		}
+		Expect(assetsActiveInWindow(assets, windowStart)).To(HaveLen(2))
 	})
 
-	It("honors per-entry exchange overrides", func() {
-		entries := parseIntradayTickers("AAPL,BMW.XETRA", "US")
-		Expect(entries).To(HaveLen(2))
-		Expect(entries[0].Exchange).To(Equal("US"))
-		Expect(entries[1].Ticker).To(Equal("BMW"))
-		Expect(entries[1].Exchange).To(Equal("XETRA"))
+	It("includes a delisted asset when its delisting timestamp is on or after the window start", func() {
+		assets := []*data.Asset{
+			{Ticker: "FOO", Active: false, DelistingDate: "2026-03-01T00:00:00Z"},
+		}
+		Expect(assetsActiveInWindow(assets, windowStart)).To(HaveLen(1))
 	})
 
-	It("returns nothing when the config is blank", func() {
-		Expect(parseIntradayTickers("", "US")).To(BeEmpty())
+	It("excludes a delisted asset whose delisting timestamp predates the window", func() {
+		assets := []*data.Asset{
+			{Ticker: "OLD", Active: false, DelistingDate: "2024-06-01T00:00:00Z"},
+		}
+		Expect(assetsActiveInWindow(assets, windowStart)).To(BeEmpty())
 	})
 
-	It("trims whitespace and skips empty entries", func() {
-		entries := parseIntradayTickers(" AAPL , , MSFT ", "US")
-		Expect(entries).To(HaveLen(2))
-		Expect(entries[0].Ticker).To(Equal("AAPL"))
-		Expect(entries[1].Ticker).To(Equal("MSFT"))
+	It("excludes a delisted asset with no delisting timestamp", func() {
+		assets := []*data.Asset{
+			{Ticker: "OLD", Active: false},
+		}
+		Expect(assetsActiveInWindow(assets, windowStart)).To(BeEmpty())
+	})
+
+	It("excludes a delisted asset whose delisting timestamp does not parse", func() {
+		assets := []*data.Asset{
+			{Ticker: "OLD", Active: false, DelistingDate: "garbage"},
+		}
+		Expect(assetsActiveInWindow(assets, windowStart)).To(BeEmpty())
 	})
 })
 
-var _ = Describe("readIntradayLookback", func() {
-	It("falls back to the default when blank or invalid", func() {
-		Expect(readIntradayLookback("")).To(Equal(5))
-		Expect(readIntradayLookback("not-a-number")).To(Equal(5))
-		Expect(readIntradayLookback("0")).To(Equal(5))
-		Expect(readIntradayLookback("-3")).To(Equal(5))
+var _ = Describe("buildIntradayJobs", func() {
+	It("emits one job per asset using the default exchange", func() {
+		assets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock, Active: true},
+			{Ticker: "MSFT", CompositeFigi: "BBG000BPH459", AssetType: data.CommonStock, Active: true},
+		}
+		jobs := buildIntradayJobs(assets, "US", nil, "", "")
+		Expect(jobs).To(HaveLen(2))
+		Expect(jobs[0].Ticker).To(Equal("AAPL"))
+		Expect(jobs[0].Exchange).To(Equal("US"))
+		Expect(jobs[0].CompositeFigi).To(Equal("BBG000B9XRY4"))
 	})
 
-	It("parses positive integers", func() {
-		Expect(readIntradayLookback("10")).To(Equal(10))
+	It("excludes mutual funds because they have no intraday data", func() {
+		assets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
+			{Ticker: "VFINX", CompositeFigi: "BBG000B9XRY5", AssetType: data.MutualFund},
+		}
+		jobs := buildIntradayJobs(assets, "US", nil, "", "")
+		Expect(jobs).To(HaveLen(1))
+		Expect(jobs[0].Ticker).To(Equal("AAPL"))
+	})
+
+	It("skips assets with no FIGI", func() {
+		assets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
+			{Ticker: "ORPHAN", CompositeFigi: "", AssetType: data.CommonStock},
+		}
+		jobs := buildIntradayJobs(assets, "US", nil, "", "")
+		Expect(jobs).To(HaveLen(1))
+	})
+
+	It("honors the assetTypes filter", func() {
+		assets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
+			{Ticker: "SPY", CompositeFigi: "BBG000BDTBL9", AssetType: data.ETF},
+		}
+		filter := map[data.AssetType]struct{}{data.ETF: {}}
+		jobs := buildIntradayJobs(assets, "US", filter, "", "")
+		Expect(jobs).To(HaveLen(1))
+		Expect(jobs[0].Ticker).To(Equal("SPY"))
+	})
+
+	It("honors a tickerFilter", func() {
+		assets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
+			{Ticker: "MSFT", CompositeFigi: "BBG000BPH459", AssetType: data.CommonStock},
+		}
+		jobs := buildIntradayJobs(assets, "US", nil, "msft", "")
+		Expect(jobs).To(HaveLen(1))
+		Expect(jobs[0].Ticker).To(Equal("MSFT"))
+	})
+
+	It("honors a figiFilter", func() {
+		assets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
+			{Ticker: "MSFT", CompositeFigi: "BBG000BPH459", AssetType: data.CommonStock},
+		}
+		jobs := buildIntradayJobs(assets, "US", nil, "", "BBG000BPH459")
+		Expect(jobs).To(HaveLen(1))
+		Expect(jobs[0].Ticker).To(Equal("MSFT"))
 	})
 })

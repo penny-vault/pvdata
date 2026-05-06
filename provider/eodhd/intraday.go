@@ -26,8 +26,10 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
@@ -39,6 +41,11 @@ const (
 	// intradayMaxRange is the largest from-to window EODHD accepts in a
 	// single 1-minute intraday request.
 	intradayMaxRange = 120 * 24 * time.Hour
+
+	// intradayBackfillThreshold is the lookback at which we switch from
+	// "currently active" universe to "active anywhere in the window."
+	// Matches the EOD loader's mode threshold.
+	intradayBackfillThreshold = 30 * 24 * time.Hour
 )
 
 // -- Response parsing --
@@ -109,63 +116,37 @@ func chunkRange(from, to time.Time, maxWindow time.Duration) []intradayChunk {
 	return chunks
 }
 
-// -- Config parsing --
+// -- Universe selection --
 
-// intradayEntry pairs a configured ticker with the EODHD exchange code
-// to query against.
-type intradayEntry struct {
-	Ticker   string
-	Exchange string
-}
+// assetsActiveInWindow returns the subset of assets that were active
+// at some point on or after windowStart. Currently-active assets are
+// always included; assets marked inactive are included only when
+// their DelistingDate parses successfully and lands on or after
+// windowStart.
+func assetsActiveInWindow(assets []*data.Asset, windowStart time.Time) []*data.Asset {
+	out := make([]*data.Asset, 0, len(assets))
 
-// parseIntradayTickers parses the comma-separated intradayTickers
-// config value. Each entry may be a plain ticker (which uses the
-// provided defaultExchange) or "TICKER.EXCHANGE" for an explicit
-// override. Tickers are stored in pv-data form (slashes), but slashes
-// would not survive a config string anyway; share-class entries
-// should be written as "BRK-A" in the config and are translated in
-// parseIntradayTickers itself.
-func parseIntradayTickers(raw, defaultExchange string) []intradayEntry {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-
-	var out []intradayEntry
-
-	for part := range strings.SplitSeq(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
+	for _, a := range assets {
+		if a.Active {
+			out = append(out, a)
 			continue
 		}
 
-		ticker := part
-		exchange := defaultExchange
-
-		if dot := strings.Index(part, "."); dot >= 0 {
-			ticker = strings.TrimSpace(part[:dot])
-			exchange = strings.TrimSpace(part[dot+1:])
-		}
-
-		if ticker == "" {
+		if a.DelistingDate == "" {
 			continue
 		}
 
-		out = append(out, intradayEntry{
-			Ticker:   normalizeTicker(ticker),
-			Exchange: exchange,
-		})
+		delisted, err := time.Parse(time.RFC3339, a.DelistingDate)
+		if err != nil {
+			continue
+		}
+
+		if !delisted.Before(windowStart) {
+			out = append(out, a)
+		}
 	}
 
 	return out
-}
-
-func readIntradayLookback(raw string) int {
-	if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && v > 0 {
-		return v
-	}
-
-	return 5
 }
 
 // -- Loader entrypoint --
@@ -195,13 +176,12 @@ func downloadEodhdIntraday(ctx context.Context, subscription *library.Subscripti
 	exchanges := parseExchanges(subscription.Config["exchanges"])
 	defaultExchange := exchanges[0]
 
-	entries := parseIntradayTickers(subscription.Config["intradayTickers"], defaultExchange)
-	if len(entries) == 0 {
-		logger.Warn().Msg("intradayTickers is empty; intraday loader has no work to do")
-		return
-	}
+	lookback := provider.LookbackFromContext(ctx, 5*24*time.Hour)
+	to := time.Now().UTC()
+	from := to.Add(-lookback)
 
-	lookbackDays := readIntradayLookback(subscription.Config["intradayLookbackDays"])
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	assetTypeFilter := parseAssetTypeFilter(subscription.Config["assetTypes"])
 
 	rateLimit := readRateLimit(subscription.Config["rateLimit"])
 	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/61.0), 1)
@@ -213,39 +193,19 @@ func downloadEodhdIntraday(ctx context.Context, subscription *library.Subscripti
 	}
 	defer conn.Release()
 
-	dbAssets, err := data.ActiveAssets(ctx, conn, subscription.DataTablesMap[data.AssetKey])
+	assets, err := loadIntradayUniverse(ctx, conn, subscription.DataTablesMap[data.AssetKey], from, lookback)
 	if err != nil {
-		logger.Error().Err(err).Msg("could not load active assets")
+		logger.Error().Err(err).Msg("could not load asset universe")
 
 		runSummary.Status = data.RunFailed
 
 		return
 	}
 
-	tickerToFigi := make(map[string]string, len(dbAssets))
-	for _, a := range dbAssets {
-		tickerToFigi[a.Ticker] = a.CompositeFigi
-	}
-
-	type job struct {
-		entry intradayEntry
-		figi  string
-	}
-
-	jobs := make([]job, 0, len(entries))
-
-	for _, e := range entries {
-		f, ok := tickerToFigi[e.Ticker]
-		if !ok || f == "" {
-			logger.Warn().Str("Ticker", e.Ticker).Msg("intraday ticker has no FIGI in DB, skipping")
-			continue
-		}
-
-		jobs = append(jobs, job{entry: e, figi: f})
-	}
+	jobs := buildIntradayJobs(assets, defaultExchange, assetTypeFilter, tickerFilter, figiFilter)
 
 	if len(jobs) == 0 {
-		logger.Warn().Msg("no intraday jobs after FIGI resolution")
+		logger.Warn().Msg("no assets in scope for intraday fetch")
 		return
 	}
 
@@ -258,17 +218,19 @@ func downloadEodhdIntraday(ctx context.Context, subscription *library.Subscripti
 		workerCount = len(jobs)
 	}
 
-	logger.Info().Int("workers", workerCount).Int("tickers", len(jobs)).Int("lookbackDays", lookbackDays).Msg("intraday worker pool starting")
-
-	to := time.Now().UTC()
-	from := to.AddDate(0, 0, -lookbackDays)
+	logger.Info().
+		Int("workers", workerCount).
+		Int("tickers", len(jobs)).
+		Dur("lookback", lookback).
+		Bool("backfill", lookback > intradayBackfillThreshold).
+		Msg("intraday worker pool starting")
 
 	chunks := chunkRange(from, to, intradayMaxRange)
 
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
 
-	jobCh := make(chan job)
+	jobCh := make(chan intradayJob)
 
 	var (
 		wg             sync.WaitGroup
@@ -283,7 +245,7 @@ func downloadEodhdIntraday(ctx context.Context, subscription *library.Subscripti
 			defer wg.Done()
 
 			for j := range jobCh {
-				bars, err := fetchIntradayChunks(workerCtx, client, limiter, j.entry, j.figi, chunks)
+				bars, err := fetchIntradayChunks(workerCtx, client, limiter, j, chunks)
 				if errors.Is(err, errDailyRateLimit) {
 					dailyLimitFlag.Store(true)
 					cancelWorkers()
@@ -296,7 +258,7 @@ func downloadEodhdIntraday(ctx context.Context, subscription *library.Subscripti
 						return
 					}
 
-					logger.Warn().Err(err).Str("Ticker", j.entry.Ticker).Msg("intraday fetch failed, skipping")
+					logger.Warn().Err(err).Str("Ticker", j.Ticker).Msg("intraday fetch failed, skipping")
 
 					continue
 				}
@@ -337,10 +299,73 @@ feed:
 	}
 }
 
-func fetchIntradayChunks(ctx context.Context, client *resty.Client, limiter *rate.Limiter, entry intradayEntry, compositeFigi string, chunks []intradayChunk) ([]*data.IntradayBar, error) {
+// loadIntradayUniverse returns the asset universe for an intraday run.
+// For short lookbacks it returns the currently-active set; for
+// backfills (longer than intradayBackfillThreshold) it includes any
+// asset whose DelistingDate is on or after the start of the window so
+// historical bars for since-delisted tickers are still pulled.
+func loadIntradayUniverse(ctx context.Context, conn *pgxpool.Conn, assetTable string, from time.Time, lookback time.Duration) ([]*data.Asset, error) {
+	if lookback > intradayBackfillThreshold {
+		all, err := data.AllAssets(ctx, conn, assetTable)
+		if err != nil {
+			return nil, err
+		}
+
+		return assetsActiveInWindow(all, from), nil
+	}
+
+	return data.ActiveAssets(ctx, conn, assetTable)
+}
+
+// intradayJob is a single ticker's fetch envelope.
+type intradayJob struct {
+	Ticker        string
+	CompositeFigi string
+	Exchange      string
+}
+
+func buildIntradayJobs(assets []*data.Asset, defaultExchange string, assetTypeFilter map[data.AssetType]struct{}, tickerFilter, figiFilter string) []intradayJob {
+	jobs := make([]intradayJob, 0, len(assets))
+
+	for _, a := range assets {
+		if a.CompositeFigi == "" {
+			continue
+		}
+
+		// Mutual funds price once per day at NAV; they have no
+		// intraday data on EODHD and would just burn quota.
+		if a.AssetType == data.MutualFund {
+			continue
+		}
+
+		if len(assetTypeFilter) > 0 {
+			if _, ok := assetTypeFilter[a.AssetType]; !ok {
+				continue
+			}
+		}
+
+		if tickerFilter != "" && !strings.EqualFold(a.Ticker, tickerFilter) {
+			continue
+		}
+
+		if figiFilter != "" && a.CompositeFigi != figiFilter {
+			continue
+		}
+
+		jobs = append(jobs, intradayJob{
+			Ticker:        a.Ticker,
+			CompositeFigi: a.CompositeFigi,
+			Exchange:      defaultExchange,
+		})
+	}
+
+	return jobs
+}
+
+func fetchIntradayChunks(ctx context.Context, client *resty.Client, limiter *rate.Limiter, job intradayJob, chunks []intradayChunk) ([]*data.IntradayBar, error) {
 	logger := zerolog.Ctx(ctx)
-	eodhdTicker := denormalizeTicker(entry.Ticker)
-	url := fmt.Sprintf(intradayURLTemplate, eodhdTicker, entry.Exchange)
+	eodhdTicker := denormalizeTicker(job.Ticker)
+	url := fmt.Sprintf(intradayURLTemplate, eodhdTicker, job.Exchange)
 
 	var bars []*data.IntradayBar
 
@@ -364,11 +389,11 @@ func fetchIntradayChunks(ctx context.Context, client *resty.Client, limiter *rat
 		}
 
 		if resp.StatusCode() >= 300 {
-			logger.Warn().Int("StatusCode", resp.StatusCode()).Str("Ticker", entry.Ticker).Time("From", chunk.From).Time("To", chunk.To).Msg("intraday HTTP error, skipping chunk")
+			logger.Warn().Int("StatusCode", resp.StatusCode()).Str("Ticker", job.Ticker).Time("From", chunk.From).Time("To", chunk.To).Msg("intraday HTTP error, skipping chunk")
 			continue
 		}
 
-		chunkBars, err := parseIntradayResponse(resp.Body(), entry.Ticker, compositeFigi)
+		chunkBars, err := parseIntradayResponse(resp.Body(), job.Ticker, job.CompositeFigi)
 		if err != nil {
 			return bars, err
 		}

@@ -45,14 +45,12 @@ func (e *EODHD) Name() string {
 
 func (e *EODHD) ConfigDescription() map[string]string {
 	return map[string]string{
-		"apiKey":               "Enter your EODHD API token:",
-		"rateLimit":            "Maximum requests per minute (default 1000).",
-		"exchanges":            "Comma-separated EODHD exchange codes for asset/EOD scope (default 'US').",
-		"assetTypes":           "Comma-separated pv-data asset types to include (CS, ETF, MF, ADRC, ...). Leave blank for all.",
-		"includeDelisted":      "Set to 'true' to also fetch delisted tickers.",
-		"intradayTickers":      "Comma-separated tickers for the intraday loader (e.g. AAPL,BRK/A,MSFT). Leave blank to skip intraday.",
-		"intradayLookbackDays": "How many days back to fetch per intraday run (default 5).",
-		"workers":              "Per-ticker concurrency for EOD/intraday workers (default 10).",
+		"apiKey":          "Enter your EODHD API token:",
+		"rateLimit":       "Maximum requests per minute (default 1000).",
+		"exchanges":       "Comma-separated EODHD exchange codes for asset/EOD scope (default 'US').",
+		"assetTypes":      "Comma-separated pv-data asset types to include (CS, ETF, MF, ADRC, ...). Leave blank for all.",
+		"includeDelisted": "Set to 'true' to also fetch delisted tickers.",
+		"workers":         "Per-ticker concurrency for EOD/intraday workers (default 10).",
 	}
 }
 
@@ -83,7 +81,7 @@ func (e *EODHD) Datasets() map[string]provider.Dataset {
 		},
 		"Intraday 1m": {
 			Name:        "Intraday 1m",
-			Description: "1-minute OHLCV bars for configured tickers (per-ticker fetch).",
+			Description: "1-minute OHLCV bars for the active asset universe (excluding mutual funds).",
 			DataTypes:   []*data.DataType{data.DataTypes[data.IntradayKey]},
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
