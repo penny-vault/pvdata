@@ -16,6 +16,7 @@ package cmd
 
 // Blank imports to trigger init() registration for provider sub-packages.
 import (
+	_ "github.com/penny-vault/pvdata/provider/eodhd"
 	_ "github.com/penny-vault/pvdata/provider/fred"
 	_ "github.com/penny-vault/pvdata/provider/ishares"
 	_ "github.com/penny-vault/pvdata/provider/legacy"

@@ -1,0 +1,47 @@
+[
+  {
+    "Code": "AAPL",
+    "Name": "Apple Inc",
+    "Country": "USA",
+    "Exchange": "NASDAQ",
+    "Currency": "USD",
+    "Type": "Common Stock",
+    "Isin": "US0378331005"
+  },
+  {
+    "Code": "BRK-A",
+    "Name": "Berkshire Hathaway Inc",
+    "Country": "USA",
+    "Exchange": "NYSE",
+    "Currency": "USD",
+    "Type": "Common Stock",
+    "Isin": "US0846701086"
+  },
+  {
+    "Code": "SPY",
+    "Name": "SPDR S&P 500 ETF Trust",
+    "Country": "USA",
+    "Exchange": "NYSE ARCA",
+    "Currency": "USD",
+    "Type": "ETF",
+    "Isin": "US78462F1030"
+  },
+  {
+    "Code": "VFINX",
+    "Name": "Vanguard 500 Index Fund",
+    "Country": "USA",
+    "Exchange": "NMFQS",
+    "Currency": "USD",
+    "Type": "Fund",
+    "Isin": "US9229081088"
+  },
+  {
+    "Code": "WEIRD",
+    "Name": "Weird Type Security",
+    "Country": "USA",
+    "Exchange": "NYSE",
+    "Currency": "USD",
+    "Type": "Warrant",
+    "Isin": ""
+  }
+]
