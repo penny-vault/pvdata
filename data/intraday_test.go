@@ -46,4 +46,14 @@ var _ = Describe("IntradayKey DataType", func() {
 		Expect(strings.Contains(sql, "dividend")).To(BeFalse())
 		Expect(strings.Contains(sql, "split_factor")).To(BeFalse())
 	})
+
+	It("uses double precision for OHLC and integer for volume", func() {
+		dt := data.DataTypes[data.IntradayKey]
+		sql := dt.ExpandedSchema("intraday_bar_eodhd_abc12")
+		Expect(sql).To(ContainSubstring("open           DOUBLE PRECISION"))
+		Expect(sql).To(ContainSubstring("close          DOUBLE PRECISION"))
+		Expect(sql).To(ContainSubstring("volume         INTEGER"))
+		Expect(strings.Contains(sql, "NUMERIC")).To(BeFalse())
+		Expect(strings.Contains(sql, "BIGINT")).To(BeFalse())
+	})
 })
