@@ -325,6 +325,12 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 			}
 		}
 
+		if elem.IntradayBar != nil && subscription.DataTablesMap[data.IntradayKey] != "" {
+			if err := elem.IntradayBar.SaveDB(ctx, subscription.DataTablesMap[data.IntradayKey], conn); err != nil {
+				log.Error().Err(err).Msg("cannot save intraday bar to database")
+			}
+		}
+
 		if elem.MarketHoliday != nil && subscription.DataTablesMap[data.MarketHolidaysKey] != "" {
 			if err := elem.MarketHoliday.SaveDB(ctx, subscription.DataTablesMap[data.MarketHolidaysKey], conn); err != nil {
 				log.Error().Err(err).Msg("cannot save market holiday to database")

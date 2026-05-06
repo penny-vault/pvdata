@@ -50,6 +50,7 @@ type Observation struct {
 	Fundamental       *Fundamental
 	IndexChange       *IndexChange
 	IndexSnapshot     *IndexSnapshot
+	IntradayBar       *IntradayBar
 	MarketHoliday     *MarketHoliday
 	Metric            *Metric
 	Rating            *AnalystRating
@@ -107,6 +108,7 @@ const (
 	FundamentalsKey      = "fundamental"
 	IndexSnapshotKey     = "index-snapshot"
 	IndexChangelogKey    = "index-changelog"
+	IntradayKey          = "intraday-bar"
 	MarketHolidaysKey    = "market-holidays"
 	MetricKey            = "metric"
 	QuoteKey             = "quote"
@@ -310,6 +312,30 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
 		Migrations:    []string{},
 		Version:       0,
 		IsPartitioned: false,
+	},
+	IntradayKey: {
+		Name:       IntradayKey,
+		ViewName:   "intraday_bars",
+		DateColumn: "event_date",
+		Schema: `CREATE TABLE %[1]s (
+ticker         CHARACTER VARYING(10) NOT NULL,
+composite_figi CHARACTER(12)         NOT NULL,
+event_date     TIMESTAMP             NOT NULL,
+open           NUMERIC(12, 4)        NOT NULL DEFAULT 0.0,
+high           NUMERIC(12, 4)        NOT NULL DEFAULT 0.0,
+low            NUMERIC(12, 4)        NOT NULL DEFAULT 0.0,
+close          NUMERIC(12, 4)        NOT NULL DEFAULT 0.0,
+volume         BIGINT                NOT NULL DEFAULT 0,
+CHECK (LENGTH(TRIM(BOTH composite_figi)) = 12),
+PRIMARY KEY (composite_figi, event_date)
+) PARTITION BY RANGE (event_date);
+
+CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date);
+CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
+		Migrations:        []string{},
+		Version:           0,
+		IsPartitioned:     true,
+		PartitionInterval: PartitionIntervalMonthly,
 	},
 	FundamentalsKey: {
 		Name:       FundamentalsKey,
