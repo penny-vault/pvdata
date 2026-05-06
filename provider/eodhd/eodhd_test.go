@@ -129,13 +129,15 @@ var _ = Describe("parseSymbolList", func() {
 		Expect(assets[0].ISIN).To(BeEmpty())
 	})
 
-	It("marks rows as delisted when delisted=true", func() {
+	It("marks rows from delisted=true as inactive without inventing a delisting date", func() {
 		assets, err := parseSymbolList(fixture, true)
 		Expect(err).NotTo(HaveOccurred())
 
 		for _, a := range assets {
 			Expect(a.Active).To(BeFalse())
-			Expect(a.DelistingDate).NotTo(BeEmpty())
+			// EODHD does not return a delisting date in this endpoint,
+			// so we leave it empty rather than stamping "now".
+			Expect(a.DelistingDate).To(BeEmpty())
 		}
 	})
 

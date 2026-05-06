@@ -152,9 +152,9 @@ type eodhdSymbol struct {
 // slice of pv-data assets. Rows whose Type does not map to a known
 // pv-data AssetType are dropped (they include warrants, rights, units,
 // etc. which the rest of the pipeline can't price). When delisted is
-// true the rows are marked Active=false with a delisting timestamp set
-// to "now" (EODHD does not return a precise delist date in this
-// endpoint).
+// true the rows are marked Active=false; the DelistingDate is left
+// empty because EODHD does not return a delisting date in this
+// endpoint and a synthetic "now" timestamp would be misleading.
 func parseSymbolList(body []byte, delisted bool) ([]*data.Asset, error) {
 	var rows []eodhdSymbol
 
@@ -163,7 +163,6 @@ func parseSymbolList(body []byte, delisted bool) ([]*data.Asset, error) {
 	}
 
 	now := time.Now()
-	delistedAt := now.UTC().Format(time.RFC3339)
 
 	out := make([]*data.Asset, 0, len(rows))
 
@@ -184,10 +183,6 @@ func parseSymbolList(body []byte, delisted bool) ([]*data.Asset, error) {
 
 		if row.Isin != "" {
 			asset.ISIN = []string{row.Isin}
-		}
-
-		if delisted {
-			asset.DelistingDate = delistedAt
 		}
 
 		out = append(out, asset)
@@ -322,8 +317,6 @@ func downloadEodhdAssets(ctx context.Context, subscription *library.Subscription
 		figiSeen[a.CompositeFigi] = struct{}{}
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-
 	for _, dbAsset := range dbAssets {
 		if len(assetTypeFilter) > 0 {
 			if _, ok := assetTypeFilter[dbAsset.AssetType]; !ok {
@@ -335,8 +328,12 @@ func downloadEodhdAssets(ctx context.Context, subscription *library.Subscription
 			continue
 		}
 
+		// We don't know when the asset actually delisted; EODHD's
+		// symbol list does not carry that field. Leaving DelistingDate
+		// empty is honest. Active=false + last_updated together signal
+		// "noticed missing on this run".
 		dbAsset.Active = false
-		dbAsset.DelistingDate = now
+		dbAsset.DelistingDate = ""
 		allAssets = append(allAssets, dbAsset)
 	}
 
