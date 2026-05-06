@@ -467,17 +467,7 @@ func readRateLimit(raw string) int {
 	return 1000
 }
 
-// -- EOD/intraday placeholders (implemented in eod.go and intraday.go) --
-
-func downloadEodhdEOD(_ context.Context, subscription *library.Subscription, _ chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
-	exitNotification <- data.RunSummary{
-		StartTime:        time.Now(),
-		EndTime:          time.Now(),
-		Status:           data.RunFailed,
-		SubscriptionID:   subscription.ID,
-		SubscriptionName: subscription.Name,
-	}
-}
+// -- Intraday placeholder (implemented in intraday.go) --
 
 func downloadEodhdIntraday(_ context.Context, subscription *library.Subscription, _ chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	exitNotification <- data.RunSummary{
