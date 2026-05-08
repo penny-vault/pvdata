@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -41,78 +42,98 @@ type Metric struct {
 	Beta            float64
 }
 
-func (metric *Metric) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
-	if metric.Ticker == "" || metric.CompositeFigi == "" {
+// metricUpsertSQL is the per-row INSERT used by SaveMetricsBatch. The
+// table name is injected with fmt.Sprintf at flush time; values are
+// bound as positional parameters.
+const metricUpsertSQL = `INSERT INTO %[1]s (
+	"ticker",
+	"composite_figi",
+	"event_date",
+	"market_cap",
+	"ev",
+	"pe",
+	"pb",
+	"ps",
+	"ev_ebit",
+	"ev_ebitda",
+	"pe_forward",
+	"peg",
+	"price_to_cash_flow",
+	"beta"
+) VALUES (
+	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
+	ticker = EXCLUDED.ticker,
+	market_cap = EXCLUDED.market_cap,
+	ev = EXCLUDED.ev,
+	pe = EXCLUDED.pe,
+	pb = EXCLUDED.pb,
+	ps = EXCLUDED.ps,
+	ev_ebit = EXCLUDED.ev_ebit,
+	ev_ebitda = EXCLUDED.ev_ebitda,
+	pe_forward = EXCLUDED.pe_forward,
+	peg = EXCLUDED.peg,
+	price_to_cash_flow = EXCLUDED.price_to_cash_flow,
+	beta = EXCLUDED.beta`
+
+// SaveMetricsBatch upserts a slice of metrics using pgx.Batch with no
+// outer transaction, so each statement runs in its own implicit
+// server-side transaction. A row that fails its CHECK or unique key is
+// logged without aborting the others. Returns the first error seen.
+func SaveMetricsBatch(ctx context.Context, tbl string, dbConn *pgxpool.Conn, metrics []*Metric) error {
+	if len(metrics) == 0 {
 		return nil
 	}
 
-	tx, err := dbConn.Begin(ctx)
-	if err != nil {
-		return err
+	sql := fmt.Sprintf(metricUpsertSQL, tbl)
+
+	batch := &pgx.Batch{}
+	queued := make([]*Metric, 0, len(metrics))
+
+	for _, m := range metrics {
+		if m.Ticker == "" || m.CompositeFigi == "" {
+			continue
+		}
+
+		batch.Queue(sql,
+			m.Ticker,
+			m.CompositeFigi,
+			m.EventDate,
+			m.MarketCap,
+			m.EV,
+			m.PE,
+			m.PB,
+			m.PS,
+			m.EVtoEBIT,
+			m.EVtoEBITDA,
+			m.PEForward,
+			m.PEG,
+			m.PriceToCashFlow,
+			m.Beta,
+		)
+		queued = append(queued, m)
 	}
 
-	defer func() {
-		if err := tx.Commit(ctx); err != nil {
-			log.Error().Err(err).Msg("error committing metric transaction to database")
-		}
-	}()
+	if len(queued) == 0 {
+		return nil
+	}
 
-	sql := fmt.Sprintf(`INSERT INTO %[1]s (
-		"ticker",
-		"composite_figi",
-		"event_date",
-		"market_cap",
-		"ev",
-		"pe",
-		"pb",
-		"ps",
-		"ev_ebit",
-		"ev_ebitda",
-		"pe_forward",
-		"peg",
-		"price_to_cash_flow",
-		"beta"
-	) VALUES (
-		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
-	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
-		ticker = EXCLUDED.ticker,
-		market_cap = EXCLUDED.market_cap,
-		ev = EXCLUDED.ev,
-		pe = EXCLUDED.pe,
-		pb = EXCLUDED.pb,
-		ps = EXCLUDED.ps,
-		ev_ebit = EXCLUDED.ev_ebit,
-		ev_ebitda = EXCLUDED.ev_ebitda,
-		pe_forward = EXCLUDED.pe_forward,
-		peg = EXCLUDED.peg,
-		price_to_cash_flow = EXCLUDED.price_to_cash_flow,
-		beta = EXCLUDED.beta`, tbl)
+	results := dbConn.SendBatch(ctx, batch)
+	defer results.Close()
 
-	_, err = tx.Exec(ctx, sql,
-		metric.Ticker,
-		metric.CompositeFigi,
-		metric.EventDate,
-		metric.MarketCap,
-		metric.EV,
-		metric.PE,
-		metric.PB,
-		metric.PS,
-		metric.EVtoEBIT,
-		metric.EVtoEBITDA,
-		metric.PEForward,
-		metric.PEG,
-		metric.PriceToCashFlow,
-		metric.Beta,
-	)
-	if err != nil {
-		log.Error().Err(err).Str("SQL", sql).Object("Metric", metric).Msg("save metric to DB failed")
+	var firstErr error
 
-		if err2 := tx.Rollback(ctx); err2 != nil {
-			log.Error().Err(err).Msg("error rollingback tx")
+	for i := range queued {
+		if _, err := results.Exec(); err != nil {
+			log.Error().Err(err).Object("Metric", queued[i]).Msg("save metric to DB failed")
+
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
-	return err
+	return firstErr
 }
 
 func (metric *Metric) MarshalZerologObject(e *zerolog.Event) {

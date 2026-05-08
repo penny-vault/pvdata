@@ -197,6 +197,21 @@ func (myLibrary *Library) TotalSecurities(ctx context.Context) (int, error) {
 	return count, err
 }
 
+// observationBatchSize is the row count at which buffered metrics and
+// fundamentals are flushed via pgx.Batch. A round-trip per batch beats
+// a round-trip per row for bulk file imports (Sharadar, etc.).
+const observationBatchSize = 500
+
+type metricBuffer struct {
+	tbl  string
+	rows []*data.Metric
+}
+
+type fundamentalBuffer struct {
+	tbl  string
+	rows []*data.Fundamental
+}
+
 // SaveObservations continuously reads from the input queue
 func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *sync.WaitGroup, validator *checks.InlineValidator) {
 	ctx := context.Background()
@@ -219,6 +234,43 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 	for _, sub := range subscriptionList {
 		subscriptions[sub.ID] = sub
 	}
+
+	metricsBufs := map[uuid.UUID]*metricBuffer{}
+	fundamentalsBufs := map[uuid.UUID]*fundamentalBuffer{}
+
+	flushMetrics := func(b *metricBuffer) {
+		if len(b.rows) == 0 {
+			return
+		}
+
+		if err := data.SaveMetricsBatch(ctx, b.tbl, conn, b.rows); err != nil {
+			log.Error().Err(err).Msg("cannot save metrics batch to database")
+		}
+
+		b.rows = b.rows[:0]
+	}
+
+	flushFundamentals := func(b *fundamentalBuffer) {
+		if len(b.rows) == 0 {
+			return
+		}
+
+		if err := data.SaveFundamentalsBatch(ctx, b.tbl, conn, b.rows); err != nil {
+			log.Error().Err(err).Msg("cannot save fundamentals batch to database")
+		}
+
+		b.rows = b.rows[:0]
+	}
+
+	defer func() {
+		for _, b := range metricsBufs {
+			flushMetrics(b)
+		}
+
+		for _, b := range fundamentalsBufs {
+			flushFundamentals(b)
+		}
+	}()
 
 	for elem := range queue {
 		subscription, ok := subscriptions[elem.SubscriptionID]
@@ -308,8 +360,18 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 		}
 
 		if elem.Fundamental != nil && subscription.DataTablesMap[data.FundamentalsKey] != "" {
-			if err := elem.Fundamental.SaveDB(ctx, subscription.DataTablesMap[data.FundamentalsKey], conn); err != nil {
-				log.Error().Err(err).Msg("cannot save fundamental to database")
+			tbl := subscription.DataTablesMap[data.FundamentalsKey]
+
+			buf, ok := fundamentalsBufs[subscription.ID]
+			if !ok {
+				buf = &fundamentalBuffer{tbl: tbl, rows: make([]*data.Fundamental, 0, observationBatchSize)}
+				fundamentalsBufs[subscription.ID] = buf
+			}
+
+			buf.rows = append(buf.rows, elem.Fundamental)
+
+			if len(buf.rows) >= observationBatchSize {
+				flushFundamentals(buf)
 			}
 		}
 
@@ -338,8 +400,18 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 		}
 
 		if elem.Metric != nil && subscription.DataTablesMap[data.MetricKey] != "" {
-			if err := elem.Metric.SaveDB(ctx, subscription.DataTablesMap[data.MetricKey], conn); err != nil {
-				log.Error().Err(err).Msg("cannot save metric to database")
+			tbl := subscription.DataTablesMap[data.MetricKey]
+
+			buf, ok := metricsBufs[subscription.ID]
+			if !ok {
+				buf = &metricBuffer{tbl: tbl, rows: make([]*data.Metric, 0, observationBatchSize)}
+				metricsBufs[subscription.ID] = buf
+			}
+
+			buf.rows = append(buf.rows, elem.Metric)
+
+			if len(buf.rows) >= observationBatchSize {
+				flushMetrics(buf)
 			}
 		}
 

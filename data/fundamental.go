@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -630,23 +632,10 @@ type Fundamental struct {
 	WorkingCapital int64 // currency
 }
 
-func (fundamental *Fundamental) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
-	if fundamental.CompositeFigi == "" {
-		return nil
-	}
-
-	tx, err := dbConn.Begin(ctx)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		if err := tx.Commit(ctx); err != nil {
-			log.Error().Err(err).Msg("error committing asset transaction to database")
-		}
-	}()
-
-	sql := fmt.Sprintf(`INSERT INTO %[1]s (
+// fundamentalUpsertSQL is the per-row INSERT used by SaveFundamentalsBatch.
+// The table name is injected with fmt.Sprintf at flush time; values are
+// bound as positional parameters.
+const fundamentalUpsertSQL = `INSERT INTO %[1]s (
 		"event_date",
 		"ticker",
 		"composite_figi",
@@ -862,121 +851,161 @@ func (fundamental *Fundamental) SaveDB(ctx context.Context, tbl string, dbConn *
 		income_tax_expense = EXCLUDED.income_tax_expense,
 		tax_liabilities = EXCLUDED.tax_liabilities,
 		tangible_assets_book_value_per_share = EXCLUDED.tangible_assets_book_value_per_share,
-		working_capital = EXCLUDED.working_capital`, tbl)
+		working_capital = EXCLUDED.working_capital`
 
-	_, err = tx.Exec(ctx, sql,
-		fundamental.EventDate,
-		fundamental.Ticker,
-		fundamental.CompositeFigi,
-		fundamental.Dimension,
-		fundamental.DateKey,
-		fundamental.ReportPeriod,
-		fundamental.LastUpdated,
-		fundamental.AccumulatedOtherComprehensiveIncome,
-		fundamental.TotalAssets,
-		fundamental.AverageAssets,
-		fundamental.CurrentAssets,
-		fundamental.AssetsNonCurrent,
-		fundamental.AssetTurnover,
-		fundamental.BookValuePerShare,
-		fundamental.CapitalExpenditure,
-		fundamental.CashAndEquivalents,
-		fundamental.CostOfRevenue,
-		fundamental.ConsolidatedIncome,
-		fundamental.CurrentRatio,
-		fundamental.DebtToEquityRatio,
-		fundamental.TotalDebt,
-		fundamental.DebtCurrent,
-		fundamental.DebtNonCurrent,
-		fundamental.DeferredRevenue,
-		fundamental.DepreciationAmortizationAndAccretion,
-		fundamental.Deposits,
-		fundamental.DividendYield,
-		fundamental.DividendsPerBasicCommonShare,
-		fundamental.EBIT,
-		fundamental.EBITDA,
-		fundamental.EBITDAMargin,
-		fundamental.EBT,
-		fundamental.EPS,
-		fundamental.EPSDiluted,
-		fundamental.Equity,
-		fundamental.EquityAvg,
-		fundamental.EnterpriseValue,
-		fundamental.EVtoEBIT,
-		fundamental.EVtoEBITDA,
-		fundamental.FreeCashFlow,
-		fundamental.FreeCashFlowPerShare,
-		fundamental.FxUSD,
-		fundamental.GrossProfit,
-		fundamental.GrossMargin,
-		fundamental.Intangibles,
-		fundamental.InterestExpense,
-		fundamental.InvestedCapital,
-		fundamental.InvestedCapitalAverage,
-		fundamental.Inventory,
-		fundamental.Investments,
-		fundamental.InvestmentsCurrent,
-		fundamental.InvestmentsNonCurrent,
-		fundamental.TotalLiabilities,
-		fundamental.CurrentLiabilities,
-		fundamental.LiabilitiesNonCurrent,
-		fundamental.MarketCapitalization,
-		fundamental.NetCashFlow,
-		fundamental.NetCashFlowBusiness,
-		fundamental.NetCashFlowCommon,
-		fundamental.NetCashFlowDebt,
-		fundamental.NetCashFlowDividend,
-		fundamental.NetCashFlowFromFinancing,
-		fundamental.NetCashFlowFromInvesting,
-		fundamental.NetCashFlowInvest,
-		fundamental.NetCashFlowFromOperations,
-		fundamental.NetCashFlowFx,
-		fundamental.NetIncome,
-		fundamental.NetIncomeCommonStock,
-		fundamental.NetLossIncomeDiscontinuedOperations,
-		fundamental.NetIncomeToNonControllingInterests,
-		fundamental.ProfitMargin,
-		fundamental.OperatingExpenses,
-		fundamental.OperatingIncome,
-		fundamental.Payables,
-		fundamental.PayoutRatio,
-		fundamental.PB,
-		fundamental.PE,
-		fundamental.PE1,
-		fundamental.PropertyPlantAndEquipmentNet,
-		fundamental.PreferredDividendsIncomeStatementImpact,
-		fundamental.Price,
-		fundamental.PS,
-		fundamental.PS1,
-		fundamental.Receivables,
-		fundamental.AccumulatedRetainedEarningsDeficit,
-		fundamental.Revenues,
-		fundamental.RandDExpenses,
-		fundamental.ROA,
-		fundamental.ROE,
-		fundamental.ROIC,
-		fundamental.ReturnOnSales,
-		fundamental.ShareBasedCompensation,
-		fundamental.SellingGeneralAndAdministrativeExpense,
-		fundamental.ShareFactor,
-		fundamental.SharesBasic,
-		fundamental.WeightedAverageShares,
-		fundamental.WeightedAverageSharesDiluted,
-		fundamental.SalesPerShare,
-		fundamental.TangibleAssetValue,
-		fundamental.TaxAssets,
-		fundamental.IncomeTaxExpense,
-		fundamental.TaxLiabilities,
-		fundamental.TangibleAssetsBookValuePerShare,
-		fundamental.WorkingCapital,
-	)
-	if err != nil {
-		log.Error().Err(err).Str("SQL", sql).Msg("save fundamental to DB failed")
+// SaveFundamentalsBatch upserts a slice of fundamentals using pgx.Batch
+// with no outer transaction, so each statement runs in its own implicit
+// server-side transaction. A row that fails its CHECK or unique key is
+// logged without aborting the others. Returns the first error seen.
+func SaveFundamentalsBatch(ctx context.Context, tbl string, dbConn *pgxpool.Conn, fundamentals []*Fundamental) error {
+	if len(fundamentals) == 0 {
+		return nil
+	}
 
-		if err2 := tx.Rollback(ctx); err2 != nil {
-			log.Error().Err(err).Msg("error rollingback tx")
+	sql := fmt.Sprintf(fundamentalUpsertSQL, tbl)
+
+	batch := &pgx.Batch{}
+	queued := make([]*Fundamental, 0, len(fundamentals))
+
+	for _, f := range fundamentals {
+		if f.CompositeFigi == "" {
+			continue
+		}
+
+		batch.Queue(sql,
+			f.EventDate,
+			f.Ticker,
+			f.CompositeFigi,
+			f.Dimension,
+			f.DateKey,
+			f.ReportPeriod,
+			f.LastUpdated,
+			f.AccumulatedOtherComprehensiveIncome,
+			f.TotalAssets,
+			f.AverageAssets,
+			f.CurrentAssets,
+			f.AssetsNonCurrent,
+			f.AssetTurnover,
+			f.BookValuePerShare,
+			f.CapitalExpenditure,
+			f.CashAndEquivalents,
+			f.CostOfRevenue,
+			f.ConsolidatedIncome,
+			f.CurrentRatio,
+			f.DebtToEquityRatio,
+			f.TotalDebt,
+			f.DebtCurrent,
+			f.DebtNonCurrent,
+			f.DeferredRevenue,
+			f.DepreciationAmortizationAndAccretion,
+			f.Deposits,
+			f.DividendYield,
+			f.DividendsPerBasicCommonShare,
+			f.EBIT,
+			f.EBITDA,
+			f.EBITDAMargin,
+			f.EBT,
+			f.EPS,
+			f.EPSDiluted,
+			f.Equity,
+			f.EquityAvg,
+			f.EnterpriseValue,
+			f.EVtoEBIT,
+			f.EVtoEBITDA,
+			f.FreeCashFlow,
+			f.FreeCashFlowPerShare,
+			f.FxUSD,
+			f.GrossProfit,
+			f.GrossMargin,
+			f.Intangibles,
+			f.InterestExpense,
+			f.InvestedCapital,
+			f.InvestedCapitalAverage,
+			f.Inventory,
+			f.Investments,
+			f.InvestmentsCurrent,
+			f.InvestmentsNonCurrent,
+			f.TotalLiabilities,
+			f.CurrentLiabilities,
+			f.LiabilitiesNonCurrent,
+			f.MarketCapitalization,
+			f.NetCashFlow,
+			f.NetCashFlowBusiness,
+			f.NetCashFlowCommon,
+			f.NetCashFlowDebt,
+			f.NetCashFlowDividend,
+			f.NetCashFlowFromFinancing,
+			f.NetCashFlowFromInvesting,
+			f.NetCashFlowInvest,
+			f.NetCashFlowFromOperations,
+			f.NetCashFlowFx,
+			f.NetIncome,
+			f.NetIncomeCommonStock,
+			f.NetLossIncomeDiscontinuedOperations,
+			f.NetIncomeToNonControllingInterests,
+			f.ProfitMargin,
+			f.OperatingExpenses,
+			f.OperatingIncome,
+			f.Payables,
+			f.PayoutRatio,
+			f.PB,
+			f.PE,
+			f.PE1,
+			f.PropertyPlantAndEquipmentNet,
+			f.PreferredDividendsIncomeStatementImpact,
+			f.Price,
+			f.PS,
+			f.PS1,
+			f.Receivables,
+			f.AccumulatedRetainedEarningsDeficit,
+			f.Revenues,
+			f.RandDExpenses,
+			f.ROA,
+			f.ROE,
+			f.ROIC,
+			f.ReturnOnSales,
+			f.ShareBasedCompensation,
+			f.SellingGeneralAndAdministrativeExpense,
+			f.ShareFactor,
+			f.SharesBasic,
+			f.WeightedAverageShares,
+			f.WeightedAverageSharesDiluted,
+			f.SalesPerShare,
+			f.TangibleAssetValue,
+			f.TaxAssets,
+			f.IncomeTaxExpense,
+			f.TaxLiabilities,
+			f.TangibleAssetsBookValuePerShare,
+			f.WorkingCapital,
+		)
+		queued = append(queued, f)
+	}
+
+	if len(queued) == 0 {
+		return nil
+	}
+
+	results := dbConn.SendBatch(ctx, batch)
+	defer results.Close()
+
+	var firstErr error
+
+	for i := range queued {
+		if _, err := results.Exec(); err != nil {
+			log.Error().Err(err).Object("Fundamental", queued[i]).Msg("save fundamental to DB failed")
+
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
-	return err
+	return firstErr
+}
+
+func (fundamental *Fundamental) MarshalZerologObject(e *zerolog.Event) {
+	e.Str("Ticker", fundamental.Ticker)
+	e.Str("CompositeFigi", fundamental.CompositeFigi)
+	e.Str("Dimension", fundamental.Dimension)
+	e.Time("EventDate", fundamental.EventDate)
 }
