@@ -774,29 +774,6 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 	}
 }
 
-// activeFigiMap returns a ticker -> composite_figi map of currently active
-// assets. The DB connection is released before this returns so the caller
-// can run a long emit loop without pinning a pgxpool slot.
-func activeFigiMap(ctx context.Context, sub *library.Subscription) (map[string]string, error) {
-	conn, err := sub.Library.AcquireWithTimeout(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("could not acquire database connection: %w", err)
-	}
-	defer conn.Release()
-
-	assets, err := data.ActiveAssets(ctx, conn)
-	if err != nil {
-		return nil, fmt.Errorf("could not load active assets: %w", err)
-	}
-
-	figiMap := make(map[string]string, len(assets))
-	for _, asset := range assets {
-		figiMap[asset.Ticker] = asset.CompositeFigi
-	}
-
-	return figiMap, nil
-}
-
 // allFigiMap returns a ticker -> composite_figi map of every asset
 // (active and delisted), released before returning.
 func allFigiMap(ctx context.Context, sub *library.Subscription) (map[string]string, error) {
@@ -825,7 +802,7 @@ func allFigiMap(ctx context.Context, sub *library.Subscription) (map[string]stri
 func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
-	figiMap, err := activeFigiMap(ctx, sub)
+	figiMap, err := allFigiMap(ctx, sub)
 	if err != nil {
 		return 0, err
 	}
@@ -861,7 +838,7 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 func importMetricsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
-	figiMap, err := activeFigiMap(ctx, sub)
+	figiMap, err := allFigiMap(ctx, sub)
 	if err != nil {
 		return 0, err
 	}
