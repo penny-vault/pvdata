@@ -336,12 +336,12 @@ func processChunk(
 
 	figis := make([]string, len(candidates))
 	figiByTicker := make(map[string]string, len(candidates))
-	activeByFigi := make(map[string]bool, len(candidates))
+	assetByFigi := make(map[string]*data.Asset, len(candidates))
 
 	for i, a := range candidates {
 		figis[i] = a.CompositeFigi
 		figiByTicker[a.Ticker] = a.CompositeFigi
-		activeByFigi[a.CompositeFigi] = a.Active
+		assetByFigi[a.CompositeFigi] = a
 	}
 
 	logger.Info().
@@ -508,12 +508,13 @@ func processChunk(
 		}
 
 		// Hard disqualification: bypass the buffer for stocks that are
-		// clearly no longer tradable (delisted or price collapse below $1).
+		// clearly no longer tradable (delisted on or before d, or price
+		// collapse below $1).
 		for ticker := range pendingRemove {
 			figi := figiByTicker[ticker]
 
 			hardRemove := false
-			if !activeByFigi[figi] {
+			if !assetAliveOn(assetByFigi[figi], d) {
 				hardRemove = true
 			} else {
 				price := mostRecentClose(eodByFigi[figi], d)

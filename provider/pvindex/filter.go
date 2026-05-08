@@ -18,6 +18,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/penny-vault/pvdata/data"
 )
@@ -68,16 +69,14 @@ var allowedExchanges = map[data.Exchange]struct{}{
 }
 
 // filterAssetMaster returns the subset of assets passing the structural filter:
-// active = true, asset_type = CS, primary_exchange in whitelist, name does not match
-// an LP suffix.
+// asset_type = CS, primary_exchange in whitelist, name does not match an LP
+// suffix. Currently-inactive (delisted) rows are intentionally retained:
+// per-date alive-on-D filtering is applied downstream so historical universes
+// can include names that were tradable at the time but have since delisted.
 func filterAssetMaster(assets []*data.Asset) []*data.Asset {
 	out := make([]*data.Asset, 0, len(assets))
 
 	for _, a := range assets {
-		if !a.Active {
-			continue
-		}
-
 		if a.AssetType != data.CommonStock {
 			continue
 		}
@@ -94,6 +93,41 @@ func filterAssetMaster(assets []*data.Asset) []*data.Asset {
 	}
 
 	return out
+}
+
+// assetAliveOn returns true when the asset was tradable on date d.
+//
+// Tradable means: listed on or before d, and not yet delisted as of d.
+// The delisting day itself is excluded -- the row's `delisted` column
+// stores the last trade date, but pvindex's prior-day window means
+// post-delisting evaluations have no usable EOD anyway.
+//
+// Empty or unparseable listed/delisted strings are treated permissively
+// (alive), matching the precedent in provider/eodhd/intraday.go's
+// assetsActiveInWindow helper. Some legacy rows have empty `listed`,
+// which would otherwise exclude every historical date.
+func assetAliveOn(a *data.Asset, d time.Time) bool {
+	if a == nil {
+		return false
+	}
+
+	if a.ListingDate != "" {
+		if listed, err := time.Parse(time.RFC3339, a.ListingDate); err == nil {
+			if d.Before(listed) {
+				return false
+			}
+		}
+	}
+
+	if a.DelistingDate != "" {
+		if delisted, err := time.Parse(time.RFC3339, a.DelistingDate); err == nil {
+			if !d.Before(delisted) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // dedupShareClasses groups assets by CIK (or composite_figi as fallback for null CIK)

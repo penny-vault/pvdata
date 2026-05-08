@@ -15,6 +15,8 @@
 package pvindex
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -65,12 +67,17 @@ var _ = Describe("filterAssetMaster", func() {
 		Expect(out).To(HaveLen(3))
 	})
 
-	It("excludes inactive assets", func() {
+	It("retains inactive (delisted) assets that otherwise pass structural filters", func() {
+		// The structural filter does not gate on `active`. Per-date
+		// alive-on-D filtering happens downstream so historical
+		// universes can include names that were tradable at the time
+		// but have since delisted.
 		input := []*data.Asset{
 			mkAsset("DEAD", "Dead Co", "NYSE", data.CommonStock, false),
 		}
 		out := filterAssetMaster(input)
-		Expect(out).To(BeEmpty())
+		Expect(out).To(HaveLen(1))
+		Expect(out[0].Ticker).To(Equal("DEAD"))
 	})
 
 	It("excludes non-CS asset types", func() {
@@ -244,5 +251,61 @@ var _ = Describe("percentileInt64", func() {
 		vals := []int64{50, 10, 30, 20, 40}
 		_ = percentileInt64(vals, 0.5)
 		Expect(vals).To(Equal([]int64{50, 10, 30, 20, 40}))
+	})
+})
+
+var _ = Describe("assetAliveOn", func() {
+	mkDated := func(active bool, listed, delisted string) *data.Asset {
+		return &data.Asset{
+			Ticker:        "X",
+			Name:          "X Inc",
+			ListingDate:   listed,
+			DelistingDate: delisted,
+			Active:        active,
+		}
+	}
+
+	parse := func(s string) time.Time {
+		t, err := time.Parse("2006-01-02", s)
+		Expect(err).NotTo(HaveOccurred())
+
+		return t
+	}
+
+	It("treats nil as not alive", func() {
+		Expect(assetAliveOn(nil, parse("2020-01-01"))).To(BeFalse())
+	})
+
+	It("returns true when both listed and delisted are empty", func() {
+		a := mkDated(true, "", "")
+		Expect(assetAliveOn(a, parse("2020-01-01"))).To(BeTrue())
+	})
+
+	It("excludes dates strictly before the listed date", func() {
+		a := mkDated(true, "2020-01-15T00:00:00.000000Z", "")
+		Expect(assetAliveOn(a, parse("2020-01-14"))).To(BeFalse())
+		Expect(assetAliveOn(a, parse("2020-01-15"))).To(BeTrue())
+		Expect(assetAliveOn(a, parse("2025-01-01"))).To(BeTrue())
+	})
+
+	It("excludes the delisting day itself and dates after", func() {
+		// SKX-shaped row: Skechers traded its last session on 2025-09-19
+		// after the 3G Capital acquisition closed.
+		a := mkDated(false,
+			"1999-06-09T00:00:00.000000Z",
+			"2025-09-19T00:00:00.000000Z",
+		)
+		Expect(assetAliveOn(a, parse("2025-09-18"))).To(BeTrue())
+		Expect(assetAliveOn(a, parse("2025-09-19"))).To(BeFalse())
+		Expect(assetAliveOn(a, parse("2025-09-20"))).To(BeFalse())
+		Expect(assetAliveOn(a, parse("1999-06-09"))).To(BeTrue())
+		Expect(assetAliveOn(a, parse("1999-06-08"))).To(BeFalse())
+	})
+
+	It("treats unparseable listed/delisted strings as alive", func() {
+		// Permissive fallback matches assetsActiveInWindow's behavior
+		// on legacy rows with non-RFC3339 date strings.
+		a := mkDated(true, "garbage", "also-garbage")
+		Expect(assetAliveOn(a, parse("2020-01-01"))).To(BeTrue())
 	})
 })

@@ -25,7 +25,10 @@ import (
 )
 
 // loadCandidateAssets reads all rows from the `assets` view and returns those passing
-// the structural filter (active, CS, exchange whitelist, not LP).
+// the structural filter (CS, exchange whitelist, not LP). Currently-inactive
+// (delisted) rows are retained here; per-date alive-on-D filtering happens
+// inside the chunk loop so historical universes include names that were
+// tradable at the time but have since delisted.
 func loadCandidateAssets(ctx context.Context, pool *pgxpool.Pool) ([]*data.Asset, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -33,15 +36,15 @@ func loadCandidateAssets(ctx context.Context, pool *pgxpool.Pool) ([]*data.Asset
 	}
 	defer conn.Release()
 
-	all, err := data.ActiveAssets(ctx, conn, "assets")
+	all, err := data.AllAssets(ctx, conn, "assets")
 	if err != nil {
-		return nil, fmt.Errorf("load active assets: %w", err)
+		return nil, fmt.Errorf("load assets: %w", err)
 	}
 
 	filtered := filterAssetMaster(all)
 
 	log.Debug().
-		Int("total_active", len(all)).
+		Int("total_assets", len(all)).
 		Int("after_structural_filter", len(filtered)).
 		Msg("loaded candidate assets")
 
@@ -146,9 +149,15 @@ func loadMarketCapAsOf(ctx context.Context, pool *pgxpool.Pool, figis []string, 
 	return out, nil
 }
 
-// loadBroadMarketCaps returns the market caps of all active CS stocks on
-// whitelisted exchanges for the given date. Used as the percentile baseline
-// for the size and early-entry filters.
+// loadBroadMarketCaps returns the market caps of all CS stocks on
+// whitelisted exchanges that have a positive market_cap on the given date.
+// Used as the percentile baseline for the size and early-entry filters.
+//
+// The query intentionally does NOT filter by `a.active`: presence of a
+// metrics row on `asOf` already proves the name was tradable then, and
+// gating on the current `active` flag would shrink the historical
+// percentile pool by every name that has since delisted, biasing the
+// thresholds upward.
 func loadBroadMarketCaps(ctx context.Context, pool *pgxpool.Pool, asOf time.Time) ([]int64, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -160,8 +169,7 @@ func loadBroadMarketCaps(ctx context.Context, pool *pgxpool.Pool, asOf time.Time
 		`SELECT m.market_cap
 		 FROM metrics m
 		 JOIN assets a USING (composite_figi)
-		 WHERE a.active = true
-		   AND a.asset_type = 'CS'
+		 WHERE a.asset_type = 'CS'
 		   AND a.primary_exchange IN ('NASDAQ','NYSE','NYSE MKT','NYSE ARCA','BATS','AMEX','XNAS','XNYS','XASE','ARCX')
 		   AND m.event_date = $1
 		   AND m.market_cap > 0`,
