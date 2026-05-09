@@ -60,9 +60,11 @@ func (massive *Massive) Name() string {
 
 func (massive *Massive) ConfigDescription() map[string]string {
 	return map[string]string{
-		"apiKey":    "Enter your Massive API key:",
-		"rateLimit": "What is the maximum number of requests per minute?",
-		"filer":     "Where should logos and icons be saved? (e.g. file:///path/)",
+		"apiKey":             "Enter your Massive API key:",
+		"rateLimit":          "What is the maximum number of requests per minute?",
+		"filer":              "Where should logos and icons be saved? (e.g. file:///path/)",
+		"flatFilesAccessKey": "S3 access key id for files.massive.com (only required for the EOD dataset):",
+		"flatFilesSecretKey": "S3 secret access key for files.massive.com (only required for the EOD dataset):",
 	}
 }
 
@@ -90,6 +92,17 @@ func (massive *Massive) Datasets() map[string]provider.Dataset {
 				return time.Date(1949, 4, 19, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
 			Fetch: downloadMassiveAssets,
+		},
+
+		"EOD": {
+			Name:        "EOD",
+			Description: "End-of-day OHLCV pulled from the S3 flat-files endpoint, enriched with splits and dividends from the REST API.",
+			DataTypes:   []*data.DataType{data.DataTypes[data.EODKey]},
+			DateRange: func() (time.Time, time.Time) {
+				return time.Date(2003, 9, 9, 0, 0, 0, 0, time.UTC), time.Now().UTC()
+			},
+			PostFetch: []provider.PostFetchHook{provider.AdjustEodPrices},
+			Fetch:     downloadMassiveEOD,
 		},
 	}
 }
