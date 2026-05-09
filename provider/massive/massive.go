@@ -65,6 +65,7 @@ func (massive *Massive) ConfigDescription() map[string]string {
 		"filer":              "Where should logos and icons be saved? (e.g. file:///path/)",
 		"flatFilesAccessKey": "S3 access key id for files.massive.com (only required for the EOD dataset):",
 		"flatFilesSecretKey": "S3 secret access key for files.massive.com (only required for the EOD dataset):",
+		"iconLogoLimit":      "Max icon/logo fetches per run (blank = 100, 0 = unlimited):",
 	}
 }
 
@@ -119,12 +120,13 @@ type massiveHoliday struct {
 }
 
 type massiveAssetFetcher struct {
-	subscription *library.Subscription
-	client       *resty.Client
-	limiter      *rate.Limiter
-	publishChan  chan<- *data.Observation
-	numPublished int
-	branding     *brandingBudget
+	subscription       *library.Subscription
+	client             *resty.Client
+	limiter            *rate.Limiter
+	publishChan        chan<- *data.Observation
+	numPublished       int
+	branding           *brandingBudget
+	missingBrandingCap int
 }
 
 type massiveResponse struct {
@@ -178,10 +180,20 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	// get a list of all active assets
 	assets := make([]*data.Asset, 0, 6000)
 
+	iconLogoLimit, missingBrandingCap, err := parseIconLogoLimit(subscription.Config["iconLogoLimit"])
+	if err != nil {
+		logger.Error().Err(err).Str("iconLogoLimit", subscription.Config["iconLogoLimit"]).Msg("could not convert iconLogoLimit configuration parameter to an integer")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
 	api := &massiveAssetFetcher{
-		subscription: subscription,
-		publishChan:  out,
-		branding:     NewBrandingBudget(maxIconLogoFetchesPerRun),
+		subscription:       subscription,
+		publishChan:        out,
+		branding:           NewBrandingBudget(iconLogoLimit),
+		missingBrandingCap: missingBrandingCap,
 	}
 
 	defer func() {
@@ -211,30 +223,117 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	api.client = resty.New().SetQueryParam("apiKey", subscription.Config["apiKey"])
 	api.limiter = rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
 
+	// Today's snapshot drives delisted-asset detection. It must reflect
+	// the API's current active=true universe, not a unioned historical
+	// view, otherwise tickers delisted during the lookback window would
+	// appear "still active" to delistedAssets() and never get marked
+	// inactive.
+	var todayUniverse []*data.Asset
+
 	for _, assetType := range []string{"CS", "ADRC", "ETF"} {
-		if tmpAssets, err := api.assets(ctx, assetType); err != nil {
+		tmpAssets, err := api.assets(ctx, assetType, time.Time{})
+		if err != nil {
 			logger.Error().Err(err).Str("AssetType", assetType).Msg("error getting ticker information")
 
 			runSummary.Status = data.RunFailed
 
 			return
-		} else {
-			assets = append(assets, tmpAssets...)
+		}
+
+		todayUniverse = append(todayUniverse, tmpAssets...)
+	}
+
+	// Walk business days in the lookback window using the API's as-of
+	// date parameter to discover tickers that were active during the
+	// window but are not in today's snapshot (e.g., listed-then-delisted
+	// within the window). Dedupe by Asset.ID(), keeping the most-recent
+	// as-of-date payload per ticker. ValidFor is set so SaveDB's guard
+	// can preserve the correct active/delisted state if a stale
+	// observation lands after a fresher one.
+	lookback := provider.LookbackFromContext(ctx, defaultAssetLookback)
+
+	nyc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		logger.Error().Err(err).Msg("could not load timezone")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	now := time.Now().In(nyc)
+	todayMidnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, nyc)
+	startMidnight := todayMidnight.Add(-lookback)
+
+	historicalMap := map[string]*data.Asset{}
+
+	for d := startMidnight; d.Before(todayMidnight); d = d.AddDate(0, 0, 1) {
+		if d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+			continue
+		}
+
+		for _, assetType := range []string{"CS", "ADRC", "ETF"} {
+			tmpAssets, err := api.assets(ctx, assetType, d)
+			if err != nil {
+				logger.Error().Err(err).Str("AssetType", assetType).Time("AsOfDate", d).Msg("error getting historical ticker information")
+
+				runSummary.Status = data.RunFailed
+
+				return
+			}
+
+			for _, a := range tmpAssets {
+				a.ValidFor = d
+
+				existing, ok := historicalMap[a.ID()]
+				if !ok || existing.ValidFor.Before(d) {
+					historicalMap[a.ID()] = a
+				}
+			}
 		}
 	}
 
-	logger.Info().Int("Count", len(assets)).Msg("got assets from massive")
+	// Combined universe: today's snapshot plus lookback-only discoveries.
+	todaySet := make(map[string]struct{}, len(todayUniverse))
+	for _, a := range todayUniverse {
+		todaySet[a.ID()] = struct{}{}
+	}
+
+	assets = append(assets, todayUniverse...)
+
+	for id, a := range historicalMap {
+		if _, present := todaySet[id]; !present {
+			assets = append(assets, a)
+		}
+	}
+
+	logger.Info().
+		Int("TodayCount", len(todayUniverse)).
+		Int("LookbackOnly", len(assets)-len(todayUniverse)).
+		Dur("Lookback", lookback).
+		Msg("got assets from massive")
 
 	// Apply ticker/FIGI filter if set
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
 	if tickerFilter != "" || figiFilter != "" {
-		var filtered []*data.Asset
+		var (
+			filtered      []*data.Asset
+			filteredToday []*data.Asset
+		)
 
 		for _, asset := range assets {
 			if tickerFilter != "" && strings.EqualFold(asset.Ticker, tickerFilter) {
 				filtered = append(filtered, asset)
 			} else if figiFilter != "" && asset.CompositeFigi == figiFilter {
 				filtered = append(filtered, asset)
+			}
+		}
+
+		for _, asset := range todayUniverse {
+			if tickerFilter != "" && strings.EqualFold(asset.Ticker, tickerFilter) {
+				filteredToday = append(filteredToday, asset)
+			} else if figiFilter != "" && asset.CompositeFigi == figiFilter {
+				filteredToday = append(filteredToday, asset)
 			}
 		}
 
@@ -266,6 +365,7 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 		}
 
 		assets = filtered
+		todayUniverse = filteredToday
 
 		log.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
 	}
@@ -285,8 +385,10 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 	api.assetDetails(ctx, assetDetail)
 
-	// get delisting date for inactive assets
-	err = api.delistedAssets(ctx, assets)
+	// get delisting date for inactive assets — operates on today's
+	// snapshot only so the disjoint-set logic against active DB rows
+	// is correct.
+	err = api.delistedAssets(ctx, todayUniverse)
 	if err != nil {
 		// logged by caller
 		runSummary.Status = data.RunFailed
@@ -438,7 +540,7 @@ func (api *massiveAssetFetcher) publish(asset *data.Asset) {
 	api.numPublished++
 }
 
-func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string) ([]*data.Asset, error) {
+func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string, asOfDate time.Time) ([]*data.Asset, error) {
 	logger := zerolog.Ctx(ctx)
 
 	var respContent massiveResponse
@@ -463,13 +565,18 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string) ([
 		log.Panic().Err(err).Msg("rate limit wait failed")
 	}
 
-	resp, err := api.client.R().
+	req := api.client.R().
 		SetQueryParam("market", "stocks").
 		SetQueryParam("active", "true").
 		SetQueryParam("type", assetType).
 		SetQueryParam("limit", "1000").
-		SetResult(&respContent).
-		Get("https://api.massive.com/v3/reference/tickers")
+		SetResult(&respContent)
+
+	if !asOfDate.IsZero() {
+		req = req.SetQueryParam("date", asOfDate.Format("2006-01-02"))
+	}
+
+	resp, err := req.Get("https://api.massive.com/v3/reference/tickers")
 	if err != nil {
 		logger.Error().Err(err).Msg("resty returned an error when querying reference/tickers")
 		return assets, err
@@ -627,6 +734,14 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 		apiAssetMap[fmt.Sprintf("%s:%s", massiveTicker2PvTicker(a.Ticker), a.CompositeFigi)] = struct{}{}
 	}
 
+	// Oversample the SQL LIMIT so that delisted/no-longer-in-API rows
+	// don't starve the queue of refreshable candidates. Guard against
+	// overflow when the cap is effectively unlimited.
+	sqlLimit := api.missingBrandingCap
+	if api.missingBrandingCap < math.MaxInt32/2 {
+		sqlLimit = api.missingBrandingCap * 2
+	}
+
 	missingSQL := fmt.Sprintf(`SELECT
 			ticker, composite_figi, share_class_figi, primary_exchange,
 			asset_type, active, name, description, corporate_url, sector,
@@ -638,7 +753,7 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 		FROM %s
 		WHERE active = true
 		  AND (icon_url IS NULL OR logo_url IS NULL)
-		LIMIT %d`, api.subscription.DataTablesMap[data.AssetKey], maxMissingBrandingPerRun*2)
+		LIMIT %d`, api.subscription.DataTablesMap[data.AssetKey], sqlLimit)
 
 	missingRows, missingErr := pool.Query(ctx, missingSQL)
 	if missingErr != nil {
@@ -651,7 +766,7 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 			added := 0
 
 			for _, m := range dbMissing {
-				if added >= maxMissingBrandingPerRun {
+				if added >= api.missingBrandingCap {
 					break
 				}
 
@@ -1005,6 +1120,32 @@ func massiveTicker2PvTicker(ticker string) string {
 
 const maxIconLogoFetchesPerRun = 100
 const maxMissingBrandingPerRun = 100
+const defaultAssetLookback = 14 * 24 * time.Hour
+
+// parseIconLogoLimit reads the iconLogoLimit subscription config and
+// returns (budget, missingBrandingCap):
+//   - blank/unset: defaults to 100 / 100 (current behavior).
+//   - "0" or any non-positive: treated as unlimited; budget is 0
+//     (brandingBudget interprets <=0 as no cap) and missingBrandingCap
+//     is math.MaxInt32 so the missing-branding lane refreshes every
+//     candidate.
+//   - positive N: both lanes are capped at N.
+func parseIconLogoLimit(raw string) (int, int, error) {
+	if raw == "" {
+		return maxIconLogoFetchesPerRun, maxMissingBrandingPerRun, nil
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if n <= 0 {
+		return 0, math.MaxInt32, nil
+	}
+
+	return n, n, nil
+}
 
 // brandingBudget caps how many icon/logo HTTP fetches a single
 // run performs. A non-positive cap means unlimited. NOT

@@ -103,6 +103,11 @@ type Asset struct {
 	Tags                 []string
 	SimilarTickers       []string  `json:"similar_tickers" toml:"similar_tickers" parquet:"name=similar_tickers, type=MAP, convertedtype=LIST, valuetype=BYTE_ARRAY, valueconvertedtype=UTF8"`
 	LastUpdated          time.Time `json:"last_updated" parquet:"name=last_updated, type=INT64"`
+	// ValidFor is the as-of date of the source observation. SaveDB
+	// uses it to guard active/delisted updates: an observation whose
+	// ValidFor predates the stored delisted timestamp will not flip
+	// those lifecycle fields. Zero value is treated as "now" by SaveDB.
+	ValidFor time.Time `json:"-" db:"-"`
 }
 
 func ActiveAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*Asset, error) {
@@ -275,8 +280,19 @@ func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn
 		delistingDate = nil
 	}
 
+	validFor := asset.ValidFor
+	if validFor.IsZero() {
+		validFor = time.Now()
+	}
+
 	log.Debug().Object("Asset", asset).Msg("Saving asset to database")
 
+	// $24 (valid_for) is not persisted as a column. It guards the
+	// active/delisted lifecycle fields against being overwritten by
+	// stale (older as-of-date) observations: when the stored row is
+	// already known to be delisted and the incoming observation
+	// predates that delisting, both fields keep their existing
+	// values. All other fields update normally — newest write wins.
 	sql := fmt.Sprintf(`INSERT INTO %[1]s (
 		"ticker",
 		"composite_figi",
@@ -306,7 +322,10 @@ func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn
 		$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 	) ON CONFLICT ON CONSTRAINT %[1]s_pkey DO UPDATE SET
 		primary_exchange = EXCLUDED.primary_exchange,
-		active = EXCLUDED.active,
+		active = CASE
+			WHEN %[1]s.delisted IS NOT NULL AND $24 < %[1]s.delisted THEN %[1]s.active
+			ELSE EXCLUDED.active
+		END,
 		name = EXCLUDED.name,
 		description = EXCLUDED.description,
 		corporate_url = EXCLUDED.corporate_url,
@@ -320,7 +339,10 @@ func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn
 		similar_tickers = EXCLUDED.similar_tickers,
 		tags = EXCLUDED.tags,
 		listed = EXCLUDED.listed,
-		delisted = EXCLUDED.delisted,
+		delisted = CASE
+			WHEN %[1]s.delisted IS NOT NULL AND $24 < %[1]s.delisted THEN %[1]s.delisted
+			ELSE EXCLUDED.delisted
+		END,
 		last_updated = EXCLUDED.last_updated,
 		icon_url = COALESCE(EXCLUDED.icon_url, %[1]s.icon_url),
 		logo_url = COALESCE(EXCLUDED.logo_url, %[1]s.logo_url)`, tbl)
@@ -330,7 +352,7 @@ func (asset *Asset) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn
 		asset.CorporateUrl, asset.Sector, asset.Industry, asset.SIC, asset.CIK,
 		asset.CUSIP, asset.ISIN, asset.OtherIdentifiers, asset.SimilarTickers, asset.Tags,
 		listingDate, delistingDate, asset.LastUpdated,
-		brandingBind(asset.IconUrl), brandingBind(asset.LogoUrl))
+		brandingBind(asset.IconUrl), brandingBind(asset.LogoUrl), validFor)
 	if err != nil {
 		log.Error().Err(err).Str("SQL", sql).Msg("save asset to DB failed")
 		return err
