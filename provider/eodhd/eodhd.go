@@ -136,6 +136,68 @@ func mapExchange(eodhdExchange string) data.Exchange {
 	return data.UnknownExchange
 }
 
+// -- DB-backed FIGI reuse --
+
+// applyExistingFigis copies the CompositeFigi/ShareClassFigi from any
+// DB asset that shares a ticker with one of the freshly fetched EODHD
+// assets. EODHD returns no FIGIs of its own, so without this we would
+// either re-query OpenFIGI or mint a new synthetic FIGI for tickers the
+// database already knows about. When multiple DB rows share a ticker
+// (e.g. a current listing plus an old delisted incarnation), the
+// active row wins; ties break on most-recently-updated.
+//
+// Returns the number of EODHD assets that picked up a FIGI from the DB.
+func applyExistingFigis(assets []*data.Asset, dbAssets []*data.Asset) int {
+	if len(assets) == 0 || len(dbAssets) == 0 {
+		return 0
+	}
+
+	byTicker := make(map[string]*data.Asset, len(dbAssets))
+
+	for _, dbAsset := range dbAssets {
+		if dbAsset.Ticker == "" || dbAsset.CompositeFigi == "" {
+			continue
+		}
+
+		cur, ok := byTicker[dbAsset.Ticker]
+		if !ok {
+			byTicker[dbAsset.Ticker] = dbAsset
+			continue
+		}
+
+		if cur.Active != dbAsset.Active {
+			if dbAsset.Active {
+				byTicker[dbAsset.Ticker] = dbAsset
+			}
+
+			continue
+		}
+
+		if dbAsset.LastUpdated.After(cur.LastUpdated) {
+			byTicker[dbAsset.Ticker] = dbAsset
+		}
+	}
+
+	reused := 0
+
+	for _, a := range assets {
+		if a.CompositeFigi != "" {
+			continue
+		}
+
+		dbAsset, ok := byTicker[a.Ticker]
+		if !ok {
+			continue
+		}
+
+		a.CompositeFigi = dbAsset.CompositeFigi
+		a.ShareClassFigi = dbAsset.ShareClassFigi
+		reused++
+	}
+
+	return reused
+}
+
 // -- Symbol-list response parsing --
 
 type eodhdSymbol struct {
@@ -285,6 +347,30 @@ func downloadEodhdAssets(ctx context.Context, subscription *library.Subscription
 		allAssets = filtered
 	}
 
+	conn, err := subscription.Library.AcquireWithTimeout(ctx)
+	if err != nil {
+		log.Panic().Msg("could not acquire database connection")
+	}
+	defer conn.Release()
+
+	// Reuse FIGIs that any provider has already discovered for this
+	// ticker. The unified `assets` view spans every per-subscription
+	// table, so a real FIGI from (say) Sharadar will pre-empt an
+	// unnecessary OpenFIGI lookup or a fresh synthetic FIGI here.
+	unifiedAssets, err := data.AllAssets(ctx, conn)
+	if err != nil {
+		logger.Error().Err(err).Msg("could not load assets from unified view")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	reused := applyExistingFigis(allAssets, unifiedAssets)
+	if reused > 0 {
+		logger.Info().Int("count", reused).Msg("reused FIGIs from existing database assets")
+	}
+
 	logger.Info().Int("count", len(allAssets)).Msg("resolving FIGIs via OpenFIGI")
 	figi.Enrich(allAssets...)
 
@@ -295,17 +381,12 @@ func downloadEodhdAssets(ctx context.Context, subscription *library.Subscription
 		}
 	}
 
-	// Reconcile: anything in DB that no longer appears in the EODHD
-	// universe (and matches the asset-type filter) gets marked delisted.
-	conn, err := subscription.Library.AcquireWithTimeout(ctx)
+	// Reconcile uses the EODHD-specific table so we only flip EODHD's
+	// own previously-active rows to delisted; we never touch other
+	// providers' rows.
+	ownAssets, err := data.ActiveAssets(ctx, conn, subscription.DataTablesMap[data.AssetKey])
 	if err != nil {
-		log.Panic().Msg("could not acquire database connection")
-	}
-	defer conn.Release()
-
-	dbAssets, err := data.ActiveAssets(ctx, conn, subscription.DataTablesMap[data.AssetKey])
-	if err != nil {
-		logger.Error().Err(err).Msg("could not load active assets from database")
+		logger.Error().Err(err).Msg("could not load active assets from EODHD table")
 
 		runSummary.Status = data.RunFailed
 
@@ -317,7 +398,7 @@ func downloadEodhdAssets(ctx context.Context, subscription *library.Subscription
 		figiSeen[a.CompositeFigi] = struct{}{}
 	}
 
-	for _, dbAsset := range dbAssets {
+	for _, dbAsset := range ownAssets {
 		if len(assetTypeFilter) > 0 {
 			if _, ok := assetTypeFilter[dbAsset.AssetType]; !ok {
 				continue

@@ -17,6 +17,7 @@ package eodhd
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -149,5 +150,94 @@ var _ = Describe("parseSymbolList", func() {
 			Expect(a.Active).To(BeTrue())
 			Expect(a.DelistingDate).To(BeEmpty())
 		}
+	})
+})
+
+var _ = Describe("applyExistingFigis", func() {
+	It("copies CompositeFigi and ShareClassFigi from a DB asset that shares a ticker", func() {
+		incoming := []*data.Asset{
+			{Ticker: "AAPL", Name: "Apple Inc"},
+		}
+		dbAssets := []*data.Asset{
+			{Ticker: "AAPL", Name: "Apple Inc", CompositeFigi: "BBG000B9XRY4", ShareClassFigi: "BBG001S5N8V8", Active: true},
+		}
+
+		reused := applyExistingFigis(incoming, dbAssets)
+
+		Expect(reused).To(Equal(1))
+		Expect(incoming[0].CompositeFigi).To(Equal("BBG000B9XRY4"))
+		Expect(incoming[0].ShareClassFigi).To(Equal("BBG001S5N8V8"))
+	})
+
+	It("leaves an EODHD asset alone when no DB asset shares its ticker", func() {
+		incoming := []*data.Asset{
+			{Ticker: "NEW", Name: "New Co"},
+		}
+		dbAssets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", Active: true},
+		}
+
+		reused := applyExistingFigis(incoming, dbAssets)
+
+		Expect(reused).To(Equal(0))
+		Expect(incoming[0].CompositeFigi).To(BeEmpty())
+	})
+
+	It("does not overwrite a CompositeFigi that the EODHD asset already has", func() {
+		incoming := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "PREEXISTING"},
+		}
+		dbAssets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", Active: true},
+		}
+
+		reused := applyExistingFigis(incoming, dbAssets)
+
+		Expect(reused).To(Equal(0))
+		Expect(incoming[0].CompositeFigi).To(Equal("PREEXISTING"))
+	})
+
+	It("prefers an active DB row over a delisted one with the same ticker", func() {
+		incoming := []*data.Asset{
+			{Ticker: "REUSED"},
+		}
+		dbAssets := []*data.Asset{
+			{Ticker: "REUSED", CompositeFigi: "OLD-DELISTED", Active: false, LastUpdated: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
+			{Ticker: "REUSED", CompositeFigi: "CURRENT-ACTIVE", Active: true, LastUpdated: time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)},
+		}
+
+		reused := applyExistingFigis(incoming, dbAssets)
+
+		Expect(reused).To(Equal(1))
+		Expect(incoming[0].CompositeFigi).To(Equal("CURRENT-ACTIVE"))
+	})
+
+	It("breaks ties on most-recently-updated when both DB rows share an active state", func() {
+		incoming := []*data.Asset{
+			{Ticker: "TIE"},
+		}
+		dbAssets := []*data.Asset{
+			{Ticker: "TIE", CompositeFigi: "OLDER", Active: false, LastUpdated: time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)},
+			{Ticker: "TIE", CompositeFigi: "NEWER", Active: false, LastUpdated: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		}
+
+		reused := applyExistingFigis(incoming, dbAssets)
+
+		Expect(reused).To(Equal(1))
+		Expect(incoming[0].CompositeFigi).To(Equal("NEWER"))
+	})
+
+	It("ignores DB rows that have no CompositeFigi", func() {
+		incoming := []*data.Asset{
+			{Ticker: "AAPL"},
+		}
+		dbAssets := []*data.Asset{
+			{Ticker: "AAPL", CompositeFigi: "", Active: true},
+		}
+
+		reused := applyExistingFigis(incoming, dbAssets)
+
+		Expect(reused).To(Equal(0))
+		Expect(incoming[0].CompositeFigi).To(BeEmpty())
 	})
 })
