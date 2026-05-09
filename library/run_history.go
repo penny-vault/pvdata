@@ -300,10 +300,32 @@ func (myLibrary *Library) updateSubscriptionStats(ctx context.Context, conn *pgx
 		return fmt.Errorf("load subscription for stats update: %w", err)
 	}
 
-	// Count total records and date range across all data tables.
+	// Count total records and date range across all data tables. Tables
+	// backed by ClickHouse are counted through the CH connection; the rest
+	// stay on the existing pgx path.
 	var totalRecords int64
 
-	for _, tableName := range sub.DataTables {
+	for idx, tableName := range sub.DataTables {
+		dt := data.DataTypes[sub.DataTypes[idx]]
+
+		if dt != nil && dt.Backend == data.BackendClickHouse {
+			chConn, chErr := myLibrary.ClickHouse(ctx)
+			if chErr != nil {
+				log.Warn().Err(chErr).Str("table", tableName).Msg("could not acquire clickhouse connection for count")
+				continue
+			}
+
+			var count uint64
+			if err := chConn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM %s", tableName)).Scan(&count); err != nil {
+				log.Warn().Err(err).Str("table", tableName).Msg("could not count records in clickhouse table")
+				continue
+			}
+
+			totalRecords += int64(count)
+
+			continue
+		}
+
 		var count int64
 
 		err := conn.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)).Scan(&count)

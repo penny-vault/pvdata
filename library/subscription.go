@@ -74,8 +74,14 @@ type dateRange struct {
 
 // Delete the subscription from database along with all associated tables
 func (subscription *Subscription) Delete(ctx context.Context) error {
-	// Before dropping tables, check published views for references
-	for _, tblName := range subscription.DataTables {
+	// Before dropping tables, check published views for references. Only
+	// Postgres-backed tables can be referenced by published views, so the
+	// check is scoped to those.
+	for idx, tblName := range subscription.DataTables {
+		if subscription.dataTypeAt(idx) != nil && subscription.dataTypeAt(idx).Backend != data.BackendPostgres {
+			continue
+		}
+
 		referenced, err := PublishedViewReferencesTable(ctx, subscription.Library.Pool, tblName)
 		if err != nil {
 			return fmt.Errorf("could not check published views: %w", err)
@@ -107,8 +113,15 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 
 	// DROP TABLE on a partitioned parent automatically drops its child
 	// partitions, so iterating the parent tables is sufficient for both
-	// partitioned and non-partitioned data types.
-	for _, tblName := range subscription.DataTables {
+	// partitioned and non-partitioned data types. ClickHouse-backed tables
+	// are dropped after the Postgres transaction commits so a CH outage
+	// cannot strand a half-deleted subscription row.
+	for idx, tblName := range subscription.DataTables {
+		dt := subscription.dataTypeAt(idx)
+		if dt != nil && dt.Backend != data.BackendPostgres {
+			continue
+		}
+
 		log.Info().Str("TableName", tblName).Msg("delete table")
 
 		_, err := tx.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s;", tblName))
@@ -123,6 +136,10 @@ func (subscription *Subscription) Delete(ctx context.Context) error {
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+
+	if err := subscription.dropClickHouseTables(ctx); err != nil {
 		return err
 	}
 
@@ -337,6 +354,10 @@ func (subscription *Subscription) managePartitionsWithTransaction(ctx context.Co
 		dataType := data.DataTypes[dataTypeName]
 		dataTable := subscription.DataTables[idx]
 
+		if dataType.Backend != data.BackendPostgres {
+			continue
+		}
+
 		if !dataType.IsPartitioned {
 			continue
 		}
@@ -487,6 +508,12 @@ func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 			continue
 		}
 
+		// Migrations on this path are pgx-driven; ClickHouse-backed types
+		// must be migrated through their own (CH-aware) channel.
+		if dataType.Backend != data.BackendPostgres {
+			continue
+		}
+
 		if subscription.SchemaVersion >= dataType.Version {
 			continue
 		}
@@ -531,13 +558,109 @@ func (subscription *Subscription) RunMigrations(ctx context.Context) error {
 }
 
 func (subscription *Subscription) createTables(ctx context.Context, tx pgx.Tx) error {
+	// ClickHouse DDL is applied first, outside the Postgres transaction.
+	// CH CREATE TABLE IF NOT EXISTS is idempotent, so leaving an empty CH
+	// table behind on a later PG-tx rollback is harmless and self-healing.
+	if err := subscription.createClickHouseTables(ctx); err != nil {
+		return err
+	}
+
 	for idx, dataTypeName := range subscription.DataTypes {
 		dataType := data.DataTypes[dataTypeName]
+		if dataType == nil || dataType.Backend != data.BackendPostgres {
+			continue
+		}
+
 		schema := dataType.ExpandedSchema(subscription.DataTables[idx])
 
 		_, err := tx.Exec(ctx, schema)
 		if err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+// dataTypeAt returns the registered DataType for the given index in the
+// subscription's DataTypes slice, or nil if it is not registered.
+func (subscription *Subscription) dataTypeAt(idx int) *data.DataType {
+	if idx < 0 || idx >= len(subscription.DataTypes) {
+		return nil
+	}
+
+	return data.DataTypes[subscription.DataTypes[idx]]
+}
+
+// createClickHouseTables runs CREATE TABLE IF NOT EXISTS for every
+// ClickHouse-backed DataType on the subscription. It is a no-op when no
+// CH-backed types are present so non-intraday subscriptions don't even
+// open the CH connection.
+func (subscription *Subscription) createClickHouseTables(ctx context.Context) error {
+	var pending []int
+
+	for idx, dataTypeName := range subscription.DataTypes {
+		dt := data.DataTypes[dataTypeName]
+		if dt == nil || dt.Backend != data.BackendClickHouse {
+			continue
+		}
+
+		pending = append(pending, idx)
+	}
+
+	if len(pending) == 0 {
+		return nil
+	}
+
+	conn, err := subscription.Library.ClickHouse(ctx)
+	if err != nil {
+		return fmt.Errorf("clickhouse connection: %w", err)
+	}
+
+	for _, idx := range pending {
+		dt := data.DataTypes[subscription.DataTypes[idx]]
+		schema := dt.ExpandedSchema(subscription.DataTables[idx])
+
+		log.Info().Str("TableName", subscription.DataTables[idx]).Msg("creating clickhouse table")
+
+		if err := conn.Exec(ctx, schema); err != nil {
+			return fmt.Errorf("create clickhouse table %s: %w", subscription.DataTables[idx], err)
+		}
+	}
+
+	return nil
+}
+
+// dropClickHouseTables drops every ClickHouse-backed table on the
+// subscription. Called after the Postgres delete tx commits so a CH
+// outage cannot leave the subscription row referencing tables that no
+// longer exist.
+func (subscription *Subscription) dropClickHouseTables(ctx context.Context) error {
+	var pending []string
+
+	for idx, dataTypeName := range subscription.DataTypes {
+		dt := data.DataTypes[dataTypeName]
+		if dt == nil || dt.Backend != data.BackendClickHouse {
+			continue
+		}
+
+		pending = append(pending, subscription.DataTables[idx])
+	}
+
+	if len(pending) == 0 {
+		return nil
+	}
+
+	conn, err := subscription.Library.ClickHouse(ctx)
+	if err != nil {
+		return fmt.Errorf("clickhouse connection: %w", err)
+	}
+
+	for _, tbl := range pending {
+		log.Info().Str("TableName", tbl).Msg("dropping clickhouse table")
+
+		if err := conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl)); err != nil {
+			return fmt.Errorf("drop clickhouse table %s: %w", tbl, err)
 		}
 	}
 

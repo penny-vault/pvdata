@@ -27,33 +27,32 @@ var _ = Describe("IntradayKey DataType", func() {
 		Expect(data.DataTypes).To(HaveKey(data.IntradayKey))
 	})
 
-	It("has the expected partitioning configuration", func() {
+	It("is routed to the ClickHouse backend", func() {
 		dt := data.DataTypes[data.IntradayKey]
-		Expect(dt.IsPartitioned).To(BeTrue())
-		Expect(dt.PartitionInterval).To(Equal(data.PartitionIntervalMonthly))
+		Expect(dt.Backend).To(Equal(data.BackendClickHouse))
+		Expect(dt.IsPartitioned).To(BeFalse())
 		Expect(dt.DateColumn).To(Equal("event_date"))
 	})
 
-	It("renders schema SQL with TIMESTAMP event_date", func() {
+	It("renders ClickHouse DDL with ReplacingMergeTree and monthly partitions", func() {
 		dt := data.DataTypes[data.IntradayKey]
 		sql := dt.ExpandedSchema("intraday_bar_eodhd_abc12")
 		Expect(sql).To(ContainSubstring("intraday_bar_eodhd_abc12"))
-		Expect(sql).To(ContainSubstring("event_date     TIMESTAMP"))
-		Expect(sql).To(ContainSubstring("PARTITION BY RANGE (event_date)"))
-		Expect(sql).To(ContainSubstring("PRIMARY KEY (composite_figi, event_date)"))
-		// no adjusted_close, dividend, or split_factor for intraday
-		Expect(strings.Contains(sql, "adj_close")).To(BeFalse())
-		Expect(strings.Contains(sql, "dividend")).To(BeFalse())
-		Expect(strings.Contains(sql, "split_factor")).To(BeFalse())
+		Expect(sql).To(ContainSubstring("ENGINE = ReplacingMergeTree"))
+		Expect(sql).To(ContainSubstring("PARTITION BY toYYYYMM(event_date)"))
+		Expect(sql).To(ContainSubstring("ORDER BY (composite_figi, event_date)"))
+		// no Postgres-specific syntax should leak in
+		Expect(strings.Contains(sql, "PARTITION BY RANGE")).To(BeFalse())
+		Expect(strings.Contains(sql, "DOUBLE PRECISION")).To(BeFalse())
+		Expect(strings.Contains(sql, "PRIMARY KEY")).To(BeFalse())
 	})
 
-	It("uses double precision for OHLC and integer for volume", func() {
+	It("uses Float64 for OHLC and UInt64 for volume", func() {
 		dt := data.DataTypes[data.IntradayKey]
 		sql := dt.ExpandedSchema("intraday_bar_eodhd_abc12")
-		Expect(sql).To(ContainSubstring("open           DOUBLE PRECISION"))
-		Expect(sql).To(ContainSubstring("close          DOUBLE PRECISION"))
-		Expect(sql).To(ContainSubstring("volume         INTEGER"))
-		Expect(strings.Contains(sql, "NUMERIC")).To(BeFalse())
-		Expect(strings.Contains(sql, "BIGINT")).To(BeFalse())
+		Expect(sql).To(ContainSubstring("open            Float64"))
+		Expect(sql).To(ContainSubstring("close           Float64"))
+		Expect(sql).To(ContainSubstring("volume          UInt64"))
+		Expect(sql).To(ContainSubstring("composite_figi  FixedString(12)"))
 	})
 })

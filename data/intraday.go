@@ -19,8 +19,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rs/zerolog/log"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 type IntradayBar struct {
@@ -34,48 +33,38 @@ type IntradayBar struct {
 	Volume        float64   `json:"volume"`
 }
 
-func (bar *IntradayBar) SaveDB(ctx context.Context, tbl string, dbConn *pgxpool.Conn) error {
-	tx, err := dbConn.Begin(ctx)
-	if err != nil {
-		return err
+// SaveIntradayBarsBatch streams a batch of intraday bars into ClickHouse via
+// the native column-oriented protocol. ClickHouse's ReplacingMergeTree
+// dedupes on (composite_figi, event_date) at merge time, giving last-write-
+// wins semantics equivalent to the previous Postgres ON CONFLICT path.
+func SaveIntradayBarsBatch(ctx context.Context, tbl string, conn driver.Conn, bars []*IntradayBar) error {
+	if len(bars) == 0 {
+		return nil
 	}
 
-	defer func() {
-		if err := tx.Commit(ctx); err != nil {
-			log.Error().Err(err).Msg("error committing intraday bar transaction to database")
-		}
-	}()
-
-	sql := fmt.Sprintf(`INSERT INTO %[1]s (
-		"ticker",
-		"composite_figi",
-		"event_date",
-		"open",
-		"high",
-		"low",
-		"close",
-		"volume"
-	) VALUES (
-		$1,
-		$2,
-		$3,
-		$4,
-		$5,
-		$6,
-		$7,
-		$8
-	) ON CONFLICT ON CONSTRAINT %[1]s_pkey
-	DO UPDATE SET
-		open = EXCLUDED.open,
-		high = EXCLUDED.high,
-		low = EXCLUDED.low,
-		close = EXCLUDED.close,
-		volume = EXCLUDED.volume;`, tbl)
-
-	_, err = tx.Exec(ctx, sql, bar.Ticker, bar.CompositeFigi, bar.Date,
-		bar.Open, bar.High, bar.Low, bar.Close, bar.Volume)
+	batch, err := conn.PrepareBatch(ctx, fmt.Sprintf(
+		"INSERT INTO %s (ticker, composite_figi, event_date, open, high, low, close, volume)", tbl))
 	if err != nil {
-		log.Error().Err(err).Str("SQL", sql).Msg("error saving intraday bar to database")
+		return fmt.Errorf("prepare intraday batch: %w", err)
+	}
+
+	for _, bar := range bars {
+		if err := batch.Append(
+			bar.Ticker,
+			bar.CompositeFigi,
+			bar.Date,
+			bar.Open,
+			bar.High,
+			bar.Low,
+			bar.Close,
+			uint64(bar.Volume),
+		); err != nil {
+			return fmt.Errorf("append intraday row: %w", err)
+		}
+	}
+
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("send intraday batch: %w", err)
 	}
 
 	return nil

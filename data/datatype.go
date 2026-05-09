@@ -69,12 +69,23 @@ type ViewGenerator interface {
 	SelectFrom(tableName string) string
 }
 
+// Backend identifies which database holds a DataType's tables. Most types
+// live in Postgres alongside the subscription metadata; high-cadence types
+// like 1-minute intraday bars are routed to ClickHouse instead.
+type Backend int
+
+const (
+	BackendPostgres Backend = iota
+	BackendClickHouse
+)
+
 type DataType struct {
 	Name              string
 	ViewName          string
 	Schema            string
 	Migrations        []string
 	Version           int
+	Backend           Backend
 	IsPartitioned     bool
 	PartitionInterval string
 	ViewGenerator     ViewGenerator
@@ -317,25 +328,27 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
 		Name:       IntradayKey,
 		ViewName:   "intraday_bars",
 		DateColumn: "event_date",
-		Schema: `CREATE TABLE %[1]s (
-ticker         CHARACTER VARYING(10) NOT NULL,
-composite_figi CHARACTER(12)         NOT NULL,
-event_date     TIMESTAMP             NOT NULL,
-open           DOUBLE PRECISION      NOT NULL DEFAULT 0.0,
-high           DOUBLE PRECISION      NOT NULL DEFAULT 0.0,
-low            DOUBLE PRECISION      NOT NULL DEFAULT 0.0,
-close          DOUBLE PRECISION      NOT NULL DEFAULT 0.0,
-volume         INTEGER               NOT NULL DEFAULT 0,
-CHECK (LENGTH(TRIM(BOTH composite_figi)) = 12),
-PRIMARY KEY (composite_figi, event_date)
-) PARTITION BY RANGE (event_date);
-
-CREATE INDEX %[1]s_event_date_idx ON %[1]s(event_date);
-CREATE INDEX %[1]s_ticker_idx ON %[1]s(ticker);`,
-		Migrations:        []string{},
-		Version:           0,
-		IsPartitioned:     true,
-		PartitionInterval: PartitionIntervalMonthly,
+		Backend:    BackendClickHouse,
+		// ReplacingMergeTree gives last-write-wins on the (composite_figi,
+		// event_date) sort key, the ClickHouse equivalent of the previous
+		// Postgres ON CONFLICT DO UPDATE behaviour. Monthly partitions match
+		// the historical PG layout and keep MergeTree part counts bounded.
+		Schema: `CREATE TABLE IF NOT EXISTS %[1]s (
+    ticker          LowCardinality(String),
+    composite_figi  FixedString(12),
+    event_date      DateTime,
+    open            Float64,
+    high            Float64,
+    low             Float64,
+    close           Float64,
+    volume          UInt64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(event_date)
+ORDER BY (composite_figi, event_date);`,
+		Migrations:    []string{},
+		Version:       0,
+		IsPartitioned: false,
 	},
 	FundamentalsKey: {
 		Name:       FundamentalsKey,

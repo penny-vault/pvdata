@@ -20,6 +20,7 @@ import (
 	"slices"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog/log"
 )
 
@@ -106,6 +107,16 @@ func GetSubscriptionData(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(HttpError{
 			Code:    "400",
 			Message: "invalid table name",
+		})
+	}
+
+	// The values browser drives the pgx pool. ClickHouse-backed types
+	// (e.g. intraday bars) live in a separate database and need their own
+	// read path; surface the limitation instead of erroring out.
+	if dt, ok := data.DataTypes[datatype]; ok && dt.Backend != data.BackendPostgres {
+		return c.Status(fiber.StatusNotImplemented).JSON(HttpError{
+			Code:    "501",
+			Message: fmt.Sprintf("data type %q is stored in ClickHouse; web browsing is not yet supported", datatype),
 		})
 	}
 

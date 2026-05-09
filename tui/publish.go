@@ -953,6 +953,12 @@ func (m *PublishModel) prepareNewView() {
 			continue
 		}
 
+		// Published views are Postgres-only; non-PG backends store data
+		// outside the SQL view universe entirely.
+		if dt.Backend != data.BackendPostgres {
+			continue
+		}
+
 		if existingViewNames[dt.ViewName] {
 			continue
 		}

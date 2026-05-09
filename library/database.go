@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/georgysavva/scany/v2/pgxscan"
 	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
@@ -52,6 +54,13 @@ type Library struct {
 	Owner string
 
 	Pool *pgxpool.Pool
+
+	// ClickHouse is opened lazily on first call to ClickHouse(). It is the
+	// backend for high-cadence types (e.g. 1-minute intraday bars) that
+	// would dominate Postgres I/O if stored alongside daily-cadence data.
+	chOnce sync.Once
+	chConn driver.Conn
+	chErr  error
 }
 
 // newPool builds a pgxpool with explicit sizing and lifetime knobs. The
@@ -97,6 +106,48 @@ func (myLibrary *Library) Connect(ctx context.Context) error {
 // Close the database pool
 func (myLibrary *Library) Close() {
 	myLibrary.Pool.Close()
+
+	if myLibrary.chConn != nil {
+		if err := myLibrary.chConn.Close(); err != nil {
+			log.Warn().Err(err).Msg("error closing clickhouse connection")
+		}
+	}
+}
+
+// ClickHouse returns a lazily-opened ClickHouse connection driven by the
+// `clickhouse.url` viper key. The same connection is reused across calls;
+// the underlying clickhouse-go driver multiplexes statements internally.
+// Returns an error if the key is unset or the initial Ping fails so that
+// callers fail loudly rather than silently dropping writes.
+func (myLibrary *Library) ClickHouse(ctx context.Context) (driver.Conn, error) {
+	myLibrary.chOnce.Do(func() {
+		dsn := viper.GetString("clickhouse.url")
+		if dsn == "" {
+			myLibrary.chErr = fmt.Errorf("clickhouse.url is not configured")
+			return
+		}
+
+		opts, err := clickhouse.ParseDSN(dsn)
+		if err != nil {
+			myLibrary.chErr = fmt.Errorf("parse clickhouse DSN: %w", err)
+			return
+		}
+
+		conn, err := clickhouse.Open(opts)
+		if err != nil {
+			myLibrary.chErr = fmt.Errorf("open clickhouse: %w", err)
+			return
+		}
+
+		if err := conn.Ping(ctx); err != nil {
+			myLibrary.chErr = fmt.Errorf("ping clickhouse: %w", err)
+			return
+		}
+
+		myLibrary.chConn = conn
+	})
+
+	return myLibrary.chConn, myLibrary.chErr
 }
 
 // NewFromDB creates a new library object with values from the database
@@ -212,6 +263,11 @@ type fundamentalBuffer struct {
 	rows []*data.Fundamental
 }
 
+type intradayBuffer struct {
+	tbl  string
+	rows []*data.IntradayBar
+}
+
 // SaveObservations continuously reads from the input queue
 func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *sync.WaitGroup, validator *checks.InlineValidator) {
 	ctx := context.Background()
@@ -237,6 +293,7 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 
 	metricsBufs := map[uuid.UUID]*metricBuffer{}
 	fundamentalsBufs := map[uuid.UUID]*fundamentalBuffer{}
+	intradayBufs := map[uuid.UUID]*intradayBuffer{}
 
 	flushMetrics := func(b *metricBuffer) {
 		if len(b.rows) == 0 {
@@ -262,6 +319,27 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 		b.rows = b.rows[:0]
 	}
 
+	flushIntraday := func(b *intradayBuffer) {
+		if len(b.rows) == 0 {
+			return
+		}
+
+		chConn, chErr := myLibrary.ClickHouse(ctx)
+		if chErr != nil {
+			log.Error().Err(chErr).Msg("cannot acquire clickhouse connection for intraday flush")
+
+			b.rows = b.rows[:0]
+
+			return
+		}
+
+		if err := data.SaveIntradayBarsBatch(ctx, b.tbl, chConn, b.rows); err != nil {
+			log.Error().Err(err).Msg("cannot save intraday batch to clickhouse")
+		}
+
+		b.rows = b.rows[:0]
+	}
+
 	defer func() {
 		for _, b := range metricsBufs {
 			flushMetrics(b)
@@ -269,6 +347,10 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 
 		for _, b := range fundamentalsBufs {
 			flushFundamentals(b)
+		}
+
+		for _, b := range intradayBufs {
+			flushIntraday(b)
 		}
 	}()
 
@@ -388,8 +470,18 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 		}
 
 		if elem.IntradayBar != nil && subscription.DataTablesMap[data.IntradayKey] != "" {
-			if err := elem.IntradayBar.SaveDB(ctx, subscription.DataTablesMap[data.IntradayKey], conn); err != nil {
-				log.Error().Err(err).Msg("cannot save intraday bar to database")
+			tbl := subscription.DataTablesMap[data.IntradayKey]
+
+			buf, ok := intradayBufs[subscription.ID]
+			if !ok {
+				buf = &intradayBuffer{tbl: tbl, rows: make([]*data.IntradayBar, 0, observationBatchSize)}
+				intradayBufs[subscription.ID] = buf
+			}
+
+			buf.rows = append(buf.rows, elem.IntradayBar)
+
+			if len(buf.rows) >= observationBatchSize {
+				flushIntraday(buf)
 			}
 		}
 
