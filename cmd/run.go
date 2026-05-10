@@ -105,13 +105,19 @@ provided then each subscription will execute sequentially.`,
 
 		runManager := tui.NewRunManager(myLibrary, result.Subscriptions)
 
-		if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
-			// No TTY available -- run without TUI, log to stderr
+		// The TUI is opt-in: the default mode is headless (logs streamed
+		// to stderr) so `pvdata run` plays well with cron, scripts, and
+		// CI. Pass --tui to get the interactive run dashboard.
+		if !viper.GetBool("tui") {
 			consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
 			log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
 
 			runManager.RunAll(ctx)
 		} else {
+			if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
+				log.Fatal().Msg("--tui requires a terminal; rerun without the flag for headless mode")
+			}
+
 			if err := tui.Run(ctx, myLibrary, runManager, logWriter); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -126,6 +132,11 @@ func init() {
 	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
 	runCmd.Flags().String("companyfacts-zip", "", "Use a local companyfacts.zip instead of downloading from SEC")
 	runCmd.Flags().String("filing-cutoff", "", "Exclude SEC filings filed after this date (YYYY-MM-DD format)")
+	runCmd.Flags().Bool("tui", false, "Show the interactive run dashboard (default: headless logging to stderr)")
+
+	if err := viper.BindPFlag("tui", runCmd.Flags().Lookup("tui")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind tui flag")
+	}
 
 	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind lookback flag")
