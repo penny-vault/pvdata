@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -58,15 +59,14 @@ func (massive *Massive) Name() string {
 	return "massive"
 }
 
+// ConfigDescription returns provider-level prompts shared by every
+// Massive dataset. There are none today: the REST credentials apply
+// only to REST-using datasets, the S3 keys apply only to flat-file
+// datasets, and asset-binary settings apply only to Stock Tickers.
+// Each dataset declares the keys it actually needs in its Dataset
+// definition below.
 func (massive *Massive) ConfigDescription() map[string]string {
-	return map[string]string{
-		"apiKey":             "Enter your Massive API key:",
-		"rateLimit":          "What is the maximum number of requests per minute?",
-		"filer":              "Where should logos and icons be saved? (e.g. file:///path/)",
-		"flatFilesAccessKey": "S3 access key id for files.massive.com (only required for the EOD dataset):",
-		"flatFilesSecretKey": "S3 secret access key for files.massive.com (only required for the EOD dataset):",
-		"iconLogoLimit":      "Max icon/logo fetches per run (blank = 100, 0 = unlimited):",
-	}
+	return map[string]string{}
 }
 
 func (massive *Massive) Description() string {
@@ -74,6 +74,16 @@ func (massive *Massive) Description() string {
 }
 
 func (massive *Massive) Datasets() map[string]provider.Dataset {
+	restAPIPrompts := map[string]string{
+		"apiKey":    "Enter your Massive API key:",
+		"rateLimit": "What is the maximum number of requests per minute?",
+	}
+
+	flatFilesPrompts := map[string]string{
+		"flatFilesAccessKey": "S3 access key id for files.massive.com:",
+		"flatFilesSecretKey": "S3 secret access key for files.massive.com:",
+	}
+
 	return map[string]provider.Dataset{
 		"Market Holidays": {
 			Name:        "Market Holidays",
@@ -82,7 +92,8 @@ func (massive *Massive) Datasets() map[string]provider.Dataset {
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
-			Fetch: downloadMassiveMarketHolidays,
+			ConfigDescription: restAPIPrompts,
+			Fetch:             downloadMassiveMarketHolidays,
 		},
 
 		"Stock Tickers": {
@@ -92,6 +103,10 @@ func (massive *Massive) Datasets() map[string]provider.Dataset {
 			DateRange: func() (time.Time, time.Time) {
 				return time.Date(1949, 4, 19, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
+			ConfigDescription: mergeConfigDescriptions(restAPIPrompts, map[string]string{
+				"filer":         "Where should logos and icons be saved? (e.g. file:///path/)",
+				"iconLogoLimit": "Max icon/logo fetches per run (blank = 100, 0 = unlimited):",
+			}),
 			Fetch: downloadMassiveAssets,
 		},
 
@@ -100,12 +115,60 @@ func (massive *Massive) Datasets() map[string]provider.Dataset {
 			Description: "End-of-day OHLCV pulled from the S3 flat-files endpoint, enriched with splits and dividends from the REST API.",
 			DataTypes:   []*data.DataType{data.DataTypes[data.EODKey]},
 			DateRange: func() (time.Time, time.Time) {
-				return time.Date(2003, 9, 9, 0, 0, 0, 0, time.UTC), time.Now().UTC()
+				return time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
-			PostFetch: []provider.PostFetchHook{provider.AdjustEodPrices},
-			Fetch:     downloadMassiveEOD,
+			ConfigDescription: mergeConfigDescriptions(restAPIPrompts, flatFilesPrompts),
+			PostFetch:         []provider.PostFetchHook{provider.AdjustEodPrices},
+			Fetch:             downloadMassiveEOD,
+		},
+
+		"1-Minute Bars": {
+			Name:        "1-Minute Bars",
+			Description: "1-minute OHLCV bars pulled from the S3 flat-files endpoint. Includes pre-market and after-hours rows. Stored in ClickHouse via the IntradayKey backend.",
+			DataTypes:   []*data.DataType{data.DataTypes[data.IntradayKey]},
+			DateRange: func() (time.Time, time.Time) {
+				return time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC), time.Now().UTC()
+			},
+			ConfigDescription: flatFilesPrompts,
+			Fetch:             downloadMassiveMinute,
 		},
 	}
+}
+
+// newMassiveRESTClient builds a resty client configured for the
+// long-running paginated workloads we run against api.massive.com.
+// HTTP/2 GOAWAY frames - sent by the server after extended idle or
+// when shedding load - surface as transport errors that the default
+// resty client treats as fatal, aborting long backfills. Exponential-
+// backoff retry on transport errors and 5xx responses recovers
+// transparently in those cases.
+func newMassiveRESTClient(apiKey string) *resty.Client {
+	return resty.New().
+		SetQueryParam("apiKey", apiKey).
+		SetRetryCount(5).
+		SetRetryWaitTime(2 * time.Second).
+		SetRetryMaxWaitTime(30 * time.Second).
+		AddRetryCondition(func(resp *resty.Response, err error) bool {
+			if err != nil {
+				return true
+			}
+
+			return resp.StatusCode() >= 500
+		})
+}
+
+// mergeConfigDescriptions returns a new map containing every key/value
+// from the given maps. Later maps win on key collisions. Used to compose
+// dataset ConfigDescriptions out of small reusable groups (REST creds,
+// flat-files creds, etc.) without sharing mutable state.
+func mergeConfigDescriptions(parts ...map[string]string) map[string]string {
+	out := make(map[string]string)
+
+	for _, m := range parts {
+		maps.Copy(out, m)
+	}
+
+	return out
 }
 
 // Private interfaces
@@ -217,10 +280,10 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	}
 
 	if rateLimit <= 0 {
-		rateLimit = 5000
+		rateLimit = defaultRateLimit
 	}
 
-	api.client = resty.New().SetQueryParam("apiKey", subscription.Config["apiKey"])
+	api.client = newMassiveRESTClient(subscription.Config["apiKey"])
 	api.limiter = rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
 
 	// Today's snapshot drives delisted-asset detection. It must reflect
@@ -435,10 +498,10 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 	}
 
 	if rateLimit <= 0 {
-		rateLimit = 5000
+		rateLimit = defaultRateLimit
 	}
 
-	client := resty.New().SetQueryParam("apiKey", subscription.Config["apiKey"])
+	client := newMassiveRESTClient(subscription.Config["apiKey"])
 	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
 
 	// get nyc timezone

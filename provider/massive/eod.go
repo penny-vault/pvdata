@@ -15,14 +15,15 @@
 package massive
 
 import (
-	"compress/gzip"
 	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -36,6 +37,8 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
+	"github.com/spf13/viper"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -44,11 +47,16 @@ const (
 	flatFilesBucket   = "flatfiles"
 	dayAggsKeyFormat  = "us_stocks_sip/day_aggs_v1/%04d/%02d/%s.csv.gz"
 
+	defaultEODLookback = 7 * 24 * time.Hour
+	defaultRateLimit   = 600
+)
+
+// REST endpoint URLs are vars (not const) so that httptest-backed
+// tests can swap them to a local server. Production code never
+// reassigns these.
+var (
 	splitsURL    = "https://api.massive.com/v3/reference/splits"
 	dividendsURL = "https://api.massive.com/v3/reference/dividends"
-
-	defaultEODLookback = 7 * 24 * time.Hour
-	defaultRateLimit   = 5000
 )
 
 func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan<- *data.Observation, exit chan<- data.RunSummary) {
@@ -86,7 +94,7 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 
 	rateLimit := readEODRateLimit(sub.Config["rateLimit"])
 	limiter := rate.NewLimiter(rate.Limit(float64(rateLimit)/61.0), 1)
-	restClient := resty.New().SetQueryParam("apiKey", sub.Config["apiKey"])
+	restClient := newMassiveRESTClient(sub.Config["apiKey"])
 	s3Client := newFlatFilesClient(accessKey, secretKey)
 
 	end := time.Now().UTC().Truncate(24 * time.Hour)
@@ -102,12 +110,22 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 		return
 	}
 
-	dbAssets, err := data.ActiveAssets(ctx, conn, sub.DataTablesMap[data.AssetKey])
+	// Asset universe always reads from the published "assets" view -
+	// it is the canonical union across every asset-producing
+	// subscription. Reading from a per-subscription table would miss
+	// tickers owned by other providers (and breaks for subscriptions
+	// like EOD that don't even own AssetKey themselves).
+	//
+	// AllAssets (not ActiveAssets) is used so historical bars for
+	// since-delisted tickers still resolve. The historicalAssetUniverse
+	// gates each row against the asset's listed/delisted dates, so
+	// today's `active=false` does not drop yesterday's data.
+	dbAssets, err := data.AllAssets(ctx, conn)
 
 	conn.Release()
 
 	if err != nil {
-		logger.Error().Err(err).Msg("could not load active assets")
+		logger.Error().Err(err).Msg("could not load assets")
 
 		runSummary.Status = data.RunFailed
 
@@ -115,25 +133,9 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 	}
 
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	universe := buildHistoricalUniverse(dbAssets, tickerFilter, figiFilter)
 
-	tickerToFigi := make(map[string]string, len(dbAssets))
-	for _, a := range dbAssets {
-		if a.CompositeFigi == "" {
-			continue
-		}
-
-		if tickerFilter != "" && !strings.EqualFold(a.Ticker, tickerFilter) {
-			continue
-		}
-
-		if figiFilter != "" && a.CompositeFigi != figiFilter {
-			continue
-		}
-
-		tickerToFigi[a.Ticker] = a.CompositeFigi
-	}
-
-	if len(tickerToFigi) == 0 {
+	if universe.tickerCount() == 0 {
 		logger.Warn().Msg("no assets in scope for massive EOD; skipping run")
 		return
 	}
@@ -141,10 +143,12 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 	logger.Info().
 		Time("start", start).
 		Time("end", end).
-		Int("scope_assets", len(tickerToFigi)).
+		Int("scope_tickers", universe.tickerCount()).
 		Msg("massive flat-files EOD loader starting")
 
-	splits, err := fetchSplitsRange(ctx, restClient, limiter, start, end)
+	logger.Info().Time("from", start).Time("to", end).Msg("fetching splits from massive REST")
+
+	splits, allSplits, err := fetchSplitsRange(ctx, restClient, limiter, start, end)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not fetch splits from massive REST")
 
@@ -153,7 +157,9 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 		return
 	}
 
-	divs, err := fetchDividendsRange(ctx, restClient, limiter, start, end)
+	logger.Info().Time("from", start).Time("to", end).Msg("fetching dividends from massive REST")
+
+	divs, allDivs, err := fetchDividendsRange(ctx, restClient, limiter, start, end)
 	if err != nil {
 		logger.Error().Err(err).Msg("could not fetch dividends from massive REST")
 
@@ -165,27 +171,38 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 	logger.Info().
 		Int("split_tickers", splits.tickerCount()).
 		Int("dividend_tickers", divs.tickerCount()).
-		Msg("loaded corporate actions for window")
+		Int("split_records", len(allSplits)).
+		Int("dividend_records", len(allDivs)).
+		Msg("loaded corporate actions for window; starting daily flat-file iteration")
 
-	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-		if isWeekend(d) {
-			continue
+	// Faithful per-year parquet backups of the corporate-action API
+	// responses. Failures log a warning but do not abort the run -
+	// EOD save is the primary contract.
+	if backupDir := strings.TrimSpace(viper.GetString("parquet_backup_dir")); backupDir != "" {
+		base := filepath.Join(backupDir, subscriptionBackupSlug(sub))
+
+		if err := writeCorporateActionsBackup(filepath.Join(base, "splits"), allSplits, splitYear); err != nil {
+			logger.Warn().Err(err).Msg("splits parquet backup failed")
 		}
 
-		n, err := streamDayAggsForDate(ctx, s3Client, sub, tickerToFigi, splits, divs, d, out)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				runSummary.Status = data.RunFailed
-				return
-			}
-
-			logger.Warn().Err(err).Time("date", d).Msg("day aggregates fetch failed; skipping date")
-
-			continue
+		if err := writeCorporateActionsBackup(filepath.Join(base, "dividends"), allDivs, dividendYear); err != nil {
+			logger.Warn().Err(err).Msg("dividends parquet backup failed")
 		}
-
-		numObs += n
 	}
+
+	process := func(ctx context.Context, d time.Time) (int, error) {
+		return streamDayAggsForDate(ctx, s3Client, sub, universe, splits, divs, d, out)
+	}
+
+	workers := pickFlatFileWorkers(logger, start, end, "day_aggs")
+
+	n, err := downloadDailyAggsRange(ctx, logger, "day_aggs", workers, start, end, process)
+	if err != nil {
+		runSummary.Status = data.RunFailed
+		return
+	}
+
+	numObs += n
 }
 
 // newFlatFilesClient builds an S3 client targeting Massive's
@@ -211,34 +228,25 @@ func isWeekend(d time.Time) bool {
 }
 
 // streamDayAggsForDate downloads and parses the day-aggregates file
-// for date d. Rows whose ticker is not in tickerToFigi are dropped.
-// A NoSuchKey response (non-trading day, or file not yet published)
-// is treated as an empty result rather than an error.
-func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.Subscription, tickerToFigi map[string]string, splits, divs corporateActions, d time.Time, out chan<- *data.Observation) (int, error) {
+// for date d. Rows whose ticker had no figi in the universe AS OF
+// date d are dropped (i.e. tickers that hadn't listed yet, or had
+// already delisted). A NoSuchKey response (non-trading day, or file
+// not yet published) is treated as an empty result rather than an
+// error. Transient transport / mid-stream failures are retried with
+// exponential backoff before giving up on the date.
+func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.Subscription, universe *historicalAssetUniverse, splits, divs corporateActions, d time.Time, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 	key := dayAggsKey(d)
 
-	obj, err := client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(flatFilesBucket),
-		Key:    aws.String(key),
-	})
+	rows, err := fetchAndParseAggs(ctx, client, key)
 	if err != nil {
-		if isNoSuchKey(err) {
+		if errors.Is(err, errFlatFileMissing) {
 			logger.Debug().Str("key", key).Msg("flat file not present; skipping date")
 			return 0, nil
 		}
 
-		return 0, fmt.Errorf("getobject %s: %w", key, err)
+		return 0, err
 	}
-
-	defer obj.Body.Close()
-
-	gz, err := gzip.NewReader(obj.Body)
-	if err != nil {
-		return 0, fmt.Errorf("gunzip %s: %w", key, err)
-	}
-
-	defer gz.Close()
 
 	eventTime, err := buildMassiveEodEvent(d)
 	if err != nil {
@@ -247,18 +255,36 @@ func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.S
 
 	dateStr := d.Format("2006-01-02")
 
-	rows, err := parseDayAggs(gz)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, err)
+	// Optional parquet backup of the source file. Backup failures are
+	// logged but do not abort the run - the EOD save path is the
+	// primary contract; the backup is best-effort archival.
+	if backupDir := strings.TrimSpace(viper.GetString("parquet_backup_dir")); backupDir != "" {
+		destPath := backupPathFor(filepath.Join(backupDir, subscriptionBackupSlug(sub)), d)
+
+		exists, statErr := backupExists(destPath)
+		switch {
+		case statErr != nil:
+			logger.Warn().Err(statErr).Str("path", destPath).Msg("could not stat backup destination; skipping backup")
+		case exists:
+			logger.Debug().Str("path", destPath).Msg("parquet backup already present; skipping")
+		default:
+			if err := writeFlatFileBackup(destPath, rows); err != nil {
+				logger.Warn().Err(err).Str("path", destPath).Msg("parquet backup failed")
+			} else {
+				logger.Info().Str("path", destPath).Int("rows", len(rows)).Msg("wrote parquet backup")
+			}
+		}
 	}
 
 	n := 0
+	unknown := map[string]int{}
 
 	for _, row := range rows {
 		ticker := massiveTicker2PvTicker(row.Ticker)
 
-		figi, ok := tickerToFigi[ticker]
+		figi, ok := universe.figiAt(ticker, d)
 		if !ok {
+			unknown[ticker]++
 			continue
 		}
 
@@ -293,6 +319,8 @@ func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.S
 		}
 	}
 
+	logUnknownTickers(logger, dateStr, "day_aggs", n, unknown)
+
 	return n, nil
 }
 
@@ -315,21 +343,30 @@ func isNoSuchKey(err error) bool {
 	return false
 }
 
-// dayAggRow is a single parsed row from a day_aggs_v1 flat file.
-type dayAggRow struct {
-	Ticker string
-	Open   float64
-	High   float64
-	Low    float64
-	Close  float64
-	Volume float64
+// aggRow is a single parsed row from an aggregates flat file. Both
+// day_aggs_v1 (one row per ticker per day) and minute_aggs_v1 (one
+// row per ticker per minute) share the exact same CSV schema and
+// reuse this struct + parser. The parquet struct tags drive the
+// column names in the optional backup file written by
+// writeFlatFileBackup; window_start carries minute-level resolution
+// for minute_aggs and is the day open boundary for day_aggs.
+type aggRow struct {
+	Ticker       string  `parquet:"ticker"`
+	Volume       float64 `parquet:"volume"`
+	Open         float64 `parquet:"open"`
+	Close        float64 `parquet:"close"`
+	High         float64 `parquet:"high"`
+	Low          float64 `parquet:"low"`
+	WindowStart  int64   `parquet:"window_start"`
+	Transactions int64   `parquet:"transactions"`
 }
 
-// parseDayAggs reads CSV rows from r (already gunzipped) and returns
+// parseAggs reads CSV rows from r (already gunzipped) and returns
 // the parsed rows. The expected header is
 // "ticker,volume,open,close,high,low,window_start,transactions" but
 // columns are looked up by name so order/extra columns are tolerated.
-func parseDayAggs(r io.Reader) ([]dayAggRow, error) {
+// window_start and transactions are optional - missing values are zero.
+func parseAggs(r io.Reader) ([]aggRow, error) {
 	reader := csv.NewReader(r)
 	reader.FieldsPerRecord = -1
 
@@ -346,7 +383,7 @@ func parseDayAggs(r io.Reader) ([]dayAggRow, error) {
 		}
 	}
 
-	var rows []dayAggRow
+	var rows []aggRow
 
 	for {
 		record, err := reader.Read()
@@ -358,17 +395,45 @@ func parseDayAggs(r io.Reader) ([]dayAggRow, error) {
 			return rows, fmt.Errorf("read row: %w", err)
 		}
 
-		rows = append(rows, dayAggRow{
-			Ticker: record[cols["ticker"]],
-			Open:   parseFloat(record[cols["open"]]),
-			High:   parseFloat(record[cols["high"]]),
-			Low:    parseFloat(record[cols["low"]]),
-			Close:  parseFloat(record[cols["close"]]),
-			Volume: parseFloat(record[cols["volume"]]),
+		rows = append(rows, aggRow{
+			Ticker:       record[cols["ticker"]],
+			Volume:       parseFloat(record[cols["volume"]]),
+			Open:         parseFloat(record[cols["open"]]),
+			Close:        parseFloat(record[cols["close"]]),
+			High:         parseFloat(record[cols["high"]]),
+			Low:          parseFloat(record[cols["low"]]),
+			WindowStart:  parseInt(getCol(record, cols, "window_start")),
+			Transactions: parseInt(getCol(record, cols, "transactions")),
 		})
 	}
 
 	return rows, nil
+}
+
+// getCol returns the field value from record at the named column, or
+// the empty string if the column is absent. Used for optional CSV
+// columns whose presence is not required by parseAggs.
+func getCol(record []string, cols map[string]int, name string) string {
+	idx, ok := cols[name]
+	if !ok || idx >= len(record) {
+		return ""
+	}
+
+	return record[idx]
+}
+
+func parseInt(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+
+	return v
 }
 
 func indexHeader(header []string) map[string]int {
@@ -447,31 +512,169 @@ func (c corporateActions) tickerCount() int {
 	return len(c)
 }
 
+// numFetchWindows is the default number of parallel sub-windows used
+// when fetching paginated REST listings (splits, dividends). Polygon's
+// cursor-pagination latency grows with cursor depth, so splitting a
+// long date range into N independent shallow chains and running them
+// concurrently is roughly bounded by max(per-window-time) rather than
+// sum(per-window-time). 4 is enough to recover most of the speedup
+// without saturating the rate limiter on heavy ranges.
+const numFetchWindows = 4
+
+// minDaysForParallel is the lookback threshold below which parallel
+// pagination is skipped. Daily and weekly incremental runs typically
+// fit in a single 1000-record page, so spawning 4 goroutines and 4
+// HTTP connections for them adds overhead and log noise without any
+// throughput benefit.
+const minDaysForParallel = 365
+
+// fetchWindow is a half-open-on-the-right calendar interval (start
+// inclusive, end inclusive in API params; consecutive windows are
+// stepped by one day to ensure no overlap on the seam).
+type fetchWindow struct {
+	start time.Time
+	end   time.Time
+}
+
+// splitFetchWindows divides [start, end] into n non-overlapping
+// non-skipping windows. Window i+1's start is window i's end + 1 day,
+// so a query of (gte=window.start, lte=window.end) on each produces
+// disjoint sets that together cover the original range exactly once.
+// Falls back to a single window when:
+//   - n <= 1
+//   - start is not before end (degenerate or inverted range)
+//   - the range is shorter (in days) than n
+func splitFetchWindows(start, end time.Time, n int) []fetchWindow {
+	if n <= 1 || !start.Before(end) {
+		return []fetchWindow{{start: start, end: end}}
+	}
+
+	totalDays := int(end.Sub(start).Hours()/24) + 1
+	if totalDays < n || totalDays < minDaysForParallel {
+		return []fetchWindow{{start: start, end: end}}
+	}
+
+	daysPerWindow := totalDays / n
+
+	out := make([]fetchWindow, 0, n)
+	cur := start
+
+	for i := range n {
+		var next time.Time
+		if i == n-1 {
+			next = end
+		} else {
+			next = cur.AddDate(0, 0, daysPerWindow-1)
+		}
+
+		out = append(out, fetchWindow{start: cur, end: next})
+		cur = next.AddDate(0, 0, 1)
+	}
+
+	return out
+}
+
+// splitYear extracts the calendar year from a split's execution_date
+// for parquet bucketing. An unparseable date returns zero, which sends
+// the record to a 0000.parquet file rather than dropping it.
+func splitYear(s massiveSplit) int {
+	t, err := time.Parse("2006-01-02", s.ExecutionDate)
+	if err != nil {
+		return 0
+	}
+
+	return t.Year()
+}
+
+// dividendYear extracts the calendar year from a dividend's
+// ex_dividend_date for parquet bucketing. Same fallback behaviour as
+// splitYear.
+func dividendYear(d massiveDividend) int {
+	t, err := time.Parse("2006-01-02", d.ExDividendDate)
+	if err != nil {
+		return 0
+	}
+
+	return t.Year()
+}
+
+// massiveSplit mirrors every field documented for the
+// /v3/reference/splits endpoint. Parquet tags are present so the same
+// struct doubles as the schema for the per-year backup file.
 type massiveSplit struct {
-	Ticker        string  `json:"ticker"`
-	ExecutionDate string  `json:"execution_date"`
-	SplitFrom     float64 `json:"split_from"`
-	SplitTo       float64 `json:"split_to"`
+	ID            string  `json:"id" parquet:"id"`
+	Ticker        string  `json:"ticker" parquet:"ticker"`
+	ExecutionDate string  `json:"execution_date" parquet:"execution_date"`
+	SplitFrom     float64 `json:"split_from" parquet:"split_from"`
+	SplitTo       float64 `json:"split_to" parquet:"split_to"`
 }
 
+// massiveDividend mirrors every field documented for the
+// /v3/reference/dividends endpoint. declaration_date is documented but
+// is sometimes absent on individual records; JSON unmarshal leaves it
+// empty in that case, which the parquet write preserves verbatim.
 type massiveDividend struct {
-	Ticker         string  `json:"ticker"`
-	ExDividendDate string  `json:"ex_dividend_date"`
-	CashAmount     float64 `json:"cash_amount"`
+	ID              string  `json:"id" parquet:"id"`
+	Ticker          string  `json:"ticker" parquet:"ticker"`
+	CashAmount      float64 `json:"cash_amount" parquet:"cash_amount"`
+	Currency        string  `json:"currency" parquet:"currency"`
+	DividendType    string  `json:"dividend_type" parquet:"dividend_type"`
+	DeclarationDate string  `json:"declaration_date" parquet:"declaration_date"`
+	ExDividendDate  string  `json:"ex_dividend_date" parquet:"ex_dividend_date"`
+	Frequency       int     `json:"frequency" parquet:"frequency"`
+	PayDate         string  `json:"pay_date" parquet:"pay_date"`
+	RecordDate      string  `json:"record_date" parquet:"record_date"`
 }
 
-func fetchSplitsRange(ctx context.Context, client *resty.Client, limiter *rate.Limiter, start, end time.Time) (corporateActions, error) {
+func fetchSplitsRange(ctx context.Context, client *resty.Client, limiter *rate.Limiter, start, end time.Time) (corporateActions, []massiveSplit, error) {
 	out := newCorporateActions(256)
+	logger := zerolog.Ctx(ctx)
 
-	err := paginateMassive(ctx, client, limiter, splitsURL, map[string]string{
-		"execution_date.gte": start.Format("2006-01-02"),
-		"execution_date.lte": end.Format("2006-01-02"),
+	windows := splitFetchWindows(start, end, numFetchWindows)
+
+	var (
+		mu  sync.Mutex
+		all []massiveSplit
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	for i, w := range windows {
+		g.Go(func() error {
+			return paginateOneSplitWindow(gctx, client, limiter, logger, i, w, &mu, &all, out)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
+	}
+
+	return out, all, nil
+}
+
+func paginateOneSplitWindow(ctx context.Context, client *resty.Client, limiter *rate.Limiter, logger *zerolog.Logger, idx int, w fetchWindow, mu *sync.Mutex, all *[]massiveSplit, out corporateActions) error {
+	pageCount := 0
+	windowRecords := 0
+	started := time.Now()
+	hb := rate.Sometimes{Interval: 15 * time.Second}
+	label := fmt.Sprintf("splits[%d]", idx)
+
+	return paginateMassive(ctx, client, limiter, splitsURL, map[string]string{
+		"execution_date.gte": w.start.Format("2006-01-02"),
+		"execution_date.lte": w.end.Format("2006-01-02"),
 		"limit":              "1000",
 	}, func(raw json.RawMessage) error {
 		var rows []massiveSplit
 		if err := json.Unmarshal(raw, &rows); err != nil {
 			return err
 		}
+
+		pageCount++
+		windowRecords += len(rows)
+
+		mu.Lock()
+
+		*all = append(*all, rows...)
 
 		for _, r := range rows {
 			if r.SplitFrom == 0 {
@@ -481,28 +684,68 @@ func fetchSplitsRange(ctx context.Context, client *resty.Client, limiter *rate.L
 			factor := r.SplitTo / r.SplitFrom
 			out.set(massiveTicker2PvTicker(r.Ticker), r.ExecutionDate, factor)
 		}
+		mu.Unlock()
+
+		currentDate := ""
+		if len(rows) > 0 {
+			currentDate = rows[len(rows)-1].ExecutionDate
+		}
+
+		logRESTProgress(logger, &hb, label, started, w.start, w.end, pageCount, windowRecords, currentDate)
 
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	return out, nil
 }
 
-func fetchDividendsRange(ctx context.Context, client *resty.Client, limiter *rate.Limiter, start, end time.Time) (corporateActions, error) {
+func fetchDividendsRange(ctx context.Context, client *resty.Client, limiter *rate.Limiter, start, end time.Time) (corporateActions, []massiveDividend, error) {
 	out := newCorporateActions(1024)
+	logger := zerolog.Ctx(ctx)
 
-	err := paginateMassive(ctx, client, limiter, dividendsURL, map[string]string{
-		"ex_dividend_date.gte": start.Format("2006-01-02"),
-		"ex_dividend_date.lte": end.Format("2006-01-02"),
+	windows := splitFetchWindows(start, end, numFetchWindows)
+
+	var (
+		mu  sync.Mutex
+		all []massiveDividend
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	for i, w := range windows {
+		g.Go(func() error {
+			return paginateOneDividendWindow(gctx, client, limiter, logger, i, w, &mu, &all, out)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
+	}
+
+	return out, all, nil
+}
+
+func paginateOneDividendWindow(ctx context.Context, client *resty.Client, limiter *rate.Limiter, logger *zerolog.Logger, idx int, w fetchWindow, mu *sync.Mutex, all *[]massiveDividend, out corporateActions) error {
+	pageCount := 0
+	windowRecords := 0
+	started := time.Now()
+	hb := rate.Sometimes{Interval: 15 * time.Second}
+	label := fmt.Sprintf("dividends[%d]", idx)
+
+	return paginateMassive(ctx, client, limiter, dividendsURL, map[string]string{
+		"ex_dividend_date.gte": w.start.Format("2006-01-02"),
+		"ex_dividend_date.lte": w.end.Format("2006-01-02"),
 		"limit":                "1000",
 	}, func(raw json.RawMessage) error {
 		var rows []massiveDividend
 		if err := json.Unmarshal(raw, &rows); err != nil {
 			return err
 		}
+
+		pageCount++
+		windowRecords += len(rows)
+
+		mu.Lock()
+
+		*all = append(*all, rows...)
 
 		for _, r := range rows {
 			if r.CashAmount == 0 {
@@ -511,23 +754,33 @@ func fetchDividendsRange(ctx context.Context, client *resty.Client, limiter *rat
 
 			out.set(massiveTicker2PvTicker(r.Ticker), r.ExDividendDate, r.CashAmount)
 		}
+		mu.Unlock()
+
+		currentDate := ""
+		if len(rows) > 0 {
+			currentDate = rows[len(rows)-1].ExDividendDate
+		}
+
+		logRESTProgress(logger, &hb, label, started, w.start, w.end, pageCount, windowRecords, currentDate)
 
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	return out, nil
 }
 
 // paginateMassive walks every page of a Massive REST listing endpoint,
 // invoking handle once per page with the raw results array. The
 // initial call uses params; subsequent calls follow next_url which
-// already encodes the original query parameters.
+// already encodes the original query parameters. Progress logging is
+// the responsibility of the caller (which has access to parsed rows
+// and can surface dataset-aware metrics like processing_date and ETA).
 func paginateMassive(ctx context.Context, client *resty.Client, limiter *rate.Limiter, baseURL string, params map[string]string, handle func(json.RawMessage) error) error {
+	logger := zerolog.Ctx(ctx)
+
 	url := baseURL
 	queryParams := params
+
+	pageCount := 0
+	started := time.Now()
 
 	for {
 		if err := limiter.Wait(ctx); err != nil {
@@ -550,6 +803,8 @@ func paginateMassive(ctx context.Context, client *resty.Client, limiter *rate.Li
 			return fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, httpResp.StatusCode(), string(httpResp.Body()))
 		}
 
+		pageCount++
+
 		if resp.Results != nil {
 			if err := handle(json.RawMessage(*resp.Results)); err != nil {
 				return err
@@ -557,10 +812,61 @@ func paginateMassive(ctx context.Context, client *resty.Client, limiter *rate.Li
 		}
 
 		if resp.Next == "" {
+			logger.Info().
+				Str("endpoint", baseURL).
+				Int("pages", pageCount).
+				Str("elapsed", time.Since(started).Round(time.Second).String()).
+				Msg("paginated REST complete")
+
 			return nil
 		}
 
 		url = resp.Next
 		queryParams = nil
 	}
+}
+
+// logRESTProgress emits a heartbeat-rate-limited progress log for a
+// paginated REST fetch. currentDate is the oldest record's date on the
+// most recent page; Polygon returns descending date order, so this is
+// the leading edge moving from end toward start as pagination
+// advances. The function computes a progress percentage and ETA from
+// that position.
+func logRESTProgress(logger *zerolog.Logger, hb *rate.Sometimes, label string, started, start, end time.Time, pages, records int, currentDate string) {
+	hb.Do(func() {
+		var pct float64
+
+		var eta time.Duration
+
+		if t, err := time.Parse("2006-01-02", currentDate); err == nil {
+			total := end.Sub(start)
+			progressed := end.Sub(t)
+
+			if total > 0 {
+				pct = float64(progressed) / float64(total) * 100
+				if pct < 0 {
+					pct = 0
+				}
+
+				if pct > 100 {
+					pct = 100
+				}
+			}
+		}
+
+		elapsed := time.Since(started)
+		if pct > 0 && pct < 100 {
+			eta = time.Duration(float64(elapsed) * (100 - pct) / pct)
+		}
+
+		logger.Info().
+			Str("endpoint", label).
+			Int("pages", pages).
+			Int("records", records).
+			Str("processing_date", currentDate).
+			Str("progress", fmt.Sprintf("%.1f%%", pct)).
+			Str("elapsed", elapsed.Round(time.Second).String()).
+			Str("eta", eta.Round(time.Second).String()).
+			Msg("paginated REST in progress")
+	})
 }

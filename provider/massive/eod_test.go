@@ -69,12 +69,12 @@ var _ = Describe("Flat-files EOD helpers", func() {
 		})
 	})
 
-	Describe("parseDayAggs", func() {
+	Describe("parseAggs", func() {
 		It("parses the documented column layout", func() {
 			body := "ticker,volume,open,close,high,low,window_start,transactions\n" +
 				"BCC,248274,61.68,61.99,62.565,61.41,1680033600000000000,4073\n"
 
-			rows, err := parseDayAggs(strings.NewReader(body))
+			rows, err := parseAggs(strings.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rows).To(HaveLen(1))
 			Expect(rows[0].Ticker).To(Equal("BCC"))
@@ -89,7 +89,7 @@ var _ = Describe("Flat-files EOD helpers", func() {
 			body := "open,close,high,low,volume,ticker,extra\n" +
 				"10,11,12,9,5000,AAPL,ignored\n"
 
-			rows, err := parseDayAggs(strings.NewReader(body))
+			rows, err := parseAggs(strings.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rows).To(HaveLen(1))
 			Expect(rows[0].Ticker).To(Equal("AAPL"))
@@ -101,7 +101,7 @@ var _ = Describe("Flat-files EOD helpers", func() {
 			body := "ticker,open,close,high,low\n" +
 				"AAPL,10,11,12,9\n"
 
-			_, err := parseDayAggs(strings.NewReader(body))
+			_, err := parseAggs(strings.NewReader(body))
 			Expect(err).To(MatchError(ContainSubstring(`missing column "volume"`)))
 		})
 
@@ -109,7 +109,7 @@ var _ = Describe("Flat-files EOD helpers", func() {
 			body := "ticker,volume,open,close,high,low\n" +
 				"AAPL,,,,,\n"
 
-			rows, err := parseDayAggs(strings.NewReader(body))
+			rows, err := parseAggs(strings.NewReader(body))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rows).To(HaveLen(1))
 			Expect(rows[0].Ticker).To(Equal("AAPL"))
