@@ -17,6 +17,12 @@ pvdata
 
 tea_debug.log
 
+# Local credentials scratch (never commit)
+massive.toml
+
+# Local scratch dir (samples, dumps)
+tmp/
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
