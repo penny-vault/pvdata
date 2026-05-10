@@ -31,13 +31,52 @@ type AuditOptions struct {
 
 // AuditRunner executes a set of AuditChecks and manages run checkpoints.
 type AuditRunner struct {
-	checks []AuditCheck
-	pool   *pgxpool.Pool
+	checks              []AuditCheck
+	crossProviderChecks []CrossProviderCheck
+	pool                *pgxpool.Pool
 }
 
 // NewAuditRunner creates an AuditRunner with the given checks and pool.
 func NewAuditRunner(checks []AuditCheck, pool *pgxpool.Pool) *AuditRunner {
 	return &AuditRunner{checks: checks, pool: pool}
+}
+
+// SetCrossProviderChecks attaches cross-provider checks. Kept as a
+// setter (rather than a constructor parameter) so existing callers
+// don't need to know about the new check type.
+func (r *AuditRunner) SetCrossProviderChecks(checks []CrossProviderCheck) {
+	r.crossProviderChecks = checks
+}
+
+// RunCrossProvider executes every cross-provider check that targets
+// dataType against the given list of sibling tables. Returns the
+// aggregated results.
+func (r *AuditRunner) RunCrossProvider(ctx context.Context, opts AuditOptions, dataType string, tables []string) ([]CheckResult, error) {
+	if len(tables) < 2 {
+		// A single source can't disagree with itself; nothing to do.
+		return nil, nil
+	}
+
+	var allResults []CheckResult
+
+	for _, c := range r.crossProviderChecks {
+		if !matchesDataType(c, []string{dataType}) {
+			continue
+		}
+
+		if len(opts.Checks) > 0 && !matchesCheckName(c, opts.Checks) {
+			continue
+		}
+
+		results, err := c.AuditAcrossProviders(ctx, r.pool, dataType, tables, opts.Lookback)
+		if err != nil {
+			return allResults, err
+		}
+
+		allResults = append(allResults, results...)
+	}
+
+	return allResults, nil
 }
 
 // Run executes all matching checks against table and returns the combined results.

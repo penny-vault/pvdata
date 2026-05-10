@@ -15,8 +15,9 @@
 package checks
 
 var (
-	inlineChecks []InlineCheck
-	auditChecks  []AuditCheck
+	inlineChecks        []InlineCheck
+	auditChecks         []AuditCheck
+	crossProviderChecks []CrossProviderCheck
 )
 
 func RegisterInline(c InlineCheck) {
@@ -27,6 +28,10 @@ func RegisterAudit(c AuditCheck) {
 	auditChecks = append(auditChecks, c)
 }
 
+func RegisterCrossProvider(c CrossProviderCheck) {
+	crossProviderChecks = append(crossProviderChecks, c)
+}
+
 func InlineChecks() []InlineCheck {
 	return inlineChecks
 }
@@ -35,7 +40,12 @@ func AuditChecks() []AuditCheck {
 	return auditChecks
 }
 
+func CrossProviderChecks() []CrossProviderCheck {
+	return crossProviderChecks
+}
+
 func ClearRegistry() {
 	inlineChecks = nil
 	auditChecks = nil
+	crossProviderChecks = nil
 }

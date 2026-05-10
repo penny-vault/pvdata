@@ -85,3 +85,14 @@ type AuditCheck interface {
 	Check
 	Audit(ctx context.Context, pool *pgxpool.Pool, table string, lastChecked *time.Time, lookback *time.Duration) ([]CheckResult, error)
 }
+
+// CrossProviderCheck compares observations across every subscription
+// that produces the same DataType. Unlike AuditCheck (which sees one
+// table at a time) it runs once per data type with the full set of
+// sibling tables, so it can detect inconsistencies between providers
+// (e.g., Massive EOD vs. Tiingo EOD) on the same (composite_figi,
+// event_date) key.
+type CrossProviderCheck interface {
+	Check
+	AuditAcrossProviders(ctx context.Context, pool *pgxpool.Pool, dataType string, tables []string, lookback *time.Duration) ([]CheckResult, error)
+}

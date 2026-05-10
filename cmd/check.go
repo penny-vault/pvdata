@@ -77,10 +77,16 @@ newer than the last audit. Use --lookback or --full to override.`,
 		}
 
 		runner := checks.NewAuditRunner(checks.AuditChecks(), myLibrary.Pool)
+		runner.SetCrossProviderChecks(checks.CrossProviderChecks())
 
 		runID := uuid.New()
 
 		var allResults []checks.CheckResult
+
+		// Per-table audit checks (one pass per subscription/data type).
+		// Also build a (dataType -> []table) map so cross-provider
+		// checks can compare sibling tables afterwards.
+		tablesByDataType := map[string][]string{}
 
 		for _, sub := range subscriptions {
 			if !sub.Active {
@@ -93,6 +99,7 @@ newer than the last audit. Use --lookback or --full to override.`,
 				}
 
 				table := sub.DataTables[idx]
+				tablesByDataType[dt] = append(tablesByDataType[dt], table)
 
 				log.Info().
 					Str("subscription", sub.Name).
@@ -128,6 +135,41 @@ newer than the last audit. Use --lookback or --full to override.`,
 
 				allResults = append(allResults, results...)
 			}
+		}
+
+		// Cross-provider checks (one pass per data type with 2+ sources).
+		for dt, tables := range tablesByDataType {
+			if len(tables) < 2 {
+				continue
+			}
+
+			log.Info().
+				Str("dataType", dt).
+				Strs("tables", tables).
+				Msg("running cross-provider checks")
+
+			results, err := runner.RunCrossProvider(ctx, opts, dt, tables)
+			if err != nil {
+				log.Error().Err(err).
+					Str("dataType", dt).
+					Msg("cross-provider check failed")
+
+				continue
+			}
+
+			for i := range results {
+				if results[i].DataType == "" {
+					results[i].DataType = dt
+				}
+			}
+
+			if len(results) > 0 {
+				if saveErr := checks.SaveResults(ctx, myLibrary.Pool, results, uuid.Nil, runID); saveErr != nil {
+					log.Error().Err(saveErr).Msg("failed to save cross-provider check results")
+				}
+			}
+
+			allResults = append(allResults, results...)
 		}
 
 		printCheckSummary(allResults)

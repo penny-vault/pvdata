@@ -45,4 +45,8 @@ func init() {
 	// Layer 5: Cross-Type Consistency (Audit only)
 	RegisterAudit(&MetricFundamentalAgree{})
 	RegisterAudit(&DuplicateObservations{})
+
+	// Layer 6: EOD coverage and cross-provider consistency
+	RegisterAudit(&MissingEOD{})
+	RegisterCrossProvider(&EODProviderConsistency{})
 }
