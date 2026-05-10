@@ -592,11 +592,30 @@ func (subscription *Subscription) dataTypeAt(idx int) *data.DataType {
 	return data.DataTypes[subscription.DataTypes[idx]]
 }
 
+// HasClickHouseBackedTypes reports whether any DataType on the
+// subscription is routed to the ClickHouse backend. Used by the run
+// dispatcher to decide whether a missing or disabled ClickHouse
+// connection should fail the run before any provider work begins.
+func (subscription *Subscription) HasClickHouseBackedTypes() bool {
+	for _, name := range subscription.DataTypes {
+		if dt, ok := data.DataTypes[name]; ok && dt != nil && dt.Backend == data.BackendClickHouse {
+			return true
+		}
+	}
+
+	return false
+}
+
 // createClickHouseTables runs CREATE TABLE IF NOT EXISTS for every
 // ClickHouse-backed DataType on the subscription. It is a no-op when no
 // CH-backed types are present so non-intraday subscriptions don't even
-// open the CH connection.
+// open the CH connection. When ClickHouse is disabled, table creation
+// is skipped with a warning so the rest of the subscription (and any
+// provider-side side effects like the parquet archive) can still
+// operate in a parquet-only mode.
 func (subscription *Subscription) createClickHouseTables(ctx context.Context) error {
+	var pendingTables []string
+
 	var pending []int
 
 	for idx, dataTypeName := range subscription.DataTypes {
@@ -606,9 +625,15 @@ func (subscription *Subscription) createClickHouseTables(ctx context.Context) er
 		}
 
 		pending = append(pending, idx)
+		pendingTables = append(pendingTables, subscription.DataTables[idx])
 	}
 
 	if len(pending) == 0 {
+		return nil
+	}
+
+	if subscription.Library.IsClickHouseDisabled() {
+		log.Warn().Strs("tables", pendingTables).Msg("clickhouse is disabled; skipping table creation (data of these types will not be persisted to clickhouse)")
 		return nil
 	}
 
@@ -634,7 +659,9 @@ func (subscription *Subscription) createClickHouseTables(ctx context.Context) er
 // dropClickHouseTables drops every ClickHouse-backed table on the
 // subscription. Called after the Postgres delete tx commits so a CH
 // outage cannot leave the subscription row referencing tables that no
-// longer exist.
+// longer exist. When ClickHouse is disabled, the drop is skipped with
+// a warning - the tables cannot have been created in the first place,
+// so the subscription row's removal is the only meaningful action.
 func (subscription *Subscription) dropClickHouseTables(ctx context.Context) error {
 	var pending []string
 
@@ -648,6 +675,11 @@ func (subscription *Subscription) dropClickHouseTables(ctx context.Context) erro
 	}
 
 	if len(pending) == 0 {
+		return nil
+	}
+
+	if subscription.Library.IsClickHouseDisabled() {
+		log.Warn().Strs("tables", pending).Msg("clickhouse is disabled; skipping table drops (run cleanup manually if tables exist)")
 		return nil
 	}
 

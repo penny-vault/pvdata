@@ -16,6 +16,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -32,6 +33,12 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
+
+// ErrClickHouseDisabled is returned by ClickHouse() when the operator
+// has explicitly opted out of the ClickHouse backend via the
+// clickhouse.disabled config flag. Callers should treat this as a
+// hard "do not use" signal rather than a transient failure.
+var ErrClickHouseDisabled = errors.New("clickhouse backend is disabled (clickhouse.disabled = true)")
 
 // AcquireTimeout bounds how long Pool.Acquire waits for a free connection
 // before failing. The pool deadlocked once when long-running provider
@@ -114,12 +121,27 @@ func (myLibrary *Library) Close() {
 	}
 }
 
+// IsClickHouseDisabled reports whether the operator has explicitly
+// opted out of the ClickHouse backend via the clickhouse.disabled
+// config key. When true, every DataType backed by ClickHouse must be
+// treated as unusable: subscribes are rejected, runs that would write
+// to ClickHouse fail at start, and DROPs against ClickHouse are
+// skipped (the tables can't exist if CH was disabled at create time).
+func (myLibrary *Library) IsClickHouseDisabled() bool {
+	return viper.GetBool("clickhouse.disabled")
+}
+
 // ClickHouse returns a lazily-opened ClickHouse connection driven by the
 // `clickhouse.url` viper key. The same connection is reused across calls;
 // the underlying clickhouse-go driver multiplexes statements internally.
-// Returns an error if the key is unset or the initial Ping fails so that
-// callers fail loudly rather than silently dropping writes.
+// Returns ErrClickHouseDisabled when clickhouse.disabled is true, or a
+// configuration/connection error if the key is unset or the initial
+// Ping fails - callers fail loudly rather than silently dropping writes.
 func (myLibrary *Library) ClickHouse(ctx context.Context) (driver.Conn, error) {
+	if myLibrary.IsClickHouseDisabled() {
+		return nil, ErrClickHouseDisabled
+	}
+
 	myLibrary.chOnce.Do(func() {
 		dsn := viper.GetString("clickhouse.url")
 		if dsn == "" {
@@ -295,6 +317,16 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 	fundamentalsBufs := map[uuid.UUID]*fundamentalBuffer{}
 	intradayBufs := map[uuid.UUID]*intradayBuffer{}
 
+	// Snapshot the disable flag at run start so toggles mid-run cannot
+	// land us in a half-committed state. When disabled, intraday rows
+	// are dropped without buffering and without contacting ClickHouse;
+	// the parquet archive (if any) runs inside the provider Fetch as
+	// an independent side-effect so it is unaffected.
+	chDisabled := myLibrary.IsClickHouseDisabled()
+	if chDisabled {
+		log.Warn().Msg("ClickHouse backend disabled; intraday observations will be dropped (parquet backups still run)")
+	}
+
 	flushMetrics := func(b *metricBuffer) {
 		if len(b.rows) == 0 {
 			return
@@ -469,7 +501,7 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 			}
 		}
 
-		if elem.IntradayBar != nil && subscription.DataTablesMap[data.IntradayKey] != "" {
+		if elem.IntradayBar != nil && subscription.DataTablesMap[data.IntradayKey] != "" && !chDisabled {
 			tbl := subscription.DataTablesMap[data.IntradayKey]
 
 			buf, ok := intradayBufs[subscription.ID]
