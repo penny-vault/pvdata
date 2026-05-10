@@ -96,6 +96,15 @@ type Dataset struct {
 	// Leave as zero to fall back to DefaultExpectedDuration.
 	ExpectedDuration time.Duration
 
+	// ConfigDescription declares prompts that apply only when subscribing
+	// to this specific dataset. The subscribe wizard merges these on top
+	// of the provider-level Provider.ConfigDescription() so users are not
+	// asked for credentials they will never use (e.g. S3 flat-file keys
+	// when subscribing to a REST-only dataset). Keys must not collide
+	// with provider-level keys; collisions are resolved in favour of the
+	// dataset-level value.
+	ConfigDescription map[string]string
+
 	// Fetch is called when pvdata wants to retrieve measurements from the dataset. It
 	// passes a config with the provider configuration, a channel to write results to,
 	// a logger to write log messages to, and a channel to write progress.

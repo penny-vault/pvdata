@@ -17,8 +17,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand"
 	"os"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -90,64 +92,64 @@ Also see: subscriptions, unsubscribe`,
 			datasetOptions = append(datasetOptions, huh.NewOption(v.Name, k))
 		}
 
-		// create a new field group for configuring the provider
-		configFields := make([]huh.Field, 0, len(dataProvider.ConfigDescription()))
+		// First form: collect identity + dataset choice. Config prompts
+		// are gathered in a second form below because the set of keys
+		// depends on which dataset the user picks.
+		identityForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("What should the subscription be named?").
+					Value(&subName),
+				huh.NewSelect[string]().
+					Title("Which dataset do you want to subscribe to?").
+					Options(datasetOptions...).
+					Value(&subDataset),
+				huh.NewInput().
+					Title("What schedule should the subscription run on?").
+					Value(&subSchedule),
+				huh.NewConfirm().
+					Title("Should a healthcheck.io monitor be created for the subscription?").
+					Value(&monitored),
+			),
+		)
 
-		config := make(map[string]*string, len(dataProvider.ConfigDescription()))
-		for k, v := range dataProvider.ConfigDescription() {
-			val := ""
-			config[k] = &val
-			configFields = append(configFields, huh.NewInput().Title(v).Value(config[k]))
-		}
-
-		// walk user through settings required for subscription
-		var form *huh.Form
-
-		if len(configFields) > 0 {
-			form = huh.NewForm(
-				huh.NewGroup(
-					huh.NewInput().
-						Title("What should the subscription be named?").
-						Value(&subName),
-					huh.NewSelect[string]().
-						Title("Which dataset do you want to subscribe to?").
-						Options(datasetOptions...).
-						Value(&subDataset),
-					huh.NewInput().
-						Title("What schedule should the subscription run on?").
-						Value(&subSchedule),
-					huh.NewConfirm().
-						Title("Should a healthcheck.io monitor be created for the subscription?").
-						Value(&monitored),
-				),
-				huh.NewGroup(configFields...),
-			)
-		} else {
-			form = huh.NewForm(
-				huh.NewGroup(
-					huh.NewInput().
-						Title("What should the subscription be named?").
-						Value(&subName),
-					huh.NewSelect[string]().
-						Title("Which dataset do you want to subscribe to?").
-						Options(datasetOptions...).
-						Value(&subDataset),
-					huh.NewInput().
-						Title("What schedule should the subscription run on?").
-						Value(&subSchedule),
-					huh.NewConfirm().
-						Title("Should a healthcheck.io monitor be created for the subscription?").
-						Value(&monitored),
-				),
-			)
-		}
-
-		err = form.Run()
+		err = identityForm.Run()
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to create wizard")
 		}
 
 		datasetObj := dataProvider.Datasets()[subDataset]
+
+		// Merge provider-level prompts with the chosen dataset's prompts.
+		// Dataset-level keys win on collision so a dataset can override a
+		// shared default (e.g. specialise an apiKey description).
+		mergedPrompts := make(map[string]string, len(dataProvider.ConfigDescription())+len(datasetObj.ConfigDescription))
+		maps.Copy(mergedPrompts, dataProvider.ConfigDescription())
+		maps.Copy(mergedPrompts, datasetObj.ConfigDescription)
+
+		// Sort keys so prompt order is stable across runs.
+		promptKeys := make([]string, 0, len(mergedPrompts))
+		for k := range mergedPrompts {
+			promptKeys = append(promptKeys, k)
+		}
+
+		sort.Strings(promptKeys)
+
+		config := make(map[string]*string, len(mergedPrompts))
+
+		if len(promptKeys) > 0 {
+			configFields := make([]huh.Field, 0, len(promptKeys))
+			for _, k := range promptKeys {
+				val := ""
+				config[k] = &val
+				configFields = append(configFields, huh.NewInput().Title(mergedPrompts[k]).Value(config[k]))
+			}
+
+			configForm := huh.NewForm(huh.NewGroup(configFields...))
+			if err := configForm.Run(); err != nil {
+				log.Fatal().Err(err).Msg("failed to create wizard")
+			}
+		}
 
 		selectedDataTypes := make([]string, len(datasetObj.DataTypes))
 		for i, dt := range datasetObj.DataTypes {
