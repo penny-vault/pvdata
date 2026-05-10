@@ -47,12 +47,24 @@ var _ = Describe("IntradayKey DataType", func() {
 		Expect(strings.Contains(sql, "PRIMARY KEY")).To(BeFalse())
 	})
 
-	It("uses Float64 for OHLC and UInt64 for volume", func() {
+	It("uses Float64 for OHLC and Float64 for volume", func() {
 		dt := data.DataTypes[data.IntradayKey]
 		sql := dt.ExpandedSchema("intraday_bar_eodhd_abc12")
 		Expect(sql).To(ContainSubstring("open            Float64"))
 		Expect(sql).To(ContainSubstring("close           Float64"))
-		Expect(sql).To(ContainSubstring("volume          UInt64"))
+		Expect(sql).To(ContainSubstring("volume          Float64"))
 		Expect(sql).To(ContainSubstring("composite_figi  FixedString(12)"))
+	})
+
+	It("applies column-specialized codecs for time-series compression", func() {
+		dt := data.DataTypes[data.IntradayKey]
+		sql := dt.ExpandedSchema("intraday_bar_eodhd_abc12")
+		Expect(sql).To(ContainSubstring("event_date      DateTime CODEC(DoubleDelta, ZSTD)"))
+		Expect(sql).To(ContainSubstring("open            Float64 CODEC(Gorilla, ZSTD)"))
+		Expect(sql).To(ContainSubstring("high            Float64 CODEC(Gorilla, ZSTD)"))
+		Expect(sql).To(ContainSubstring("low             Float64 CODEC(Gorilla, ZSTD)"))
+		Expect(sql).To(ContainSubstring("close           Float64 CODEC(Gorilla, ZSTD)"))
+		Expect(sql).To(ContainSubstring("volume          Float64 CODEC(Gorilla, ZSTD)"))
+		Expect(sql).To(ContainSubstring("composite_figi  FixedString(12) CODEC(ZSTD)"))
 	})
 })

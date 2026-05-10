@@ -57,7 +57,7 @@ func SaveIntradayBarsBatch(ctx context.Context, tbl string, conn driver.Conn, ba
 			bar.High,
 			bar.Low,
 			bar.Close,
-			uint64(bar.Volume),
+			bar.Volume,
 		); err != nil {
 			return fmt.Errorf("append intraday row: %w", err)
 		}

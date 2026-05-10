@@ -333,15 +333,23 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
 		// event_date) sort key, the ClickHouse equivalent of the previous
 		// Postgres ON CONFLICT DO UPDATE behaviour. Monthly partitions match
 		// the historical PG layout and keep MergeTree part counts bounded.
+		//
+		// Per-column codec stack rationale:
+		//   event_date: DoubleDelta exploits the regular 60-second spacing
+		//     between consecutive bars within a FIGI group, encoding most
+		//     deltas in 1-2 bits before ZSTD's entropy pass.
+		//   OHLC + volume: Gorilla (XOR-of-prior-value) collapses
+		//     slow-changing float series to a few bits per sample, which
+		//     ZSTD then mops up.
 		Schema: `CREATE TABLE IF NOT EXISTS %[1]s (
     ticker          LowCardinality(String),
-    composite_figi  FixedString(12),
-    event_date      DateTime,
-    open            Float64,
-    high            Float64,
-    low             Float64,
-    close           Float64,
-    volume          UInt64
+    composite_figi  FixedString(12) CODEC(ZSTD),
+    event_date      DateTime CODEC(DoubleDelta, ZSTD),
+    open            Float64 CODEC(Gorilla, ZSTD),
+    high            Float64 CODEC(Gorilla, ZSTD),
+    low             Float64 CODEC(Gorilla, ZSTD),
+    close           Float64 CODEC(Gorilla, ZSTD),
+    volume          Float64 CODEC(Gorilla, ZSTD)
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY toYYYYMM(event_date)
