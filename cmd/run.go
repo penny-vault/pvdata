@@ -32,11 +32,29 @@ provided then each subscription will execute sequentially.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
 
-		// If --lookback is set, parse and inject it into the context for providers to use
-		if lookbackStr := viper.GetString("lookback"); lookbackStr != "" {
+		// --lookback and --start-date both scope a run by setting the
+		// same provider lookback context value, so they're mutually
+		// exclusive. --start-date is converted to the equivalent
+		// lookback (now - parsed date), which after the providers'
+		// per-day truncation yields the same start boundary.
+		lookbackStr := viper.GetString("lookback")
+		startDateStr := viper.GetString("start-date")
+
+		switch {
+		case lookbackStr != "" && startDateStr != "":
+			fmt.Fprintf(os.Stderr, "Error: --lookback and --start-date are mutually exclusive\n")
+			os.Exit(1)
+		case lookbackStr != "":
 			lookback, err := parseLookback(lookbackStr)
 			if err != nil {
 				log.Fatal().Err(err).Str("lookback", lookbackStr).Msg("invalid lookback value")
+			}
+
+			ctx = context.WithValue(ctx, provider.LookbackKey, lookback)
+		case startDateStr != "":
+			lookback, err := lookbackFromStartDate(startDateStr, time.Now().UTC())
+			if err != nil {
+				log.Fatal().Err(err).Str("start-date", startDateStr).Msg("invalid start-date value")
 			}
 
 			ctx = context.WithValue(ctx, provider.LookbackKey, lookback)
@@ -128,6 +146,7 @@ provided then each subscription will execute sequentially.`,
 
 func init() {
 	runCmd.Flags().StringP("lookback", "l", "", "Override data lookback period (e.g. 14d, 4w, 6m, 1y)")
+	runCmd.Flags().String("start-date", "", "Start data fetch from this date (YYYY-MM-DD); mutually exclusive with --lookback")
 	runCmd.Flags().String("ticker", "", "Filter run to a single security by ticker (e.g. AAPL)")
 	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
 	runCmd.Flags().String("companyfacts-zip", "", "Use a local companyfacts.zip instead of downloading from SEC")
@@ -140,6 +159,10 @@ func init() {
 
 	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind lookback flag")
+	}
+
+	if err := viper.BindPFlag("start-date", runCmd.Flags().Lookup("start-date")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind start-date flag")
 	}
 
 	if err := viper.BindPFlag("ticker", runCmd.Flags().Lookup("ticker")); err != nil {
@@ -200,4 +223,27 @@ func parseLookback(s string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("unknown lookback suffix %q; use d (days), w (weeks), m (months), or y (years)", suffix)
 	}
+}
+
+// lookbackFromStartDate converts an absolute YYYY-MM-DD into the
+// equivalent provider lookback (now - parsed). Providers truncate the
+// derived start to a day boundary so sub-day drift between this
+// computation and each provider's time.Now() does not affect the
+// resulting fetch window.
+func lookbackFromStartDate(s string, now time.Time) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty start-date value")
+	}
+
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid start-date %q: use YYYY-MM-DD format", s)
+	}
+
+	if !t.Before(now) {
+		return 0, fmt.Errorf("start-date %s is not before now (%s)", s, now.Format("2006-01-02"))
+	}
+
+	return now.Sub(t), nil
 }
