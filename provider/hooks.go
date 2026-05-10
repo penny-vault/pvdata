@@ -22,6 +22,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 )
 
 // EodRow holds the fields needed to compute adjusted close prices.
@@ -129,7 +130,32 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 		return fmt.Errorf("iterate figis: %w", err)
 	}
 
-	for _, figi := range figis {
+	log.Info().Str("Table", tableName).Int("Assets", len(figis)).Msg("starting EOD price adjustment loop")
+
+	started := time.Now()
+	heartbeat := rate.Sometimes{Interval: 15 * time.Second}
+
+	for idx, figi := range figis {
+		heartbeat.Do(func() {
+			elapsed := time.Since(started)
+			processed := idx + 1
+			pct := float64(processed) / float64(len(figis)) * 100
+
+			var eta time.Duration
+			if processed > 0 {
+				eta = time.Duration(float64(elapsed) * float64(len(figis)-processed) / float64(processed))
+			}
+
+			log.Info().
+				Str("Table", tableName).
+				Int("processed", processed).
+				Int("total", len(figis)).
+				Str("progress", fmt.Sprintf("%.1f%%", pct)).
+				Str("elapsed", elapsed.Round(time.Second).String()).
+				Str("eta", eta.Round(time.Second).String()).
+				Msg("EOD price adjustment in progress")
+		})
+
 		rows, err := conn.Query(ctx,
 			fmt.Sprintf("SELECT event_date, close, dividend, split_factor FROM %s WHERE composite_figi = $1 ORDER BY event_date DESC", tableName), figi)
 		if err != nil {
@@ -172,30 +198,37 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 
 		ComputeAdjustedClose(eodRows)
 
-		// Batch update
-		tx, err := conn.Begin(ctx)
-		if err != nil {
-			return err
-		}
+		// Batch update: one round-trip per figi via UNNEST instead of
+		// one round-trip per row. dates and adjs stay aligned by
+		// index because we walk the same records slice that fed
+		// ComputeAdjustedClose, in the same order.
+		dates := make([]time.Time, len(records))
+		adjs := make([]float64, len(records))
 
 		for i, r := range records {
-			if _, err := tx.Exec(ctx,
-				fmt.Sprintf("UPDATE %s SET adj_close = $1 WHERE composite_figi = $2 AND event_date = $3", tableName),
-				eodRows[i].AdjClose, figi, r.EventDate); err != nil {
-				if rbErr := tx.Rollback(ctx); rbErr != nil {
-					log.Error().Err(rbErr).Msg("failed to rollback transaction")
-				}
-
-				return err
+			t, ok := r.EventDate.(time.Time)
+			if !ok {
+				return fmt.Errorf("event_date for %s row %d was not a time.Time (got %T)", figi, i, r.EventDate)
 			}
+
+			dates[i] = t
+			adjs[i] = eodRows[i].AdjClose
 		}
 
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit adj_close update for %s: %w", figi, err)
+		if _, err := conn.Exec(ctx,
+			fmt.Sprintf(`UPDATE %s SET adj_close = u.adj
+			FROM unnest($1::date[], $2::float8[]) AS u(d, adj)
+			WHERE composite_figi = $3 AND event_date = u.d`, tableName),
+			dates, adjs, figi); err != nil {
+			return fmt.Errorf("batch update adj_close for %s: %w", figi, err)
 		}
 	}
 
-	log.Info().Str("Table", tableName).Int("Assets", len(figis)).Msg("EOD price adjustment complete")
+	log.Info().
+		Str("Table", tableName).
+		Int("Assets", len(figis)).
+		Str("elapsed", time.Since(started).Round(time.Second).String()).
+		Msg("EOD price adjustment complete")
 
 	return nil
 }
