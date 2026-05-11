@@ -24,9 +24,17 @@ The subscription must already exist (create with 'pvdata subscribe').
 
 Supported file formats: .parquet, .csv, .csv.zst, .csv.zip
 
+Massive EOD and 1-Minute Bars subscriptions accept either individual
+daily parquet files or directories. Point the command at a backup root
+(e.g. /backups/massive_eod_3a85a) and every <YYYY>/<YYYY-MM-DD>.parquet
+under it will be discovered; the splits/ and dividends/ subdirectories
+are walked separately as needed for EOD enrichment.
+
 Examples:
   pvdata import --subscription my-fundamentals sharadar_sf1_20231226.parquet
-  pvdata import --subscription abc123 data/*.parquet`,
+  pvdata import --subscription abc123 data/*.parquet
+  pvdata import --subscription massive-eod /backups/massive_eod_3a85a
+  pvdata import --subscription massive-1m /backups/massive_1m_3a85a/2024`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
@@ -61,11 +69,18 @@ Examples:
 			log.Fatal().Str("provider", sub.Provider).Msg("provider does not support file import")
 		}
 
-		// Validate files exist and match subscription dataset
+		// Validate files exist and (for Sharadar) match subscription dataset.
+		// The dataset-detection probe is Sharadar-specific because it sniffs
+		// Sharadar CSV/parquet headers; other providers (e.g. Massive) write
+		// their own parquet schemas that this probe cannot recognise.
 		files := args
 		for _, f := range files {
 			if _, err := os.Stat(f); os.IsNotExist(err) {
 				log.Fatal().Str("file", f).Msg("file does not exist")
+			}
+
+			if sub.Provider != "sharadar" {
+				continue
 			}
 
 			detected, detectErr := sharadar.DetectSharadarDataset(f)

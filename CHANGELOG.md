@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `eod_provider_consistency` compares OHLCV across every pair of EOD subscriptions and reports per-field disagreements beyond a price (1 cent or 0.01%) or volume (0.5%) tolerance.
 - `clickhouse.disabled` config flag opts out of the ClickHouse backend. Subscriptions with mixed Postgres + ClickHouse data types still run; intraday rows are dropped with a single warning at run start instead of failing on flush.
 - `pvdata run --start-date YYYY-MM-DD` scopes a run from an absolute date instead of a relative `--lookback` duration. The two flags are mutually exclusive.
+- `pvdata import` accepts the parquet backups produced when `parquet_backup_dir` is set on Massive `EOD` or `1-Minute Bars` subscriptions. Pass either individual files or a backup root (e.g. `pvdata import --subscription <name> /backups/<slug>`) and every `<YYYY>/<YYYY-MM-DD>.parquet` under it is replayed into the database. EOD imports automatically join each row against the colocated `splits/<YYYY>.parquet` and `dividends/<YYYY>.parquet` so prices land with the same split factor and dividend cash amount the live fetch wrote.
 
 ### Changed
 
