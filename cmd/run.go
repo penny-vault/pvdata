@@ -151,6 +151,7 @@ func init() {
 	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
 	runCmd.Flags().String("companyfacts-zip", "", "Use a local companyfacts.zip instead of downloading from SEC")
 	runCmd.Flags().String("filing-cutoff", "", "Exclude SEC filings filed after this date (YYYY-MM-DD format)")
+	runCmd.Flags().Int("asset-workers", 0, "Worker count for the Massive asset discovery + details fan-out (0 = use default of 32)")
 	runCmd.Flags().Bool("tui", false, "Show the interactive run dashboard (default: headless logging to stderr)")
 
 	if err := viper.BindPFlag("tui", runCmd.Flags().Lookup("tui")); err != nil {
@@ -179,6 +180,10 @@ func init() {
 
 	if err := viper.BindPFlag("filing-cutoff", runCmd.Flags().Lookup("filing-cutoff")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind filing-cutoff flag")
+	}
+
+	if err := viper.BindPFlag("massive.asset_walk_workers", runCmd.Flags().Lookup("asset-workers")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind asset-workers flag")
 	}
 
 	rootCmd.AddCommand(runCmd)

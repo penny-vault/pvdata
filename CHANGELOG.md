@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `clickhouse.disabled` config flag opts out of the ClickHouse backend. Subscriptions with mixed Postgres + ClickHouse data types still run; intraday rows are dropped with a single warning at run start instead of failing on flush.
 - `pvdata run --start-date YYYY-MM-DD` scopes a run from an absolute date instead of a relative `--lookback` duration. The two flags are mutually exclusive.
 - `pvdata import` accepts the parquet backups produced when `parquet_backup_dir` is set on Massive `EOD` or `1-Minute Bars` subscriptions. Pass either individual files or a backup root (e.g. `pvdata import --subscription <name> /backups/<slug>`) and every `<YYYY>/<YYYY-MM-DD>.parquet` under it is replayed into the database. EOD imports automatically join each row against the colocated `splits/<YYYY>.parquet` and `dividends/<YYYY>.parquet` so prices land with the same split factor and dividend cash amount the live fetch wrote.
+- `pvdata run --asset-workers N` controls the worker count for the Massive asset discovery (historical reference-tickers walk) and the per-ticker details fan-out. Defaults to 32; long backfills that previously serialised through one goroutine now run with the same rate-limit cap but materially shorter wall time. The viper key `massive.asset_walk_workers` also accepts the value.
 
 ### Changed
 

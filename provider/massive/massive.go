@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/georgysavva/scany/v2/pgxscan"
@@ -35,6 +37,8 @@ import (
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -187,7 +191,7 @@ type massiveAssetFetcher struct {
 	client             *resty.Client
 	limiter            *rate.Limiter
 	publishChan        chan<- *data.Observation
-	numPublished       int
+	numPublished       atomic.Int64
 	branding           *brandingBudget
 	missingBrandingCap int
 }
@@ -262,7 +266,7 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	defer func() {
 		runSummary.EndTime = time.Now()
 
-		runSummary.NumObservations = api.numPublished
+		runSummary.NumObservations = int(api.numPublished.Load())
 		if runSummary.Status != data.RunFailed {
 			runSummary.Status = data.RunSuccess
 		}
@@ -330,30 +334,12 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 	historicalMap := map[string]*data.Asset{}
 
-	for d := startMidnight; d.Before(todayMidnight); d = d.AddDate(0, 0, 1) {
-		if d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
-			continue
-		}
+	if err := api.walkHistoricalAssets(ctx, startMidnight, todayMidnight, []string{"CS", "ADRC", "ETF"}, historicalMap); err != nil {
+		logger.Error().Err(err).Msg("error getting historical ticker information")
 
-		for _, assetType := range []string{"CS", "ADRC", "ETF"} {
-			tmpAssets, err := api.assets(ctx, assetType, d)
-			if err != nil {
-				logger.Error().Err(err).Str("AssetType", assetType).Time("AsOfDate", d).Msg("error getting historical ticker information")
+		runSummary.Status = data.RunFailed
 
-				runSummary.Status = data.RunFailed
-
-				return
-			}
-
-			for _, a := range tmpAssets {
-				a.ValidFor = d
-
-				existing, ok := historicalMap[a.ID()]
-				if !ok || existing.ValidFor.Before(d) {
-					historicalMap[a.ID()] = a
-				}
-			}
-		}
+		return
 	}
 
 	// Combined universe: today's snapshot plus lookback-only discoveries.
@@ -600,7 +586,105 @@ func (api *massiveAssetFetcher) publish(asset *data.Asset) {
 		SubscriptionName: api.subscription.Name,
 	}
 
-	api.numPublished++
+	api.numPublished.Add(1)
+}
+
+// defaultAssetWalkConcurrency is the default worker count for the
+// parallel asset-walk + details fan-out. Workers share api.limiter,
+// so the effective throughput is still capped by rateLimit; setting
+// this above what the rate limiter releases per second buys no
+// additional speedup.
+const defaultAssetWalkConcurrency = 32
+
+// assetWalkConcurrency reads the worker count from viper at run
+// time so it can be tuned without recompiling. The --asset-workers
+// flag on `pvdata run` binds to the `massive.asset_walk_workers`
+// key. Falls back to defaultAssetWalkConcurrency when unset or
+// non-positive.
+func assetWalkConcurrency() int {
+	n := viper.GetInt("massive.asset_walk_workers")
+	if n <= 0 {
+		return defaultAssetWalkConcurrency
+	}
+
+	return n
+}
+
+// historicalAssetJob is one (date, assetType) unit of work for the
+// parallel historical asset walk.
+type historicalAssetJob struct {
+	date      time.Time
+	assetType string
+}
+
+// walkHistoricalAssets fans out api.assets() calls across workers
+// for every (business day, asset type) pair in [start, end).
+// historicalMap is populated under a mutex so concurrent workers do
+// not race on map writes; the keep-newest-by-ValidFor invariant is
+// preserved from the previous serial loop. Workers all queue through
+// api.limiter so the API rate cap is still honoured.
+func (api *massiveAssetFetcher) walkHistoricalAssets(ctx context.Context, start, end time.Time, assetTypes []string, historicalMap map[string]*data.Asset) error {
+	logger := zerolog.Ctx(ctx)
+	workers := assetWalkConcurrency()
+
+	logger.Info().
+		Int("Workers", workers).
+		Time("Start", start).
+		Time("End", end).
+		Strs("AssetTypes", assetTypes).
+		Msg("starting parallel historical asset walk")
+
+	jobCh := make(chan historicalAssetJob, workers*4)
+
+	var mu sync.Mutex
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	for range workers {
+		g.Go(func() error {
+			for job := range jobCh {
+				tmpAssets, err := api.assets(gctx, job.assetType, job.date)
+				if err != nil {
+					return fmt.Errorf("historical assets %s %s: %w", job.assetType, job.date.Format("2006-01-02"), err)
+				}
+
+				mu.Lock()
+				for _, a := range tmpAssets {
+					a.ValidFor = job.date
+
+					existing, ok := historicalMap[a.ID()]
+					if !ok || existing.ValidFor.Before(job.date) {
+						historicalMap[a.ID()] = a
+					}
+				}
+				mu.Unlock()
+			}
+
+			return nil
+		})
+	}
+
+	g.Go(func() error {
+		defer close(jobCh)
+
+		for d := start; d.Before(end); d = d.AddDate(0, 0, 1) {
+			if d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+				continue
+			}
+
+			for _, assetType := range assetTypes {
+				select {
+				case jobCh <- historicalAssetJob{date: d, assetType: assetType}:
+				case <-gctx.Done():
+					return gctx.Err()
+				}
+			}
+		}
+
+		return nil
+	})
+
+	return g.Wait()
 }
 
 func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string, asOfDate time.Time) ([]*data.Asset, error) {
@@ -1070,24 +1154,109 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 func (api *massiveAssetFetcher) assetDetails(ctx context.Context, assets []*data.Asset) {
 	logger := zerolog.Ctx(ctx)
 
-	sometimes := rate.Sometimes{Interval: 60 * time.Second}
-	started := time.Now()
+	if len(assets) == 0 {
+		return
+	}
 
-	for idx, asset := range assets {
-		fullAsset, err := api.assetDetail(ctx, asset)
-		if err != nil {
-			logger.Error().Err(err).Msg("received an error when querying massive details")
-			continue
-		}
+	workers := assetWalkConcurrency()
+	total := len(assets)
 
-		api.publish(fullAsset)
+	logger.Info().
+		Int("Workers", workers).
+		Int("Total", total).
+		Msg("starting parallel asset-details fan-out")
 
-		sometimes.Do(func() {
-			secondsPerItem := time.Since(started) / time.Duration(idx+1)
-			timeLeft := secondsPerItem * time.Duration(len(assets)-idx)
-			logger.Info().Int("Completed", idx+1).Str("SinceStarted", time.Since(started).Round(time.Second).String()).Int("NumAssetsLeft", len(assets)-idx).Str("secondsPerItem", secondsPerItem.Round(time.Second).String()).Str("ETA", timeLeft.Round(time.Second).String()).Msg("asset detail progress")
+	jobCh := make(chan *data.Asset, workers*4)
+	progressLogger := newDetailsProgressLogger(logger, total)
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	for range workers {
+		g.Go(func() error {
+			for asset := range jobCh {
+				fullAsset, err := api.assetDetail(gctx, asset)
+				if err != nil {
+					// Match the serial behaviour: log and skip a single
+					// failed detail so one bad ticker cannot abort the
+					// whole batch. Context errors still propagate so an
+					// outer cancel can unwind the workers.
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return err
+					}
+
+					logger.Error().Err(err).Msg("received an error when querying massive details")
+					progressLogger.tick()
+
+					continue
+				}
+
+				api.publish(fullAsset)
+				progressLogger.tick()
+			}
+
+			return nil
 		})
 	}
+
+	g.Go(func() error {
+		defer close(jobCh)
+
+		for _, asset := range assets {
+			select {
+			case jobCh <- asset:
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+		}
+
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		logger.Error().Err(err).Msg("asset-details fan-out aborted")
+	}
+}
+
+// detailsProgressLogger emits an ETA log roughly every 60 seconds
+// from the parallel assetDetails workers. tick() is safe for
+// concurrent use; completed is an atomic counter so the rate.Sometimes
+// gate cannot race with worker increments.
+type detailsProgressLogger struct {
+	logger    *zerolog.Logger
+	total     int
+	started   time.Time
+	completed atomic.Int64
+	sometimes rate.Sometimes
+	mu        sync.Mutex
+}
+
+func newDetailsProgressLogger(logger *zerolog.Logger, total int) *detailsProgressLogger {
+	return &detailsProgressLogger{
+		logger:    logger,
+		total:     total,
+		started:   time.Now(),
+		sometimes: rate.Sometimes{Interval: 60 * time.Second},
+	}
+}
+
+func (p *detailsProgressLogger) tick() {
+	done := int(p.completed.Add(1))
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.sometimes.Do(func() {
+		secondsPerItem := time.Since(p.started) / time.Duration(done)
+		left := p.total - done
+		timeLeft := secondsPerItem * time.Duration(left)
+		p.logger.Info().
+			Int("Completed", done).
+			Str("SinceStarted", time.Since(p.started).Round(time.Second).String()).
+			Int("NumAssetsLeft", left).
+			Str("secondsPerItem", secondsPerItem.Round(time.Second).String()).
+			Str("ETA", timeLeft.Round(time.Second).String()).
+			Msg("asset detail progress")
+	})
 }
 
 func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Asset) (*data.Asset, error) {
@@ -1100,9 +1269,17 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		log.Panic().Err(err).Msg("rate limit failed")
 	}
 
-	resp, err := api.client.R().
-		SetResult(&respContent).
-		Get(detailsURL)
+	// Currently-delisted tickers only resolve at this endpoint when
+	// date= matches a day they were active; without it the API returns
+	// NOT_FOUND. Historical-walk assets carry ValidFor (set in
+	// walkHistoricalAssets); today's-snapshot assets have zero ValidFor
+	// and still resolve without a date param.
+	req := api.client.R().SetResult(&respContent)
+	if !asset.ValidFor.IsZero() {
+		req = req.SetQueryParam("date", asset.ValidFor.Format("2006-01-02"))
+	}
+
+	resp, err := req.Get(detailsURL)
 	if err != nil {
 		logger.Error().Err(err).Msg("resty returned an error when querying v3/reference/tickers details")
 		return nil, err
@@ -1235,11 +1412,11 @@ func parseIconLogoLimit(raw string) (int, int, error) {
 }
 
 // brandingBudget caps how many icon/logo HTTP fetches a single
-// run performs. A non-positive cap means unlimited. NOT
-// thread-safe: a Massive run is sequential by construction
-// (downloadMassiveAssets -> assetDetails iterates one goroutine);
-// any reuse across goroutines must add external synchronisation.
+// run performs. A non-positive cap means unlimited. Allow() is
+// safe for concurrent use so the parallel assetDetails workers
+// can share one budget instance.
 type brandingBudget struct {
+	mu        sync.Mutex
 	limit     int
 	remaining int
 }
@@ -1256,6 +1433,9 @@ func (b *brandingBudget) Allow() bool {
 	if b == nil || b.limit <= 0 {
 		return true
 	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	if b.remaining <= 0 {
 		return false
