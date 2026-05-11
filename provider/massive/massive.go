@@ -628,6 +628,8 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string, as
 		log.Panic().Err(err).Msg("rate limit wait failed")
 	}
 
+	const tickersURL = "https://api.massive.com/v3/reference/tickers"
+
 	req := api.client.R().
 		SetQueryParam("market", "stocks").
 		SetQueryParam("active", "true").
@@ -635,11 +637,22 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string, as
 		SetQueryParam("limit", "1000").
 		SetResult(&respContent)
 
+	asOfStr := ""
 	if !asOfDate.IsZero() {
-		req = req.SetQueryParam("date", asOfDate.Format("2006-01-02"))
+		asOfStr = asOfDate.Format("2006-01-02")
+		req = req.SetQueryParam("date", asOfStr)
 	}
 
-	resp, err := req.Get("https://api.massive.com/v3/reference/tickers")
+	logger.Info().
+		Str("URL", tickersURL).
+		Str("Market", "stocks").
+		Str("Active", "true").
+		Str("AssetType", assetType).
+		Str("Limit", "1000").
+		Str("AsOfDate", asOfStr).
+		Msg("massive reference/tickers initial request")
+
+	resp, err := req.Get(tickersURL)
 	if err != nil {
 		logger.Error().Err(err).Msg("resty returned an error when querying reference/tickers")
 		return assets, err
@@ -937,6 +950,17 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 			log.Panic().Err(err).Msg("rate limit failed")
 		}
 
+		const tickersURL = "https://api.massive.com/v3/reference/tickers"
+
+		logger.Info().
+			Str("URL", tickersURL).
+			Str("Active", "false").
+			Str("Sort", "last_updated_utc").
+			Str("Order", "desc").
+			Str("Limit", "1000").
+			Str("AssetType", assetType).
+			Msg("massive reference/tickers initial request (inactive lookup)")
+
 		resp, err := api.client.R().
 			SetQueryParam("active", "false").
 			SetQueryParam("sort", "last_updated_utc").
@@ -944,7 +968,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 			SetQueryParam("limit", "1000").
 			SetQueryParam("type", assetType).
 			SetResult(&respContent).
-			Get("https://api.massive.com/v3/reference/tickers")
+			Get(tickersURL)
 		if err != nil {
 			logger.Error().Err(err).Msg("error when retrieving inactive assets")
 		}
