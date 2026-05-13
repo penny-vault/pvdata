@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/mattn/go-isatty"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/penny-vault/pvdata/tui"
 	"github.com/rs/zerolog"
@@ -35,10 +37,33 @@ provided then each subscription will execute sequentially.`,
 		// --lookback and --start-date both scope a run by setting the
 		// same provider lookback context value, so they're mutually
 		// exclusive. --start-date is converted to the equivalent
-		// lookback (now - parsed date), which after the providers'
+		// lookback (end - parsed date), which after the providers'
 		// per-day truncation yields the same start boundary.
+		//
+		// --end-date constrains the walk's right edge. Defaults to now
+		// when unset. Combined with --start-date it bounds a targeted
+		// historical window (e.g. 2009-01-01 → 2010-12-31 to backfill
+		// just Blockbuster's BBI tenancy).
 		lookbackStr := viper.GetString("lookback")
 		startDateStr := viper.GetString("start-date")
+		endDateStr := viper.GetString("end-date")
+
+		now := time.Now().UTC()
+		anchorEnd := now
+
+		if endDateStr != "" {
+			parsedEnd, err := time.Parse("2006-01-02", strings.TrimSpace(endDateStr))
+			if err != nil {
+				log.Fatal().Err(err).Str("end-date", endDateStr).Msg("invalid end-date value; use YYYY-MM-DD format")
+			}
+
+			if !parsedEnd.Before(now) {
+				log.Fatal().Str("end-date", endDateStr).Msg("end-date must be in the past")
+			}
+
+			anchorEnd = parsedEnd
+			ctx = context.WithValue(ctx, provider.EndDateKey, parsedEnd)
+		}
 
 		switch {
 		case lookbackStr != "" && startDateStr != "":
@@ -52,7 +77,7 @@ provided then each subscription will execute sequentially.`,
 
 			ctx = context.WithValue(ctx, provider.LookbackKey, lookback)
 		case startDateStr != "":
-			lookback, err := lookbackFromStartDate(startDateStr, time.Now().UTC())
+			lookback, err := lookbackFromStartDate(startDateStr, anchorEnd)
 			if err != nil {
 				log.Fatal().Err(err).Str("start-date", startDateStr).Msg("invalid start-date value")
 			}
@@ -100,6 +125,26 @@ provided then each subscription will execute sequentially.`,
 			log.Fatal().Err(err).Msg("could not connect to library")
 		}
 
+		// Pre-load every existing asset into a ticker-keyed index and
+		// attach it to ctx so figi.Enrich can reuse FIGIs we have
+		// already discovered (across all providers, via the published
+		// `assets` view) instead of re-querying OpenFIGI or minting a
+		// synthetic FIGI for assets we already know.
+		if conn, connErr := myLibrary.AcquireWithTimeout(ctx); connErr != nil {
+			log.Warn().Err(connErr).Msg("could not acquire connection to pre-load asset index; figi.Enrich will skip the existing-assets step")
+		} else {
+			dbAssets, loadErr := data.AllAssets(ctx, conn)
+			conn.Release()
+
+			if loadErr != nil {
+				log.Warn().Err(loadErr).Msg("could not load existing assets; figi.Enrich will skip the existing-assets step")
+			} else {
+				idx := data.BuildAssetIndex(dbAssets)
+				ctx = data.WithAssetIndex(ctx, idx)
+				log.Info().Int("count", idx.Len()).Msg("loaded existing asset index for FIGI enrichment")
+			}
+		}
+
 		home, err := os.UserHomeDir()
 		if err != nil {
 			log.Fatal().Err(err).Msg("could not determine home directory")
@@ -141,12 +186,23 @@ provided then each subscription will execute sequentially.`,
 				os.Exit(1)
 			}
 		}
+
+		// Chip away at PermID coverage after each run. Capped at
+		// DefaultBackfillLimit (250 assets, ~500 API calls) so the
+		// daily 5K Refinitiv quota survives many runs per day. No-op
+		// when permid.apikey is unset.
+		if resolved, err := permid.BackfillEmpty(ctx, myLibrary, permid.DefaultBackfillLimit); err != nil {
+			log.Warn().Err(err).Msg("permid backfill failed; continuing")
+		} else if resolved > 0 {
+			log.Info().Int("count", resolved).Msg("permid backfill resolved missing PermIDs")
+		}
 	},
 }
 
 func init() {
 	runCmd.Flags().StringP("lookback", "l", "", "Override data lookback period (e.g. 14d, 4w, 6m, 1y)")
 	runCmd.Flags().String("start-date", "", "Start data fetch from this date (YYYY-MM-DD); mutually exclusive with --lookback")
+	runCmd.Flags().String("end-date", "", "Stop data fetch at this date (YYYY-MM-DD); defaults to today. Combine with --start-date for a bounded historical window")
 	runCmd.Flags().String("ticker", "", "Filter run to a single security by ticker (e.g. AAPL)")
 	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
 	runCmd.Flags().String("companyfacts-zip", "", "Use a local companyfacts.zip instead of downloading from SEC")
@@ -164,6 +220,10 @@ func init() {
 
 	if err := viper.BindPFlag("start-date", runCmd.Flags().Lookup("start-date")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind start-date flag")
+	}
+
+	if err := viper.BindPFlag("end-date", runCmd.Flags().Lookup("end-date")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind end-date flag")
 	}
 
 	if err := viper.BindPFlag("ticker", runCmd.Flags().Lookup("ticker")); err != nil {

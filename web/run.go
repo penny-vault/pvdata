@@ -24,6 +24,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/healthcheck"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -229,6 +230,23 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		fetchCtx = context.WithValue(fetchCtx, provider.LookbackKey, opts.Lookback)
 	}
 
+	// Pre-load the existing-assets index so figi.Enrich can reuse FIGIs
+	// already in the published `assets` view across every provider.
+	if conn, connErr := lib.AcquireWithTimeout(fetchCtx); connErr != nil {
+		fetchLogger.Warn().Err(connErr).Msg("could not acquire connection to pre-load asset index; figi.Enrich will skip the existing-assets step")
+	} else {
+		dbAssets, loadErr := data.AllAssets(fetchCtx, conn)
+		conn.Release()
+
+		if loadErr != nil {
+			fetchLogger.Warn().Err(loadErr).Msg("could not load existing assets; figi.Enrich will skip the existing-assets step")
+		} else {
+			idx := data.BuildAssetIndex(dbAssets)
+			fetchCtx = data.WithAssetIndex(fetchCtx, idx)
+			fetchLogger.Info().Int("count", idx.Len()).Msg("loaded existing asset index for FIGI enrichment")
+		}
+	}
+
 	subDataset.Fetch(fetchCtx, sub, observeChan, exitChan)
 
 	summary := <-exitChan
@@ -261,6 +279,18 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 
 				break
 			}
+		}
+	}
+
+	// Chip away at PermID coverage after each successful run.
+	// Capped at DefaultBackfillLimit (250 assets, ~500 API calls)
+	// so many scheduled runs per day stay under the Refinitiv
+	// free-tier 5K quota.
+	if summary.Status == data.RunSuccess {
+		if resolved, err := permid.BackfillEmpty(ctx, lib, permid.DefaultBackfillLimit); err != nil {
+			logger.Warn().Err(err).Msg("permid backfill failed; continuing")
+		} else if resolved > 0 {
+			logger.Info().Int("count", resolved).Msg("permid backfill resolved missing PermIDs")
 		}
 	}
 

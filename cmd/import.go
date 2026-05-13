@@ -114,6 +114,23 @@ Examples:
 		fetchLogger := log.With().Str("SubscriptionID", sub.ID.String()).Logger()
 		fetchCtx := fetchLogger.WithContext(ctx)
 
+		// Pre-load existing-assets index so figi.Enrich can reuse FIGIs
+		// already in the published `assets` view across providers.
+		if conn, connErr := myLibrary.AcquireWithTimeout(fetchCtx); connErr != nil {
+			fetchLogger.Warn().Err(connErr).Msg("could not acquire connection to pre-load asset index; figi.Enrich will skip the existing-assets step")
+		} else {
+			dbAssets, loadErr := data.AllAssets(fetchCtx, conn)
+			conn.Release()
+
+			if loadErr != nil {
+				fetchLogger.Warn().Err(loadErr).Msg("could not load existing assets; figi.Enrich will skip the existing-assets step")
+			} else {
+				idx := data.BuildAssetIndex(dbAssets)
+				fetchCtx = data.WithAssetIndex(fetchCtx, idx)
+				fetchLogger.Info().Int("count", idx.Len()).Msg("loaded existing asset index for FIGI enrichment")
+			}
+		}
+
 		fi.ImportFiles(fetchCtx, sub, files, outChan, exitChan)
 
 		summary := <-exitChan
