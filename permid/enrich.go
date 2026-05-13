@@ -24,12 +24,15 @@ import (
 )
 
 // DefaultEnrichAPIBudget is the maximum number of PermID API lookups
-// Enrich will perform per Enrich() call when no budget is supplied via
-// context. The Refinitiv free tier caps at 5,000 requests/day; 250
-// inline lookups per run keeps a comfortable margin while still
-// catching the common new-asset case. Long backfills should rely on
-// BackfillEmpty for additional capacity rather than raising this.
-const DefaultEnrichAPIBudget = 250
+// Enrich will perform per run when a shared budget is attached via
+// WithAPIBudget (cmd/run and web/run do this at run start). The
+// Refinitiv free tier caps at 5,000 requests/day; 2,000 inline lookups
+// per run plus a sibling 2,000 in BackfillEmpty means a full run uses
+// up to ~4,000 quota, leaving room for one full run/day before
+// Refinitiv 429s. When 429 does land, permid.Enrich short-circuits the
+// remainder of the run via ErrRateLimited and defers to tomorrow's
+// quota.
+const DefaultEnrichAPIBudget = 2000
 
 type enrichBudgetCtxKey struct{}
 

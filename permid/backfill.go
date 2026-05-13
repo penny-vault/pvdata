@@ -25,12 +25,15 @@ import (
 )
 
 // DefaultBackfillLimit caps the number of assets BackfillEmpty
-// attempts to resolve in one invocation. Sized so a daily run
-// stays well under the Refinitiv free-tier 5,000 request/day
-// ceiling: 250 assets at up to 2 API calls each = 500 requests
-// per invocation, leaving plenty of headroom for inline Enrich
-// calls during the rest of the run.
-const DefaultBackfillLimit = 250
+// attempts to resolve in one invocation. The Refinitiv free tier caps
+// at 5,000 requests/day; 2,000 backfill assets at up to 2 API calls
+// each = ~2,000-4,000 requests per invocation (the lower bound when
+// CIK alone resolves both org and instrument PermIDs), paired with up
+// to 2,000 inline Enrich requests during the rest of the run. That
+// leaves room for roughly one full run/day before Refinitiv 429s;
+// when 429 does land Enrich short-circuits the remainder of the run
+// via ErrRateLimited.
+const DefaultBackfillLimit = 2000
 
 // backfillCandidate pairs an asset that needs resolution with the
 // source table it lives in, so the UPDATE after resolution can
