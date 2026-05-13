@@ -21,6 +21,17 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var _ = Describe("RateLimit", func() {
+	It("returns the same shared limiter across calls", func() {
+		// Singleton invariant: every caller within a process must
+		// share one limiter so the aggregate request rate never
+		// exceeds the Refinitiv 4 req/s cap. Allocating per-call
+		// would defeat the cap under massive's 32-worker publish()
+		// fan-out (32 independent 4-req/s limiters = ~128 req/s).
+		Expect(RateLimit()).To(BeIdenticalTo(RateLimit()))
+	})
+})
+
 var _ = Describe("apiBudgetFromContext", func() {
 	It("returns the same counter pointer across calls within one ctx", func() {
 		// Shared-budget invariant: every permid.Enrich call that

@@ -71,19 +71,27 @@ type Entity struct {
 	IsIssuedByName   string `json:"isIssuedByName"`
 }
 
-// RateLimit returns a rate limiter sized for the Refinitiv PermID
-// public-tier per-second cap (4 req/s, observed via the
-// x-ratelimit-limit-second response header). Callers should share one
-// limiter across a long run to keep the aggregate request rate under
-// the upstream cap.
+// sharedRateLimiter is the process-wide rate limiter for every
+// outbound Refinitiv PermID request. The Refinitiv public-tier cap is
+// 4 req/s (observed via the x-ratelimit-limit-second response header).
+// Allocating a fresh limiter per Enrich call would defeat the cap: a
+// run with the massive provider's 32-worker publish() fan-out would
+// otherwise have 32 independent 4-req/s limiters and burst to ~128
+// req/s aggregate. One package-level limiter coordinates every caller.
 //
 // The tier also enforces a 5,000-request DAILY ceiling
 // (x-ratelimit-limit-day). This limiter does not cap on the daily
-// budget; once exhausted, the API returns 429 and Enrich logs a
-// warning per asset. Long backfills that exceed ~2,500 assets per
-// day (2 requests/asset) will need to be split across days.
+// budget; permid.Enrich.WithAPIBudget handles that side. Once the
+// daily quota is exhausted Refinitiv returns 429 and Enrich logs a
+// warning per asset.
+var sharedRateLimiter = rate.NewLimiter(rate.Every(time.Second/4), 4)
+
+// RateLimit returns the shared Refinitiv PermID rate limiter. All
+// callers within a process share one limiter so the aggregate request
+// rate never exceeds the upstream 4 req/s cap, regardless of how many
+// concurrent Enrich / Lookup invocations are in flight.
 func RateLimit() *rate.Limiter {
-	return rate.NewLimiter(rate.Every(time.Second/4), 4)
+	return sharedRateLimiter
 }
 
 // APIKey returns the PermID API key from viper (configured at
