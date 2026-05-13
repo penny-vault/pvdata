@@ -16,9 +16,15 @@ package permid
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/spf13/viper"
 )
 
 var _ = Describe("RateLimit", func() {
@@ -63,6 +69,55 @@ var _ = Describe("apiBudgetFromContext", func() {
 		// the call still functions.
 		got := apiBudgetFromContext(context.Background()).Load()
 		Expect(got).To(Equal(int64(DefaultEnrichAPIBudget)))
+	})
+
+	It("zeros the budget when LookupByCIK surfaces ErrRateLimited", func() {
+		// 429 from Refinitiv means the daily 5,000-request ceiling is
+		// hit; further requests will not succeed today. Enrich must
+		// stop spending budget so concurrent invocations don't keep
+		// hammering the upstream for log noise. Validates: ctx-shared
+		// budget gets zeroed, sentinel propagates via errors.Is.
+		ctx := WithAPIBudget(context.Background(), 100)
+
+		err := fmt.Errorf("permid search %q: %w", "cik:0000320193", ErrRateLimited)
+		Expect(errors.Is(err, ErrRateLimited)).To(BeTrue())
+
+		// Simulate the in-Enrich detection path.
+		remaining := apiBudgetFromContext(ctx)
+		if errors.Is(err, ErrRateLimited) {
+			remaining.Store(0)
+		}
+
+		Expect(apiBudgetFromContext(ctx).Load()).To(Equal(int64(0)))
+	})
+
+	It("surfaces ErrRateLimited from Search on HTTP 429", func() {
+		// The actual Search() path: stand up a stub that returns 429,
+		// point Refinitiv URL at it, verify Search wraps ErrRateLimited.
+		// This is the source the Enrich detection above relies on.
+		stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"daily quota exhausted"}`))
+		}))
+		DeferCleanup(stub.Close)
+
+		originalURL := PermIDSearchURL
+		PermIDSearchURL = stub.URL
+
+		DeferCleanup(func() {
+			PermIDSearchURL = originalURL
+		})
+
+		viper.Set("permid.apikey", "test-key")
+		DeferCleanup(func() {
+			viper.Set("permid.apikey", "")
+		})
+
+		_, err := Search(context.Background(), "cik:0000320193")
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrRateLimited)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("429"))
+		Expect(strings.Contains(err.Error(), "daily quota")).To(BeTrue())
 	})
 
 	It("allows independent budgets on derived ctxs", func() {

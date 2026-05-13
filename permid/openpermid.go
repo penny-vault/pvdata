@@ -16,7 +16,9 @@ package permid
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -28,16 +30,23 @@ import (
 	"golang.org/x/time/rate"
 )
 
-const (
-	// PermIDSearchURL is the Refinitiv PermID Open Data search endpoint.
-	// The free tier returns organizations / instruments / quotes for the
-	// supplied `q=` query string.
-	PermIDSearchURL = "https://api-eit.refinitiv.com/permid/search"
+// ErrRateLimited indicates Refinitiv returned HTTP 429 — the daily
+// 5,000-request ceiling for the Open Data public tier has been hit.
+// Callers should stop issuing further requests for the day; retrying
+// will not succeed until the quota resets. Enrich zeros its shared
+// budget when it sees this error so concurrent Enrich invocations
+// short-circuit on their next budget check.
+var ErrRateLimited = errors.New("permid: refinitiv rate-limited (429)")
 
-	// permidURLPrefix is stripped from `@id` values to yield the raw
-	// canonical identifier (e.g. "1-4295905573").
-	permidURLPrefix = "https://permid.org/"
-)
+// PermIDSearchURL is the Refinitiv PermID Open Data search endpoint.
+// The free tier returns organizations / instruments / quotes for the
+// supplied `q=` query string. Declared as a var (not a const) so
+// internal tests can redirect it to an httptest server stub.
+var PermIDSearchURL = "https://api-eit.refinitiv.com/permid/search"
+
+// permidURLPrefix is stripped from `@id` values to yield the raw
+// canonical identifier (e.g. "1-4295905573").
+const permidURLPrefix = "https://permid.org/"
 
 // SearchResponse mirrors the Refinitiv PermID search API JSON shape.
 type SearchResponse struct {
@@ -122,6 +131,10 @@ func Search(ctx context.Context, query string) (*SearchResponse, error) {
 		Get(PermIDSearchURL)
 	if err != nil {
 		return nil, fmt.Errorf("permid search %q: %w", query, err)
+	}
+
+	if r.StatusCode() == http.StatusTooManyRequests {
+		return nil, fmt.Errorf("permid search %q: %w (body: %s)", query, ErrRateLimited, string(r.Body()))
 	}
 
 	if r.StatusCode() >= 400 {

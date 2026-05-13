@@ -1953,7 +1953,30 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		logoMimeType = resp.Header().Get("Content-Type")
 	}
 
-	// build Asset object
+	// Build the fullAsset that downstream publish() / SaveDB will see.
+	// Most fields come from the per-ticker details endpoint, but a few
+	// must carry over from the input asset:
+	//
+	//   - OrganizationPermID / InstrumentPermID: Massive's response has
+	//     no PermID field. filterAssetsByLastUpdated already enriched
+	//     the input asset via permid.Enrich; without preserving those
+	//     values here, the freshly-built fullAsset would be empty and
+	//     publish() would either re-resolve (wasting another Refinitiv
+	//     call against the daily quota) or — once the per-run budget
+	//     is exhausted — silently land in the DB with an empty PermID,
+	//     throwing away the upstream resolution that was already paid
+	//     for.
+	//
+	//   - CIK: usually present in the details response, but for some
+	//     long-delisted tickers the response omits it (the trace shows
+	//     this for the 2019-09-24 BBI anomaly). Fall back to the
+	//     walk-observed CIK on the input asset so applyWalkDerivedDates'
+	//     CIK index can still resolve a window.
+	cik := massiveAsset.CIK
+	if cik == "" {
+		cik = asset.CIK
+	}
+
 	assetDetail := &data.Asset{
 		Ticker:               massiveTicker2PvTicker(massiveAsset.Ticker),
 		CompositeFigi:        massiveAsset.CompositeFIGI,
@@ -1964,7 +1987,9 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		PrimaryExchange:      massiveExchangeMap[massiveAsset.PrimaryExchange],
 		AssetType:            data.AssetType(massiveAsset.Type),
 		HeadquartersLocation: location,
-		CIK:                  massiveAsset.CIK,
+		CIK:                  cik,
+		OrganizationPermID:   asset.OrganizationPermID,
+		InstrumentPermID:     asset.InstrumentPermID,
 		SIC:                  &sicCode,
 		CorporateUrl:         massiveAsset.CorporateURL,
 		Icon:                 icon,
@@ -1973,6 +1998,7 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		LogoMimeType:         logoMimeType,
 		ListingDate:          massiveAsset.ListDate,
 		LastUpdated:          asset.LastUpdated,
+		ValidFor:             asset.ValidFor,
 	}
 
 	api.applyWalkDerivedDates(assetDetail)

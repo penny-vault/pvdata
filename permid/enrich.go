@@ -140,6 +140,16 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 					return
 				}
 
+				if errors.Is(err, ErrRateLimited) {
+					logger.Warn().
+						Err(err).
+						Msg("permid: refinitiv daily quota exhausted (429); halting PermID resolution for this run")
+
+					remaining.Store(0)
+
+					return
+				}
+
 				logger.Warn().
 					Err(err).
 					Str("Ticker", asset.Ticker).
@@ -170,6 +180,16 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 			gotOrg, gotInstr, err := LookupByTicker(ctx, asset.Ticker, asset.Name, orgPermID, limiter)
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
+
+				if errors.Is(err, ErrRateLimited) {
+					logger.Warn().
+						Err(err).
+						Msg("permid: refinitiv daily quota exhausted (429); halting PermID resolution for this run")
+
+					remaining.Store(0)
+
 					return
 				}
 
