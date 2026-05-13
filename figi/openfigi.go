@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/data"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 	"golang.org/x/time/rate"
@@ -100,9 +101,56 @@ func mapFigis(query []*OpenFigiQuery) ([]*MappingResponse, error) {
 	return mappingResponse, nil
 }
 
-func Enrich(assets ...*data.Asset) {
-	rateLimiter := RateLimit()
+// Enrich fills CompositeFigi / ShareClassFigi / AssetType on each asset
+// using a three-step escalation. Each step only operates on assets still
+// missing a CompositeFigi after the previous step:
+//
+//  1. Existing-assets index (loaded once per run via data.WithAssetIndex
+//     in the context; nil when absent, in which case step 1 is skipped).
+//     Reuses FIGIs we have previously persisted so that a delisted asset
+//     already known to the DB does not get reminted as synthetic.
+//
+//  2. OpenFIGI mapping API via LookupFigi — active assets only. Delisted
+//     assets are intentionally not sent to OpenFIGI: the TICKER lookup
+//     does not accept an as-of date and can return the FIGI of a later
+//     tenant of the same ticker (e.g. BBI = Blockbuster 2010 then
+//     Brickell Biotech 2022).
+//
+//  3. Synthetic FIGI mint — delisted assets only, when steps 1 and 2 did
+//     not produce a FIGI. Prefers GenerateSyntheticFIGIFromCIK(cik,
+//     ticker); falls back to GenerateSyntheticFIGI(ticker, name) when
+//     CIK is empty.
+func Enrich(ctx context.Context, assets ...*data.Asset) {
+	logger := zerolog.Ctx(ctx)
 
+	// Step 1: existing-assets index. Lookup is strict and tries
+	// every identifier carried on the incoming asset (CompositeFigi,
+	// ShareClassFigi, InstrumentPermID, CUSIP, ISIN, Ticker+CIK,
+	// Ticker+OrganizationPermID) in order of specificity. A
+	// ticker-alone match would risk attributing the wrong entity's
+	// FIGI to the incoming asset, so we accept no result when none
+	// of the asset's identifiers find a hit.
+	if idx := data.AssetIndexFromContext(ctx); !idx.IsZero() {
+		for _, asset := range assets {
+			if asset.CompositeFigi != "" {
+				continue
+			}
+
+			match, ok := idx.Lookup(asset)
+			if !ok {
+				continue
+			}
+
+			asset.CompositeFigi = match.CompositeFigi
+			if asset.ShareClassFigi == "" {
+				asset.ShareClassFigi = match.ShareClassFigi
+			}
+		}
+	}
+
+	// Step 2: OpenFIGI mapping for assets still missing a FIGI and still
+	// active.
+	rateLimiter := RateLimit()
 	emptyFigis := make([]*data.Asset, 0, 100)
 
 	for _, asset := range assets {
@@ -155,6 +203,42 @@ func Enrich(assets ...*data.Asset) {
 			}
 		}
 	}
+
+	// Step 3: synthetic mint for delisted assets still without a FIGI.
+	for _, asset := range assets {
+		if asset.CompositeFigi != "" {
+			continue
+		}
+
+		if asset.DelistingDate == "" {
+			continue
+		}
+
+		switch {
+		case asset.CIK != "":
+			asset.CompositeFigi = GenerateSyntheticFIGIFromCIK(asset.CIK, asset.Ticker)
+			logger.Debug().
+				Str("Ticker", asset.Ticker).
+				Str("CIK", asset.CIK).
+				Str("CompositeFigi", asset.CompositeFigi).
+				Str("DelistingDate", asset.DelistingDate).
+				Msg("minted synthetic FIGI from CIK+ticker for delisted asset")
+		case asset.Ticker != "" && asset.Name != "":
+			asset.CompositeFigi = GenerateSyntheticFIGI(asset.Ticker, asset.Name)
+			logger.Debug().
+				Str("Ticker", asset.Ticker).
+				Str("Name", asset.Name).
+				Str("CompositeFigi", asset.CompositeFigi).
+				Str("DelistingDate", asset.DelistingDate).
+				Msg("minted synthetic FIGI from ticker+name for delisted asset (no CIK)")
+		default:
+			logger.Warn().
+				Str("Ticker", asset.Ticker).
+				Str("Name", asset.Name).
+				Str("DelistingDate", asset.DelistingDate).
+				Msg("cannot mint synthetic FIGI for delisted asset: no CIK and no name; asset will be dropped downstream")
+		}
+	}
 }
 
 func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*OpenFigiAsset {
@@ -200,6 +284,67 @@ func LookupFigi(assets []*data.Asset, rateLimiter *rate.Limiter) map[string]*Ope
 		for _, resp := range mappingResponse {
 			for _, figiAsset := range resp.Data {
 				result[figiAsset.Ticker] = figiAsset
+			}
+		}
+	}
+
+	return result
+}
+
+// LookupCompositesByFIGI resolves each composite FIGI through OpenFIGI's
+// mapping endpoint (idType=ID_BB_GLOBAL) and returns the result keyed
+// by FIGI. Used to verify after the fact that a composite a provider
+// gave us actually belongs to a US-listed security — OpenFIGI is
+// authoritative for exchCode while provider primary_exchange fields
+// are not (Massive in particular sometimes labels foreign-exchange
+// composites as XNAS for a US ticker on isolated dates).
+//
+// Result semantics:
+//   - present, ExchangeCode == "US": confirmed US.
+//   - present, ExchangeCode != "US": confirmed non-US.
+//   - absent: OpenFIGI does not know the FIGI (delisted/evicted).
+//     Callers must decide what to do; usually keep the row since the
+//     upstream observation is the best signal available.
+//
+// Batches at the active OpenFIGI batch size (100 with an API key, 10
+// without) and respects the standard rate limit.
+func LookupCompositesByFIGI(ctx context.Context, figis []string) map[string]*OpenFigiAsset {
+	if len(figis) == 0 {
+		return nil
+	}
+
+	rateLimiter := RateLimit()
+	maxBatch := batchSize()
+	result := make(map[string]*OpenFigiAsset, len(figis))
+
+	for start := 0; start < len(figis); start += maxBatch {
+		end := min(start+maxBatch, len(figis))
+
+		query := make([]*OpenFigiQuery, 0, end-start)
+		for _, f := range figis[start:end] {
+			query = append(query, &OpenFigiQuery{
+				IdType:                  "ID_BB_GLOBAL",
+				IdValue:                 f,
+				MarketSectorDescription: "Equity",
+			})
+		}
+
+		if err := rateLimiter.Wait(ctx); err != nil {
+			log.Warn().Err(err).Msg("openfigi rate limiter wait failed; aborting composite confirmation")
+			return result
+		}
+
+		responses, err := mapFigis(query)
+		if err != nil {
+			log.Warn().Err(err).Int("BatchSize", len(query)).Msg("openfigi composite confirmation batch failed; continuing")
+			continue
+		}
+
+		for _, r := range responses {
+			for _, asset := range r.Data {
+				if asset.Figi != "" {
+					result[asset.Figi] = asset
+				}
 			}
 		}
 	}

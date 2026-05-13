@@ -84,3 +84,51 @@ var _ = Describe("ValidateFIGICheckDigit", func() {
 		Expect(ValidateFIGICheckDigit("BBG000BLNNV00")).To(BeFalse())
 	})
 })
+
+var _ = Describe("GenerateSyntheticFIGIFromCIK", func() {
+	It("returns a 12-character string", func() {
+		Expect(GenerateSyntheticFIGIFromCIK("0001085734", "BBI")).To(HaveLen(12))
+	})
+
+	It("starts with PVG prefix", func() {
+		result := GenerateSyntheticFIGIFromCIK("0001085734", "BBI")
+		Expect(result[:3]).To(Equal("PVG"))
+	})
+
+	It("uses only valid FIGI characters in positions 4-11", func() {
+		result := GenerateSyntheticFIGIFromCIK("0001085734", "BBI")
+		body := result[3:11]
+		for i, ch := range body {
+			Expect(strings.ContainsRune(validFIGIChars, ch)).To(BeTrue(),
+				"character at body position %d (%c) is not a valid FIGI character", i, ch)
+		}
+	})
+
+	It("has a valid check digit per modified Luhn algorithm", func() {
+		result := GenerateSyntheticFIGIFromCIK("0001085734", "BBI")
+		Expect(ValidateFIGICheckDigit(result)).To(BeTrue())
+	})
+
+	It("is deterministic (same inputs produce same output)", func() {
+		Expect(GenerateSyntheticFIGIFromCIK("0001085734", "BBI")).
+			To(Equal(GenerateSyntheticFIGIFromCIK("0001085734", "BBI")))
+	})
+
+	It("distinct CIKs with the same ticker produce distinct FIGIs (ticker reuse)", func() {
+		blockbuster := GenerateSyntheticFIGIFromCIK("0001085734", "BBI")
+		brickell := GenerateSyntheticFIGIFromCIK("0000819050", "BBI")
+		Expect(blockbuster).NotTo(Equal(brickell))
+	})
+
+	It("same CIK with distinct tickers produces distinct FIGIs (share classes)", func() {
+		brkA := GenerateSyntheticFIGIFromCIK("0001067983", "BRK.A")
+		brkB := GenerateSyntheticFIGIFromCIK("0001067983", "BRK.B")
+		Expect(brkA).NotTo(Equal(brkB))
+	})
+
+	It("does not collide with GenerateSyntheticFIGI for the same string pair", func() {
+		fromCIK := GenerateSyntheticFIGIFromCIK("0001085734", "BBI")
+		fromName := GenerateSyntheticFIGI("0001085734", "BBI")
+		Expect(fromCIK).NotTo(Equal(fromName))
+	})
+})

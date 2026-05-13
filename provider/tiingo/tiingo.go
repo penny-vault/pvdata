@@ -33,6 +33,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -578,7 +579,9 @@ func downloadTiingoAssets(ctx context.Context, subscription *library.Subscriptio
 	}
 
 	log.Debug().Int("NumAssetsToEnrich", len(commonAssets)).Msg("number of assets to enrich with Composite FIGI")
-	figi.Enrich(commonAssets...)
+	figi.Enrich(ctx, commonAssets...)
+
+	permid.Enrich(ctx, commonAssets...)
 
 	pvAssetMap := make(map[string]*data.Asset, len(commonAssets))
 	for _, asset := range commonAssets {

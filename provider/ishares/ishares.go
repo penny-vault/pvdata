@@ -28,6 +28,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -424,7 +425,9 @@ func downloadSingleISharesETF(
 				Str("IndexTicker", etf.IndexTicker).
 				Msg("resolving unknown tickers via OpenFIGI")
 
-			figi.Enrich(unknownAssets...)
+			figi.Enrich(ctx, unknownAssets...)
+
+			permid.Enrich(ctx, unknownAssets...)
 
 			for _, asset := range unknownAssets {
 				if asset.CompositeFigi != "" {

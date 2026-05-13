@@ -27,6 +27,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -372,7 +373,9 @@ func downloadEodhdAssets(ctx context.Context, subscription *library.Subscription
 	}
 
 	logger.Info().Int("count", len(allAssets)).Msg("resolving FIGIs via OpenFIGI")
-	figi.Enrich(allAssets...)
+	figi.Enrich(ctx, allAssets...)
+
+	permid.Enrich(ctx, allAssets...)
 
 	for _, a := range allAssets {
 		if a.CompositeFigi == "" {

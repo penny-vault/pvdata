@@ -28,6 +28,7 @@ type PostFetchHook func(context.Context, *library.Subscription) error
 type contextKey string
 
 const LookbackKey contextKey = "lookback"
+const EndDateKey contextKey = "end_date"
 const CompanyFactsZipKey contextKey = "companyfacts_zip"
 const FilingCutoffKey contextKey = "filing_cutoff"
 
@@ -65,6 +66,23 @@ func LookbackFromContext(ctx context.Context, defaultLookback time.Duration) tim
 	}
 
 	return defaultLookback
+}
+
+// EndDateFromContext returns the explicit walk end-date (exclusive
+// upper bound) set by --end-date and the ok flag. When unset, callers
+// should default to the current day so the walk runs through "now".
+// Combine with --start-date / --lookback to bound both edges of a
+// historical walk; the typical use case is targeted backfill of a
+// known delisted-ticker window (e.g. Blockbuster's 1999-2010 BBI
+// lifetime) without re-walking everything from then to today.
+func EndDateFromContext(ctx context.Context) (time.Time, bool) {
+	if v := ctx.Value(EndDateKey); v != nil {
+		if t, ok := v.(time.Time); ok {
+			return t, true
+		}
+	}
+
+	return time.Time{}, false
 }
 
 type Provider interface {

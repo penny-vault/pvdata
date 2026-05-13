@@ -1,0 +1,217 @@
+// Copyright 2024
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+package permid
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/georgysavva/scany/v2/pgxscan"
+	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/library"
+	"github.com/rs/zerolog"
+)
+
+// DefaultBackfillLimit caps the number of assets BackfillEmpty
+// attempts to resolve in one invocation. Sized so a daily run
+// stays well under the Refinitiv free-tier 5,000 request/day
+// ceiling: 250 assets at up to 2 API calls each = 500 requests
+// per invocation, leaving plenty of headroom for inline Enrich
+// calls during the rest of the run.
+const DefaultBackfillLimit = 250
+
+// backfillCandidate pairs an asset that needs resolution with the
+// source table it lives in, so the UPDATE after resolution can
+// write back to exactly the row we read.
+type backfillCandidate struct {
+	asset *data.Asset
+	table string
+}
+
+// BackfillEmpty scans every asset_description table for rows
+// missing OrganizationPermID or InstrumentPermID, resolves up to
+// `limit` of them via Enrich, and writes the resolved values back
+// to the source table.
+//
+// Pass limit = DefaultBackfillLimit for the standard cadence;
+// pass 0 to no-op. The Enrich call honors the same API budget,
+// so a stalled Refinitiv quota will simply leave some candidates
+// unresolved for a future run rather than fail the backfill.
+//
+// Designed to be called as a step inside the run plumbing
+// (cmd/run.go / web/run.go) after the main Fetch completes — not
+// every provider produces assets, but PermID coverage is a
+// cross-cutting concern that every run can chip away at.
+//
+// Skips silently when no permid.apikey is configured.
+func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+
+	logger := zerolog.Ctx(ctx)
+
+	if APIKey() == "" {
+		logger.Debug().Msg("permid: no API key configured; skipping backfill")
+		return 0, nil
+	}
+
+	subs, err := lib.Subscriptions(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("permid backfill: load subscriptions: %w", err)
+	}
+
+	conn, err := lib.AcquireWithTimeout(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("permid backfill: acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	candidates := make([]backfillCandidate, 0, limit)
+	remaining := limit
+
+	for _, sub := range subs {
+		if remaining <= 0 {
+			break
+		}
+
+		tbl := sub.DataTablesMap[data.AssetKey]
+		if tbl == "" {
+			continue
+		}
+
+		// Order common-stock candidates first so the limited daily
+		// API budget gets spent on the asset class we most care
+		// about for PermID coverage. ADRC (depositary receipts) is
+		// the natural runner-up. Everything else (ETF / MF / CEF /
+		// ETN / unknown) trails. Secondary order on ticker keeps
+		// the pick deterministic across runs so we don't churn the
+		// same residual subset.
+		sql := fmt.Sprintf(`SELECT
+			ticker,
+			composite_figi,
+			coalesce(share_class_figi, '') as share_class_figi,
+			coalesce(cik, '') as cik,
+			coalesce(organization_permid, '') as organization_permid,
+			coalesce(instrument_permid, '') as instrument_permid,
+			coalesce(name, '') as name,
+			coalesce(active, false) as active
+		FROM %s
+		WHERE composite_figi <> ''
+		  AND (organization_permid IS NULL OR organization_permid = ''
+		       OR instrument_permid IS NULL OR instrument_permid = '')
+		ORDER BY
+		  CASE asset_type
+		    WHEN 'CS'   THEN 0
+		    WHEN 'ADRC' THEN 1
+		    ELSE             2
+		  END,
+		  ticker
+		LIMIT %d`, tbl, remaining)
+
+		rows, queryErr := conn.Query(ctx, sql)
+		if queryErr != nil {
+			logger.Warn().
+				Err(queryErr).
+				Str("Table", tbl).
+				Msg("permid backfill: query failed; skipping table")
+
+			continue
+		}
+
+		var partial []*data.Asset
+		if scanErr := pgxscan.ScanAll(&partial, rows); scanErr != nil {
+			logger.Warn().
+				Err(scanErr).
+				Str("Table", tbl).
+				Msg("permid backfill: scan failed; skipping table")
+
+			continue
+		}
+
+		for _, a := range partial {
+			if remaining <= 0 {
+				break
+			}
+
+			candidates = append(candidates, backfillCandidate{asset: a, table: tbl})
+			remaining--
+		}
+	}
+
+	if len(candidates) == 0 {
+		logger.Debug().Msg("permid backfill: no candidates")
+
+		return 0, nil
+	}
+
+	logger.Info().
+		Int("Candidates", len(candidates)).
+		Int("Budget", limit).
+		Msg("permid backfill: resolving missing PermIDs")
+
+	assets := make([]*data.Asset, len(candidates))
+	for i, c := range candidates {
+		assets[i] = c.asset
+	}
+
+	// Reuse Enrich's full pipeline: it consults the asset index
+	// first (free DB-level lookup), then spends API budget for
+	// what is left. WithAPIBudget caps that spend to the same
+	// limit we passed for candidate collection.
+	enrichCtx := WithAPIBudget(ctx, limit)
+	Enrich(enrichCtx, assets...)
+
+	resolved := 0
+
+	for _, c := range candidates {
+		if c.asset.OrganizationPermID == "" && c.asset.InstrumentPermID == "" {
+			continue
+		}
+
+		// COALESCE-via-NULLIF on the new values preserves any
+		// pre-existing PermID when Enrich only resolved one of
+		// the two; a partial resolution must not overwrite a
+		// good value with an empty string.
+		updateSQL := fmt.Sprintf(`UPDATE %s SET
+			organization_permid = COALESCE(NULLIF($1, ''), organization_permid),
+			instrument_permid = COALESCE(NULLIF($2, ''), instrument_permid)
+		WHERE ticker = $3 AND composite_figi = $4`, c.table)
+
+		if _, err := conn.Exec(ctx, updateSQL,
+			c.asset.OrganizationPermID,
+			c.asset.InstrumentPermID,
+			c.asset.Ticker,
+			c.asset.CompositeFigi,
+		); err != nil {
+			logger.Warn().
+				Err(err).
+				Str("Table", c.table).
+				Str("Ticker", c.asset.Ticker).
+				Msg("permid backfill: update failed")
+
+			continue
+		}
+
+		resolved++
+	}
+
+	logger.Info().
+		Int("Resolved", resolved).
+		Int("Candidates", len(candidates)).
+		Msg("permid backfill: done")
+
+	return resolved, nil
+}

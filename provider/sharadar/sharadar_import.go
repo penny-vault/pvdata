@@ -31,6 +31,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -924,7 +925,8 @@ func importTickersRows(ctx context.Context, sub *library.Subscription, rows <-ch
 		// Batch FIGI enrichment every 5000 active assets
 		if len(enrichAssets) >= 5000 {
 			log.Info().Int("batch_size", len(enrichAssets)).Msg("enriching asset batch with FIGI")
-			figi.Enrich(enrichAssets...)
+			figi.Enrich(ctx, enrichAssets...)
+			permid.Enrich(ctx, enrichAssets...)
 			enrichAssets = enrichAssets[:0]
 		}
 	}
@@ -932,7 +934,8 @@ func importTickersRows(ctx context.Context, sub *library.Subscription, rows <-ch
 	// Enrich any remaining active assets
 	if len(enrichAssets) > 0 {
 		log.Info().Int("batch_size", len(enrichAssets)).Msg("enriching final asset batch with FIGI")
-		figi.Enrich(enrichAssets...)
+		figi.Enrich(ctx, enrichAssets...)
+		permid.Enrich(ctx, enrichAssets...)
 	}
 
 	count := 0

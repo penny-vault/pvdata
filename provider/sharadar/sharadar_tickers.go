@@ -25,6 +25,7 @@ import (
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/figi"
 	"github.com/penny-vault/pvdata/library"
+	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -258,7 +259,9 @@ func downloadSharadarTickers(ctx context.Context, subscription *library.Subscrip
 	}
 
 	// enrich assets
-	figi.Enrich(enrichAssets...)
+	figi.Enrich(ctx, enrichAssets...)
+
+	permid.Enrich(ctx, enrichAssets...)
 
 	count := 0
 

@@ -147,6 +147,8 @@ sector TEXT,
 industry TEXT,
 sic_code INT,
 cik TEXT,
+organization_permid TEXT,
+instrument_permid TEXT,
 cusips text[],
 isins text[],
 other_identifiers JSONB,
@@ -174,8 +176,10 @@ CREATE INDEX %[1]s_search_idx ON %[1]s USING GIN (search);`,
 		Migrations: []string{
 			`ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS icon_url TEXT;
 			 ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS logo_url TEXT;`,
+			`ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS organization_permid TEXT;
+			 ALTER TABLE %[1]s ADD COLUMN IF NOT EXISTS instrument_permid TEXT;`,
 		},
-		Version:       1,
+		Version:       2,
 		IsPartitioned: false,
 	},
 	ConsensusKey: {
