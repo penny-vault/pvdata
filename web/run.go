@@ -231,6 +231,12 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		fetchCtx = context.WithValue(fetchCtx, provider.LookbackKey, opts.Lookback)
 	}
 
+	// Attach a shared PermID API budget for the whole run. Without
+	// this, every per-asset permid.Enrich call would allocate its own
+	// 250-call budget and the per-run cap would never actually limit
+	// anything. One pool, decremented atomically across every call.
+	fetchCtx = permid.WithAPIBudget(fetchCtx, permid.DefaultEnrichAPIBudget)
+
 	// Pre-load the existing-assets index so figi.Enrich can reuse FIGIs
 	// already in the published `assets` view across every provider.
 	if conn, connErr := lib.AcquireWithTimeout(fetchCtx); connErr != nil {

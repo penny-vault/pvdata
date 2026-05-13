@@ -104,6 +104,13 @@ provided then each subscription will execute sequentially.`,
 			log.Info().Str("figi", figiFilter).Msg("filtering run to single security")
 		}
 
+		// Attach a shared PermID API budget for the whole run. Without
+		// this, every per-asset permid.Enrich call (e.g. from massive's
+		// publish() path) would allocate its own 250-call budget and
+		// the per-run cap would never actually limit anything. One
+		// pool, decremented atomically across every Enrich invocation.
+		ctx = permid.WithAPIBudget(ctx, permid.DefaultEnrichAPIBudget)
+
 		if zipPath := viper.GetString("companyfacts-zip"); zipPath != "" {
 			ctx = context.WithValue(ctx, provider.CompanyFactsZipKey, zipPath)
 			log.Info().Str("path", zipPath).Msg("using local companyfacts.zip")

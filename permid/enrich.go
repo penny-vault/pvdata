@@ -33,25 +33,39 @@ const DefaultEnrichAPIBudget = 250
 
 type enrichBudgetCtxKey struct{}
 
-// WithAPIBudget attaches a per-Enrich API-call budget to ctx. The
-// budget caps the total number of PermID Lookup* calls Enrich will
-// issue before falling back to leaving assets unresolved. Pass 0 or a
-// negative value to disable Enrich's API calls entirely (DB index
-// fill still runs).
+// WithAPIBudget attaches a shared API-call budget to ctx. The budget
+// is a pool: every permid.Enrich call that derives from the same ctx
+// decrements the same atomic counter, so the cap applies across every
+// publish() call within a run instead of resetting per-call. Without
+// this, a per-asset publish path could issue thousands of API calls
+// per run because each invocation would start with a fresh 250.
+//
+// Pass 0 or a negative value to disable Enrich's API calls entirely
+// (DB-index fill still runs).
 func WithAPIBudget(ctx context.Context, budget int) context.Context {
-	return context.WithValue(ctx, enrichBudgetCtxKey{}, budget)
+	remaining := &atomic.Int64{}
+	remaining.Store(int64(budget))
+
+	return context.WithValue(ctx, enrichBudgetCtxKey{}, remaining)
 }
 
-// apiBudgetFromContext returns the configured API budget, falling
-// back to DefaultEnrichAPIBudget when none is set.
-func apiBudgetFromContext(ctx context.Context) int {
+// apiBudgetFromContext returns the shared budget counter for the
+// current run. When no budget is attached to ctx, returns a fresh
+// pointer pre-loaded with DefaultEnrichAPIBudget — this is the
+// stand-alone-call default (e.g. unit tests). Callers entering a run
+// should attach a budget via WithAPIBudget once at the top of the run
+// so every Enrich call shares it.
+func apiBudgetFromContext(ctx context.Context) *atomic.Int64 {
 	if v := ctx.Value(enrichBudgetCtxKey{}); v != nil {
-		if n, ok := v.(int); ok {
-			return n
+		if ptr, ok := v.(*atomic.Int64); ok {
+			return ptr
 		}
 	}
 
-	return DefaultEnrichAPIBudget
+	remaining := &atomic.Int64{}
+	remaining.Store(int64(DefaultEnrichAPIBudget))
+
+	return remaining
 }
 
 // Enrich fills OrganizationPermID and InstrumentPermID on each asset
@@ -94,14 +108,11 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 		return
 	}
 
-	budget := int64(apiBudgetFromContext(ctx))
-	if budget <= 0 {
-		logger.Debug().Msg("permid: API budget is 0 for this run; skipping PermID API resolution")
+	remaining := apiBudgetFromContext(ctx)
+	if remaining.Load() <= 0 {
+		logger.Debug().Msg("permid: API budget exhausted; skipping PermID API resolution")
 		return
 	}
-
-	var remaining atomic.Int64
-	remaining.Store(budget)
 
 	limiter := RateLimit()
 
@@ -116,7 +127,6 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 		if orgPermID == "" && asset.CIK != "" {
 			if remaining.Load() <= 0 {
 				logger.Info().
-					Int64("Budget", budget).
 					Msg("permid: API budget exhausted; remaining assets deferred to next run")
 
 				break
@@ -150,7 +160,6 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 		if asset.Ticker != "" && (orgPermID == "" || asset.InstrumentPermID == "") {
 			if remaining.Load() <= 0 {
 				logger.Info().
-					Int64("Budget", budget).
 					Msg("permid: API budget exhausted; remaining assets deferred to next run")
 
 				break
