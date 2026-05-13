@@ -67,6 +67,12 @@ func init() {
 	// an X server; users debugging locally can opt back in via config.
 	viper.SetDefault("playwright.headless", true)
 
+	// Retry behaviour for scheduled subscription runs. max_attempts is the
+	// total number of tries including the initial attempt; 1 disables retry.
+	// delay is the sleep between attempts.
+	viper.SetDefault("retry.max_attempts", 6)
+	viper.SetDefault("retry.delay", "5m")
+
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.pvdata.toml)")
 	infoCmd.PersistentFlags().String("dbUrl", "", "database connection string")
 

@@ -27,6 +27,7 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/google/uuid"
+	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/db"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/web"
@@ -232,16 +233,49 @@ func init() {
 func runScheduled(ctx context.Context, myLibrary *library.Library, registry *web.RunRegistry, logCapture *web.LogCapture, subscription *library.Subscription) {
 	subID := subscription.ID.String()
 
-	run, ok := registry.TryReserve(subID)
-	if !ok {
-		log.Warn().Str("subscription", subscription.Name).Msg("scheduled run skipped: another run is already in progress")
-
-		return
+	maxAttempts := viper.GetInt("retry.max_attempts")
+	if maxAttempts < 1 {
+		maxAttempts = 1
 	}
 
-	web.RunSubscription(ctx, myLibrary, subscription, web.RunOptions{
-		Run:        run,
-		Source:     web.RunSourceScheduled,
-		LogCapture: logCapture,
-	})
+	retryDelay := viper.GetDuration("retry.delay")
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		run, ok := registry.TryReserve(subID)
+		if !ok {
+			log.Warn().Str("subscription", subscription.Name).Int("attempt", attempt).Msg("scheduled run skipped: another run is already in progress")
+
+			return
+		}
+
+		if attempt > 1 {
+			log.Info().Str("subscription", subscription.Name).Int("attempt", attempt).Int("max_attempts", maxAttempts).Msg("retrying failed scheduled run")
+		}
+
+		status := web.RunSubscription(ctx, myLibrary, subscription, web.RunOptions{
+			Run:        run,
+			Source:     web.RunSourceScheduled,
+			LogCapture: logCapture,
+		})
+
+		if status != data.RunFailed {
+			return
+		}
+
+		if attempt >= maxAttempts {
+			log.Warn().Str("subscription", subscription.Name).Int("attempts", attempt).Msg("scheduled run failed after exhausting retry attempts")
+
+			return
+		}
+
+		log.Warn().Str("subscription", subscription.Name).Dur("delay", retryDelay).Int("attempt", attempt).Int("max_attempts", maxAttempts).Msg("scheduled run failed; sleeping before retry")
+
+		select {
+		case <-time.After(retryDelay):
+		case <-ctx.Done():
+			log.Info().Str("subscription", subscription.Name).Msg("retry abandoned: server shutting down")
+
+			return
+		}
+	}
 }

@@ -69,12 +69,13 @@ type RunOptions struct {
 
 // RunSubscription executes a fetch for the subscription, persists observations,
 // saves run history, runs post-fetch hooks, publishes SSE events (if a run is
-// attached), and pings healthchecks at start and finish.
+// attached), and pings healthchecks at start and finish. The final run status
+// is returned so the scheduler can decide whether to retry.
 //
 // The caller must reserve a registry slot via TryReserve and pass the resulting
 // activeRun in opts.Run. RunSubscription owns the run lifecycle thereafter and
 // will call run.finish() before returning.
-func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Subscription, opts RunOptions) {
+func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Subscription, opts RunOptions) data.StatusType {
 	if opts.Run != nil {
 		defer opts.Run.finish()
 	}
@@ -115,7 +116,7 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		emitFinal(opts.Run, sub, 0, false, "provider not found")
 		pingHealthcheck(sub, healthcheck.PingFail, fmt.Sprintf("provider not found: %s", sub.Provider))
 
-		return
+		return data.RunFailed
 	}
 
 	subDataset, ok := subProvider.Datasets()[sub.Dataset]
@@ -124,7 +125,7 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		emitFinal(opts.Run, sub, 0, false, "dataset not found")
 		pingHealthcheck(sub, healthcheck.PingFail, fmt.Sprintf("dataset not found: %s", sub.Dataset))
 
-		return
+		return data.RunFailed
 	}
 
 	runID, beginErr := lib.BeginRun(ctx, data.RunSummary{
@@ -357,6 +358,8 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 			}
 		}
 	}
+
+	return summary.Status
 }
 
 func emitStarted(run *activeRun, sub *library.Subscription) {
