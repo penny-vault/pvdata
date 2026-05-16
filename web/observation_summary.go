@@ -43,6 +43,12 @@ func summarizeObservation(obs *data.Observation) (string, string) {
 		return "eod", fmt.Sprintf("%s close=%.2f vol=%.0f %s",
 			e.Ticker, e.Close, e.Volume, e.Date.Format(dateFmt))
 
+	case obs.IntradayBar != nil:
+		b := obs.IntradayBar
+
+		return "intraday", fmt.Sprintf("%s close=%.2f vol=%.0f %s",
+			b.Ticker, b.Close, b.Volume, b.Date.Format("2006-01-02 15:04"))
+
 	case obs.Fundamental != nil:
 		f := obs.Fundamental
 

@@ -75,6 +75,20 @@ var _ = Describe("summarizeObservation", func() {
 		Expect(summary).To(Equal("MSFT close=425.50 vol=32000000 2026-04-01"))
 	})
 
+	It("summarizes an IntradayBar", func() {
+		obs := &data.Observation{
+			IntradayBar: &data.IntradayBar{
+				Ticker: "MSFT",
+				Close:  425.55,
+				Volume: 12345,
+				Date:   time.Date(2026, 4, 1, 14, 32, 0, 0, time.UTC),
+			},
+		}
+		typ, summary := summarizeObservation(obs)
+		Expect(typ).To(Equal("intraday"))
+		Expect(summary).To(Equal("MSFT close=425.55 vol=12345 2026-04-01 14:32"))
+	})
+
 	It("summarizes a Fundamental", func() {
 		obs := &data.Observation{
 			Fundamental: &data.Fundamental{

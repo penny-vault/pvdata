@@ -39,6 +39,13 @@ const (
 	RunSourceManual    RunSource = "manual"
 )
 
+// recordEmitInterval caps how often the per-run interceptor pushes a
+// "record" SSE event. Minute-bar streams emit ~1.9M observations per
+// file; firing an event per observation freezes the browser even with
+// publish() dropping at the channel boundary. 100 ms keeps the
+// records tab feeling live without flooding the client.
+const recordEmitInterval = 100 * time.Millisecond
+
 // runProgressInterval bounds how often we UPDATE num_observations
 // on a running run_history row. FRED-style providers can emit
 // hundreds of thousands of records per minute; this caps the
@@ -198,9 +205,38 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 	emitStarted(opts.Run, sub)
 
 	// Observation interceptor: summarize each record, push throttled
-	// progress to the DB, and forward to saveChan.
+	// progress to the DB, and forward to saveChan. The "record" SSE
+	// event is time-throttled separately from progress so a high-rate
+	// stream (minute bars) does not flood connected clients; the
+	// latest summary is held and emitted on the next tick boundary,
+	// and a final emit fires when the stream closes so the user sees
+	// the last record.
 	go func() {
 		count := 0
+
+		var (
+			lastEmit       time.Time
+			pendingTyp     string
+			pendingSummary string
+			pendingCount   int
+			pending        bool
+		)
+
+		emitRecord := func() {
+			if opts.Run == nil {
+				return
+			}
+
+			d, _ := json.Marshal(map[string]interface{}{
+				"count":   pendingCount,
+				"type":    pendingTyp,
+				"summary": pendingSummary,
+			})
+			opts.Run.publish(sseEvent{Event: "record", Data: string(d)})
+
+			lastEmit = time.Now()
+			pending = false
+		}
 
 		for obs := range observeChan {
 			count++
@@ -208,17 +244,23 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 			typ, summary := summarizeObservation(obs)
 
 			if opts.Run != nil {
-				d, _ := json.Marshal(map[string]interface{}{
-					"count":   count,
-					"type":    typ,
-					"summary": summary,
-				})
-				opts.Run.publish(sseEvent{Event: "record", Data: string(d)})
+				pendingTyp = typ
+				pendingSummary = summary
+				pendingCount = count
+				pending = true
+
+				if lastEmit.IsZero() || time.Since(lastEmit) >= recordEmitInterval {
+					emitRecord()
+				}
 			}
 
 			progress.Tick(time.Now(), count)
 
 			saveChan <- obs
+		}
+
+		if pending {
+			emitRecord()
 		}
 
 		close(saveChan)
