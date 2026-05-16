@@ -217,7 +217,7 @@ async function attachEventSource() {
     runRecordCount.value = data.count
     runRecords.value.push({ type: data.type, summary: data.summary })
     if (runRecords.value.length > maxRunRecords) {
-      runRecords.value = runRecords.value.slice(-maxRunRecords)
+      runRecords.value.splice(0, runRecords.value.length - maxRunRecords)
     }
   })
 
@@ -225,7 +225,7 @@ async function attachEventSource() {
     const entry = parseLogLine(e.data)
     liveLogs.value.push(entry)
     if (liveLogs.value.length > maxLiveLogs) {
-      liveLogs.value = liveLogs.value.slice(-maxLiveLogs)
+      liveLogs.value.splice(0, liveLogs.value.length - maxLiveLogs)
     }
   })
 
