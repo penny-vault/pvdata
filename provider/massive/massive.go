@@ -137,6 +137,20 @@ func (massive *Massive) Datasets() map[string]provider.Dataset {
 			ConfigDescription: flatFilesPrompts,
 			Fetch:             downloadMassiveMinute,
 		},
+
+		"1-Minute Bars (Live)": {
+			Name:        "1-Minute Bars (Live)",
+			Description: "Live 1-minute OHLCV bars streamed from the Massive websocket. One session per weekday: connects in the early morning and disconnects at 20:35 America/New_York. Stored in ClickHouse via the IntradayKey backend; the daily flat-files job is the source of truth and dedupes via ReplacingMergeTree.",
+			DataTypes:   []*data.DataType{data.DataTypes[data.IntradayKey]},
+			DateRange: func() (time.Time, time.Time) {
+				return time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC), time.Now().UTC()
+			},
+			ConfigDescription: map[string]string{
+				"apiKey": "Enter your Massive API key:",
+				"feed":   "Which websocket feed? (real-time or delayed)",
+			},
+			Fetch: downloadMassiveMinuteLive,
+		},
 	}
 }
 

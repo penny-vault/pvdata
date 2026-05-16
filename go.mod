@@ -8,6 +8,7 @@ require (
 	charm.land/glamour/v2 v2.0.0
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.3
+	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
 	github.com/MicahParks/keyfunc/v3 v3.8.0
 	github.com/adrg/strutil v0.3.1
 	github.com/alphadose/haxmap v1.4.1
@@ -24,6 +25,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/klauspost/compress v1.18.6
 	github.com/kothar/go-backblaze v0.0.0-20210124194846-35409b867216
+	github.com/massive-com/client-go/v3 v3.3.0
 	github.com/parquet-go/parquet-go v0.29.0
 	github.com/tidwall/gjson v1.18.0
 	github.com/xitongsys/parquet-go v1.6.2
@@ -32,7 +34,6 @@ require (
 
 require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.46.0 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
@@ -47,6 +48,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.15 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.23 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.23 // indirect
+	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/harmonica v0.2.0 // indirect
@@ -73,6 +75,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/google/readahead v0.0.0-20161222183148-eaceba169032 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
@@ -98,6 +101,7 @@ require (
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
+	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637 // indirect
 )
 
 require (
@@ -142,7 +146,7 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/net v0.53.0
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0
 	google.golang.org/protobuf v1.36.11
