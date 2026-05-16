@@ -6,18 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-15
+
 ### Added
 
-- EODHD ([eodhd.com](https://eodhd.com)) is available as a data provider. Subscribe to `Stock Tickers` for the asset catalog (with optional delisted coverage), `EOD` for end-of-day OHLCV with splits and dividends, or `Intraday 1m` for 1-minute bars on a configured ticker list. Configure your API token under the eodhd provider in `pvdata subscribe`. The new `intraday-bar` data type is partitioned monthly.
+- EODHD ([eodhd.com](https://eodhd.com)) is available as a data provider. Subscribe to `Stock Tickers` for the asset catalog (with optional delisted coverage), `EOD` for end-of-day OHLCV with splits and dividends, or `Intraday 1m` for 1-minute bars on a configured ticker list. Configure your API token under the eodhd provider in `pvdata subscribe`. The new `intraday-bar` data type is partitioned yearly.
 - Massive `1-Minute Bars` dataset ingests 1-minute OHLCV from the S3 flat-files endpoint into the `intraday-bar` ClickHouse table, including pre-market and after-hours rows. Subscribe via `pvdata subscribe` and supply your `flatFilesAccessKey` / `flatFilesSecretKey`.
+- Massive `1-Minute Bars (Live)` dataset streams real-time AM bars over the Massive websocket. Schedule it with a weekday cron (e.g. `25 3 * * 1-5` America/New_York); each run holds the connection from morning pre-market through 20:35 ET and disconnects cleanly. Stored in the same `intraday-bar` ClickHouse table as the flat-files variant, and ClickHouse `ReplacingMergeTree` de-duplicates streamed bars against the daily reconciliation pass automatically. Configure `apiKey` and optionally `feed` (`real-time` or `delayed`).
+- Massive `Daily Market Summary` REST endpoint fills the gap on days when the flat-file has not yet been published, so same-day EOD requests stop returning empty results.
 - Optional flat-file and corporate-actions parquet backups. Set `parquet_backup_dir` in the config and Massive EOD / 1-Minute runs will archive each source file (one parquet per trading day) and the REST splits/dividends responses (one parquet per year) under that directory.
 - New audit checks run by `pvdata check`:
   - `missing_eod` flags trading days inside a ticker's expected coverage window where no EOD row exists.
   - `eod_provider_consistency` compares OHLCV across every pair of EOD subscriptions and reports per-field disagreements beyond a price (1 cent or 0.01%) or volume (0.5%) tolerance.
 - `clickhouse.disabled` config flag opts out of the ClickHouse backend. Subscriptions with mixed Postgres + ClickHouse data types still run; intraday rows are dropped with a single warning at run start instead of failing on flush.
 - `pvdata run --start-date YYYY-MM-DD` scopes a run from an absolute date instead of a relative `--lookback` duration. The two flags are mutually exclusive.
+- `pvdata run --end-date YYYY-MM-DD` caps the walk at an explicit upper bound, so targeted historical backfills (e.g. a delisted ticker's lifetime) no longer have to re-walk through today.
 - `pvdata import` accepts the parquet backups produced when `parquet_backup_dir` is set on Massive `EOD` or `1-Minute Bars` subscriptions. Pass either individual files or a backup root (e.g. `pvdata import --subscription <name> /backups/<slug>`) and every `<YYYY>/<YYYY-MM-DD>.parquet` under it is replayed into the database. EOD imports automatically join each row against the colocated `splits/<YYYY>.parquet` and `dividends/<YYYY>.parquet` so prices land with the same split factor and dividend cash amount the live fetch wrote.
 - `pvdata run --asset-workers N` controls the worker count for the Massive asset discovery (historical reference-tickers walk) and the per-ticker details fan-out. Defaults to 32; long backfills that previously serialised through one goroutine now run with the same rate-limit cap but materially shorter wall time. The viper key `massive.asset_walk_workers` also accepts the value.
+- `pvdata figi <ticker> <YYYY-MM-DD>` resolves the composite FIGI that was active for a ticker on a specific date, including for since-delisted securities.
+- `pvdata` accepts `--cpuprofile` and `--memprofile` flags on every command for ad-hoc CPU and heap profiling.
+- Web UI SQL console queries the ClickHouse backend in addition to Postgres, so intraday-bar tables are now reachable from the browser.
 - Scheduled subscription runs that finish in a failed state are now retried automatically. The defaults attempt each scheduled run up to six times (one initial try plus five retries) with a five-minute sleep between attempts, so a transient scraper or upstream-API hiccup no longer requires an operator to re-trigger the run by hand. Override the policy in `.pvdata.toml` with `retry.max_attempts` (set to `1` to disable retries) and `retry.delay` (any Go duration string, e.g. `30s`, `2m`, `1h`). Manual `Run Now` triggers are unaffected.
 
 ### Changed
@@ -26,9 +34,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` no longer auto-creates published views or prompts when a data type has multiple sources. Manage published views with `pvdata publish`; the run path only re-applies the SQL of views that already exist.
 - The Massive EOD pipeline parallelizes splits and dividends pagination, retries HTTP/2 GOAWAY and mid-stream flat-file failures with exponential backoff, and runs the daily flat-file loop concurrently for ranges over ~1 year of trading days (`massive.flatfile_workers` to tune, default 8).
 - Massive EOD and 1-Minute runs read the asset universe from the published `assets` view across every provider, with as-of-date listed/delisted gating, so historical bars for since-delisted tickers resolve correctly.
-- The Massive subscribe wizard prompts only for the credentials each dataset uses (REST keys for Stock Tickers / Market Holidays / EOD; flat-files keys for EOD / 1-Minute Bars).
+- The Massive subscribe wizard prompts only for the credentials each dataset uses (REST keys for Stock Tickers / Market Holidays / EOD; flat-files keys for EOD / 1-Minute Bars; `apiKey` + `feed` for 1-Minute Bars (Live)).
 - The `intraday-bar` ClickHouse schema applies column-specialized codecs (Gorilla + ZSTD on OHLCV, DoubleDelta + ZSTD on `event_date`, ZSTD on the FIGI column) for materially better compression. Existing tables are not migrated; new tables created after upgrade pick up the codecs automatically.
+- `intraday-bar` tables now partition by year (previously by month), keeping the ClickHouse part count low at multi-decade horizons. Existing tables are not migrated; new tables pick up the change automatically.
+- Intraday ClickHouse inserts run through a writer pool with batched sends. Tune via `clickhouse.intraday_writers` (default 4) and `clickhouse.intraday_queue_depth` (default 8); minute-bar backfills are now throughput-bound instead of round-trip-bound.
 - Massive EOD adjusted-close recomputation batches updates per FIGI via UNNEST and emits a 15-second progress heartbeat (processed / total / elapsed / ETA), eliminating the per-row round-trip that dominated wall time on multi-decade backfills.
+- PermID enrichment shares a single API budget and rate limiter per run, short-circuits on HTTP 429, preserves already-resolved PermIDs through asset-detail merges, and the per-run inline and backfill budgets are raised to 2000.
+- Web UI throttles per-record SSE events and summarizes intraday-bar counts, so the records tab stays responsive during minute-bar streams.
+- `pvdata serve` self-heals missing ClickHouse tables on startup so a fresh install (or a backend that was added to an existing subscription) no longer requires a manual `pvdata migrate`.
+
+### Fixed
+
+- The subscriptions list hides "next run" times for inactive subscriptions instead of showing a stale future timestamp.
 
 ## [0.5.3] - 2026-05-03
 
