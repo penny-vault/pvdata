@@ -47,6 +47,12 @@ Even though the data from each of these sources may be similar they all have
 their own individual schema and method of obtaining data. pv-data solves these
 challenges by maintaining a list of subscriptions and converting data from its
 native schema into a format understood by penny-vault.`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return startProfiling()
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		stopProfiling()
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -74,6 +80,7 @@ func init() {
 	viper.SetDefault("retry.delay", "5m")
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.pvdata.toml)")
+	registerProfileFlags(rootCmd)
 	infoCmd.PersistentFlags().String("dbUrl", "", "database connection string")
 
 	if err := viper.BindPFlag("db.url", infoCmd.PersistentFlags().Lookup("dbUrl")); err != nil {
