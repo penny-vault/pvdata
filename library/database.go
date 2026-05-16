@@ -697,7 +697,7 @@ created_by FROM subscriptions`)
 			sub.DataTablesMap[dataType] = sub.DataTables[idx]
 		}
 
-		if sub.Schedule == "" {
+		if sub.Schedule == "" || !sub.Active {
 			continue
 		}
 
