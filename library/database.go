@@ -272,8 +272,20 @@ func (myLibrary *Library) TotalSecurities(ctx context.Context) (int, error) {
 
 // observationBatchSize is the row count at which buffered metrics and
 // fundamentals are flushed via pgx.Batch. A round-trip per batch beats
-// a round-trip per row for bulk file imports (Sharadar, etc.).
+// a round-trip per row for bulk file imports (Sharadar, etc.). 500 is
+// tuned for the Postgres path; ClickHouse benefits from much larger
+// batches (see intradayBatchSize).
 const observationBatchSize = 500
+
+// intradayBatchSize is the row count at which buffered IntradayBars
+// are flushed to ClickHouse via the native batch protocol.
+// ClickHouse's MergeTree ingest amortises a fixed per-batch overhead
+// (block header, server ack, ReplacingMergeTree part creation) over
+// the batch, so small batches turn an otherwise CPU-cheap bulk load
+// into a network/round-trip-bound stall — the original 500-row size
+// produced ~65ms per Send() on local CH per pprof block profile, so
+// bumping it 50x makes minute-bar imports throughput-bound instead.
+const intradayBatchSize = 25000
 
 type metricBuffer struct {
 	tbl  string
@@ -506,13 +518,13 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 
 			buf, ok := intradayBufs[subscription.ID]
 			if !ok {
-				buf = &intradayBuffer{tbl: tbl, rows: make([]*data.IntradayBar, 0, observationBatchSize)}
+				buf = &intradayBuffer{tbl: tbl, rows: make([]*data.IntradayBar, 0, intradayBatchSize)}
 				intradayBufs[subscription.ID] = buf
 			}
 
 			buf.rows = append(buf.rows, elem.IntradayBar)
 
-			if len(buf.rows) >= observationBatchSize {
+			if len(buf.rows) >= intradayBatchSize {
 				flushIntraday(buf)
 			}
 		}

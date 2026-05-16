@@ -439,7 +439,19 @@ func createMonthlyPartitions(ctx context.Context, tx pgx.Tx, dataTable string) e
 // dropped before migration and re-applied afterwards so column-altering
 // migrations (which would otherwise be blocked by view dependencies) can
 // proceed and the rebuilt views pick up any updated ViewGenerator output.
+//
+// Also self-heals missing ClickHouse-backed tables: CH tables are
+// created during subscription creation, but a subscription created
+// while CH was unavailable (or before CH was configured) ends up with
+// a Postgres row referencing tables that were never built. CREATE
+// TABLE IF NOT EXISTS is idempotent, so running it on every migration
+// hook covers that gap without affecting subscriptions whose tables
+// already exist.
 func (subscription *Subscription) RunMigrations(ctx context.Context) error {
+	if err := subscription.createClickHouseTables(ctx); err != nil {
+		return fmt.Errorf("ensure clickhouse tables: %w", err)
+	}
+
 	maxVersion := 0
 	hasPending := false
 
