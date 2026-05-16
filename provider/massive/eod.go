@@ -191,7 +191,11 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 	}
 
 	process := func(ctx context.Context, d time.Time) (int, error) {
-		return streamDayAggsForDate(ctx, s3Client, sub, universe, splits, divs, d, out)
+		if flatFileAvailableForDate(d, time.Now()) {
+			return streamDayAggsForDate(ctx, s3Client, sub, universe, splits, divs, d, out)
+		}
+
+		return streamDailyMarketSummaryForDate(ctx, restClient, limiter, sub, universe, splits, divs, d, out)
 	}
 
 	workers := pickFlatFileWorkers(logger, start, end, "day_aggs")
@@ -248,13 +252,6 @@ func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.S
 		return 0, err
 	}
 
-	eventTime, err := buildMassiveEodEvent(d)
-	if err != nil {
-		return 0, err
-	}
-
-	dateStr := d.Format("2006-01-02")
-
 	// Optional parquet backup of the source file. Backup failures are
 	// logged but do not abort the run - the EOD save path is the
 	// primary contract; the backup is best-effort archival.
@@ -275,6 +272,24 @@ func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.S
 			}
 		}
 	}
+
+	return emitDayAggRowsAsEod(ctx, sub, universe, splits, divs, rows, d, "day_aggs", out)
+}
+
+// emitDayAggRowsAsEod publishes parsed day-aggregate rows as Eod
+// observations. Tickers without a figi in the universe AS OF date d
+// are dropped (and counted in the per-date unknowns log). The
+// `source` label appears in the unknown-ticker summary so operators
+// can tell flat-file and REST runs apart.
+func emitDayAggRowsAsEod(ctx context.Context, sub *library.Subscription, universe *data.AssetHistory, splits, divs corporateActions, rows []aggRow, d time.Time, source string, out chan<- *data.Observation) (int, error) {
+	logger := zerolog.Ctx(ctx)
+
+	eventTime, err := buildMassiveEodEvent(d)
+	if err != nil {
+		return 0, err
+	}
+
+	dateStr := d.Format("2006-01-02")
 
 	n := 0
 	unknown := map[string]int{}
@@ -319,7 +334,7 @@ func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.S
 		}
 	}
 
-	logUnknownTickers(logger, dateStr, "day_aggs", n, unknown)
+	logUnknownTickers(logger, dateStr, source, n, unknown)
 
 	return n, nil
 }
