@@ -22,7 +22,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
@@ -31,6 +34,19 @@ import (
 	"github.com/penny-vault/pvdata/provider"
 	"github.com/rs/zerolog"
 )
+
+// importProgressInterval is the cadence for the aggregate progress
+// log emitted alongside per-file Info logs. Tuned to be infrequent
+// enough for multi-hour backfills without going silent on a slow
+// network or large file.
+const importProgressInterval = 30 * time.Second
+
+// defaultMinuteImportWorkers is the parallel-file-read concurrency
+// for minute-bar imports when the subscription config doesn't
+// override it. 4 saturates a local SSD + local ClickHouse loop on
+// commodity hardware; CH ingest tends to become the bottleneck
+// beyond that.
+const defaultMinuteImportWorkers = 4
 
 // backupFilenameRE matches YYYY-MM-DD.parquet file basenames written by
 // writeFlatFileBackup. The expected layout for a per-day backup is
@@ -109,7 +125,10 @@ func (massive *Massive) ImportFiles(ctx context.Context, sub *library.Subscripti
 		numObs += n
 
 		if err != nil {
+			logger.Error().Err(err).Int("observations", n).Msg("EOD import failed")
+
 			runSummary.Status = data.RunFailed
+
 			return
 		}
 	case "1-Minute Bars":
@@ -117,7 +136,10 @@ func (massive *Massive) ImportFiles(ctx context.Context, sub *library.Subscripti
 		numObs += n
 
 		if err != nil {
+			logger.Error().Err(err).Int("observations", n).Msg("1-minute import failed")
+
 			runSummary.Status = data.RunFailed
+
 			return
 		}
 	default:
@@ -239,6 +261,13 @@ func importEODFiles(ctx context.Context, sub *library.Subscription, universe *da
 
 	total := 0
 
+	progress := newImportProgress("massive EOD import progress", len(files))
+	progressCtx, stopProgress := context.WithCancel(ctx)
+
+	defer stopProgress()
+
+	go progress.runUntil(progressCtx, logger, importProgressInterval)
+
 	for _, file := range files {
 		d, err := parseBackupDate(file)
 		if err != nil {
@@ -267,42 +296,172 @@ func importEODFiles(ctx context.Context, sub *library.Subscription, universe *da
 			return total, err
 		}
 
+		progress.recordFile(n)
 		logger.Info().Str("file", file).Time("date", d).Int("observations", n).Msg("imported day aggs")
 	}
 
 	return total, nil
 }
 
-// importMinuteFiles iterates minute-aggregate parquet files. Minute
-// imports never need corporate actions because IntradayBars carry raw
-// OHLCV; adjustments are applied at query time against the EOD splits
-// table.
+// importMinuteFiles iterates minute-aggregate parquet files in
+// parallel. Minute imports never need corporate actions because
+// IntradayBars carry raw OHLCV; adjustments are applied at query time
+// against the EOD splits table. Worker count is `import_workers` in
+// the subscription config, defaulting to defaultMinuteImportWorkers.
+// Workers share the output channel; ordering is unspecified, which is
+// fine because ClickHouse ReplacingMergeTree dedupes on
+// (composite_figi, event_date) at merge time.
 func importMinuteFiles(ctx context.Context, sub *library.Subscription, universe *data.AssetHistory, files []string, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
-	total := 0
 
-	for _, file := range files {
-		d, err := parseBackupDate(file)
-		if err != nil {
-			return total, fmt.Errorf("%s: %w", file, err)
-		}
-
-		rows, err := parquet.ReadFile[aggRow](file)
-		if err != nil {
-			return total, fmt.Errorf("read %s: %w", file, err)
-		}
-
-		n, err := emitMinuteRows(ctx, sub, universe, d, rows, out)
-		total += n
-
-		if err != nil {
-			return total, err
-		}
-
-		logger.Info().Str("file", file).Time("date", d).Int("observations", n).Msg("imported minute aggs")
+	if len(files) == 0 {
+		return 0, nil
 	}
 
-	return total, nil
+	workers := defaultMinuteImportWorkers
+	if w, err := strconv.Atoi(sub.Config["import_workers"]); err == nil && w > 0 {
+		workers = w
+	}
+
+	if workers > len(files) {
+		workers = len(files)
+	}
+
+	progress := newImportProgress("massive 1-minute import progress", len(files))
+	progressCtx, stopProgress := context.WithCancel(ctx)
+
+	defer stopProgress()
+
+	go progress.runUntil(progressCtx, logger, importProgressInterval)
+
+	logger.Info().Int("workers", workers).Int("files", len(files)).Msg("starting parallel minute-bar import")
+
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+
+	fileCh := make(chan string)
+
+	var (
+		wg       sync.WaitGroup
+		total    atomic.Int64
+		errOnce  sync.Once
+		firstErr error
+	)
+
+	reportErr := func(err error) {
+		errOnce.Do(func() {
+			firstErr = err
+
+			cancelWorkers()
+		})
+	}
+
+	for range workers {
+		wg.Go(func() {
+			for file := range fileCh {
+				if workerCtx.Err() != nil {
+					continue
+				}
+
+				d, err := parseBackupDate(file)
+				if err != nil {
+					reportErr(fmt.Errorf("%s: %w", file, err))
+					continue
+				}
+
+				rows, err := parquet.ReadFile[aggRow](file)
+				if err != nil {
+					reportErr(fmt.Errorf("read %s: %w", file, err))
+					continue
+				}
+
+				n, err := emitMinuteRows(workerCtx, sub, universe, d, rows, out)
+				total.Add(int64(n))
+
+				if err != nil {
+					reportErr(err)
+					continue
+				}
+
+				progress.recordFile(n)
+				logger.Info().Str("file", file).Time("date", d).Int("observations", n).Msg("imported minute aggs")
+			}
+		})
+	}
+
+feed:
+	for _, file := range files {
+		select {
+		case <-workerCtx.Done():
+			break feed
+		case fileCh <- file:
+		}
+	}
+
+	close(fileCh)
+	wg.Wait()
+
+	if firstErr != nil {
+		return int(total.Load()), firstErr
+	}
+
+	return int(total.Load()), nil
+}
+
+// importProgress is a small thread-safe accumulator that emits a
+// rolling summary of file imports at a fixed cadence. Per-file Info
+// logs already fire as each file completes; the periodic summary is
+// what saves you when one file is taking a very long time and you
+// need to know the run is still alive.
+type importProgress struct {
+	msg          string
+	filesTotal   int
+	filesDone    atomic.Int64
+	observations atomic.Int64
+	started      time.Time
+}
+
+func newImportProgress(msg string, filesTotal int) *importProgress {
+	return &importProgress{
+		msg:        msg,
+		filesTotal: filesTotal,
+		started:    time.Now(),
+	}
+}
+
+func (p *importProgress) recordFile(observations int) {
+	p.filesDone.Add(1)
+	p.observations.Add(int64(observations))
+}
+
+// runUntil emits a progress log every interval until ctx is done. It
+// is intended to be invoked in a goroutine alongside the file loop;
+// the caller cancels ctx (typically via defer) to stop the ticker.
+func (p *importProgress) runUntil(ctx context.Context, logger *zerolog.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			obs := p.observations.Load()
+
+			var rate float64
+
+			if elapsed := time.Since(p.started).Seconds(); elapsed > 0 {
+				rate = float64(obs) / elapsed
+			}
+
+			logger.Info().
+				Int64("files_done", p.filesDone.Load()).
+				Int("files_total", p.filesTotal).
+				Int64("observations", obs).
+				Float64("obs_per_sec", rate).
+				Msg(p.msg)
+		}
+	}
 }
 
 // emitEODRows mirrors streamDayAggsForDate's per-row transformation

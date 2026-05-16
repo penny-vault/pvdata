@@ -25,16 +25,18 @@ The subscription must already exist (create with 'pvdata subscribe').
 Supported file formats: .parquet, .csv, .csv.zst, .csv.zip
 
 Massive EOD and 1-Minute Bars subscriptions accept either individual
-daily parquet files or directories. Point the command at a backup root
-(e.g. /backups/massive_eod_3a85a) and every <YYYY>/<YYYY-MM-DD>.parquet
-under it will be discovered; the splits/ and dividends/ subdirectories
-are walked separately as needed for EOD enrichment.
+daily parquet files or directories. Point the command at any root and
+every <YYYY-MM-DD>.parquet file under it (at any depth) is discovered.
+The splits/ and dividends/ subdirectories are skipped during the walk
+and consulted separately when EOD enrichment needs them; for EOD
+imports the splits/dividends files must still sit alongside the year
+directory that contains each daily file.
 
 Examples:
   pvdata import --subscription my-fundamentals sharadar_sf1_20231226.parquet
   pvdata import --subscription abc123 data/*.parquet
   pvdata import --subscription massive-eod /backups/massive_eod_3a85a
-  pvdata import --subscription massive-1m /backups/massive_1m_3a85a/2024`,
+  pvdata import --subscription massive-1m /backups/massive_1m_3a85a`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
