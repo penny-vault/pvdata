@@ -287,6 +287,23 @@ const observationBatchSize = 500
 // bumping it 50x makes minute-bar imports throughput-bound instead.
 const intradayBatchSize = 25000
 
+// defaultIntradayWriters is the number of ClickHouse writer goroutines
+// SaveObservations spawns to drain the intraday flush queue. Each
+// holds one in-flight INSERT, so total concurrency against ClickHouse
+// is N.
+// Multiple writers are needed because the consumer goroutine fans in
+// rows from many download workers, but a single synchronous Send()
+// stalls the entire pipeline for the duration of one network round-
+// trip — at 24-year minute-bar scale this is the bottleneck.
+const defaultIntradayWriters = 4
+
+// defaultIntradayQueueDepth bounds how many full batches may sit
+// queued for the writer pool. With writers=4 and depth=8 the steady-
+// state in-flight footprint is roughly (writers + depth) * batchSize
+// rows ≈ 300k IntradayBar pointers; producers back-pressure naturally
+// once the queue fills.
+const defaultIntradayQueueDepth = 8
+
 type metricBuffer struct {
 	tbl  string
 	rows []*data.Metric
@@ -300,6 +317,40 @@ type fundamentalBuffer struct {
 type intradayBuffer struct {
 	tbl  string
 	rows []*data.IntradayBar
+}
+
+// intradayFlushJob carries a sealed batch from the consumer goroutine
+// to a writer in the pool. The slice is owned by the writer once the
+// job is sent; the consumer must allocate a fresh slice for the next
+// batch rather than reusing capacity, otherwise the writer's Append
+// loop races the consumer's appends.
+type intradayFlushJob struct {
+	tbl  string
+	rows []*data.IntradayBar
+}
+
+// intradayWriterCount returns the configured number of ClickHouse
+// writer goroutines, falling back to defaultIntradayWriters when the
+// `clickhouse.intraday_writers` viper key is unset or non-positive.
+func intradayWriterCount() int {
+	n := viper.GetInt("clickhouse.intraday_writers")
+	if n <= 0 {
+		return defaultIntradayWriters
+	}
+
+	return n
+}
+
+// intradayQueueDepth returns the configured intraday flush-queue
+// buffer size, falling back to defaultIntradayQueueDepth when
+// `clickhouse.intraday_queue_depth` is unset or non-positive.
+func intradayQueueDepth() int {
+	n := viper.GetInt("clickhouse.intraday_queue_depth")
+	if n <= 0 {
+		return defaultIntradayQueueDepth
+	}
+
+	return n
 }
 
 // SaveObservations continuously reads from the input queue
@@ -339,6 +390,39 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 		log.Warn().Msg("ClickHouse backend disabled; intraday observations will be dropped (parquet backups still run)")
 	}
 
+	// Intraday writer pool: N goroutines drain a bounded queue of
+	// sealed batches. Decouples the consumer goroutine from each
+	// ClickHouse network round-trip, which is the bottleneck on large
+	// minute-bar backfills. Skipped entirely when ClickHouse is
+	// disabled so we do not leak idle goroutines.
+	var (
+		intradayJobs chan intradayFlushJob
+		intradayWg   sync.WaitGroup
+	)
+
+	if !chDisabled {
+		intradayJobs = make(chan intradayFlushJob, intradayQueueDepth())
+
+		writers := intradayWriterCount()
+		log.Info().Int("writers", writers).Int("queue_depth", cap(intradayJobs)).Int("batch_size", intradayBatchSize).Msg("starting intraday clickhouse writer pool")
+
+		for range writers {
+			intradayWg.Go(func() {
+				for job := range intradayJobs {
+					chConn, chErr := myLibrary.ClickHouse(ctx)
+					if chErr != nil {
+						log.Error().Err(chErr).Msg("cannot acquire clickhouse connection for intraday flush")
+						continue
+					}
+
+					if err := data.SaveIntradayBarsBatch(ctx, job.tbl, chConn, job.rows); err != nil {
+						log.Error().Err(err).Int("rows", len(job.rows)).Msg("cannot save intraday batch to clickhouse")
+					}
+				}
+			})
+		}
+	}
+
 	flushMetrics := func(b *metricBuffer) {
 		if len(b.rows) == 0 {
 			return
@@ -363,25 +447,25 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 		b.rows = b.rows[:0]
 	}
 
+	// flushIntraday hands the sealed slice to the writer pool and
+	// installs a fresh backing array on the buffer. Reusing capacity
+	// (b.rows[:0]) is unsafe here: the writer would race the consumer
+	// once the next row arrives.
 	flushIntraday := func(b *intradayBuffer) {
 		if len(b.rows) == 0 {
 			return
 		}
 
-		chConn, chErr := myLibrary.ClickHouse(ctx)
-		if chErr != nil {
-			log.Error().Err(chErr).Msg("cannot acquire clickhouse connection for intraday flush")
-
+		if intradayJobs == nil {
+			// ClickHouse disabled; drop the batch quietly. The
+			// startup log already warned the operator.
 			b.rows = b.rows[:0]
-
 			return
 		}
 
-		if err := data.SaveIntradayBarsBatch(ctx, b.tbl, chConn, b.rows); err != nil {
-			log.Error().Err(err).Msg("cannot save intraday batch to clickhouse")
-		}
+		intradayJobs <- intradayFlushJob{tbl: b.tbl, rows: b.rows}
 
-		b.rows = b.rows[:0]
+		b.rows = make([]*data.IntradayBar, 0, intradayBatchSize)
 	}
 
 	defer func() {
@@ -395,6 +479,11 @@ func (myLibrary *Library) SaveObservations(queue <-chan *data.Observation, wg *s
 
 		for _, b := range intradayBufs {
 			flushIntraday(b)
+		}
+
+		if intradayJobs != nil {
+			close(intradayJobs)
+			intradayWg.Wait()
 		}
 	}()
 
