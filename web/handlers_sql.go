@@ -18,19 +18,27 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/parquet-go/parquet-go"
 	"github.com/rs/zerolog/log"
+
+	"github.com/penny-vault/pvdata/library"
 )
 
-// SQLRequest is the JSON body for SQL execution endpoints.
+// SQLRequest is the JSON body for SQL execution endpoints. Backend
+// selects which database the query targets; empty defaults to postgres
+// for backward compatibility.
 type SQLRequest struct {
-	Query string `json:"query"`
+	Query   string `json:"query"`
+	Backend string `json:"backend"`
 }
 
 type queryResult struct {
@@ -40,7 +48,12 @@ type queryResult struct {
 	Truncated bool     `json:"truncated"`
 }
 
-const maxQueryRows = 10000
+const (
+	maxQueryRows = 10000
+
+	backendPostgres   = "postgres"
+	backendClickHouse = "clickhouse"
+)
 
 // ExecuteSQL runs a user-provided SQL query in a read-only transaction.
 func ExecuteSQL(c *fiber.Ctx) error {
@@ -61,7 +74,7 @@ func ExecuteSQL(c *fiber.Ctx) error {
 
 	myLibrary := getLibrary(c)
 
-	result, err := executeReadOnlyQuery(c.UserContext(), myLibrary.Pool, req.Query)
+	result, err := dispatchQuery(c.UserContext(), myLibrary, req)
 	if err != nil {
 		log.Error().Err(err).Msg("SQL query execution failed")
 
@@ -94,7 +107,7 @@ func ExportSQL(c *fiber.Ctx) error {
 	format := c.Query("format", "csv")
 	myLibrary := getLibrary(c)
 
-	result, err := executeReadOnlyQuery(c.UserContext(), myLibrary.Pool, req.Query)
+	result, err := dispatchQuery(c.UserContext(), myLibrary, req)
 	if err != nil {
 		log.Error().Err(err).Msg("SQL export query execution failed")
 
@@ -197,6 +210,87 @@ func exportParquet(c *fiber.Ctx, result *queryResult) error {
 	c.Set("Content-Disposition", "attachment; filename=export.parquet")
 
 	return c.Send(buf.Bytes())
+}
+
+// dispatchQuery routes a SQLRequest to the configured backend.
+func dispatchQuery(ctx context.Context, myLibrary *library.Library, req SQLRequest) (*queryResult, error) {
+	backend := req.Backend
+	if backend == "" {
+		backend = backendPostgres
+	}
+
+	switch backend {
+	case backendPostgres:
+		return executeReadOnlyQuery(ctx, myLibrary.Pool, req.Query)
+	case backendClickHouse:
+		conn, err := myLibrary.ClickHouse(ctx)
+		if err != nil {
+			if errors.Is(err, library.ErrClickHouseDisabled) {
+				return nil, fmt.Errorf("clickhouse backend is disabled")
+			}
+
+			return nil, fmt.Errorf("clickhouse unavailable: %w", err)
+		}
+
+		return executeClickHouseQuery(ctx, conn, req.Query)
+	default:
+		return nil, fmt.Errorf("unknown backend %q", req.Backend)
+	}
+}
+
+// executeClickHouseQuery runs a query against ClickHouse with a 30-second
+// timeout. Scan destinations are allocated from each column's ScanType
+// so we can return typed values without knowing the schema up front.
+func executeClickHouseQuery(ctx context.Context, conn chdriver.Conn, query string) (*queryResult, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	rows, err := conn.Query(queryCtx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query execution failed: %w", err)
+	}
+	defer rows.Close()
+
+	columns := rows.Columns()
+	columnTypes := rows.ColumnTypes()
+
+	data := make([][]any, 0)
+	truncated := false
+
+	for rows.Next() {
+		if len(data) >= maxQueryRows {
+			truncated = true
+
+			break
+		}
+
+		dest := make([]any, len(columnTypes))
+		for i, ct := range columnTypes {
+			dest[i] = reflect.New(ct.ScanType()).Interface()
+		}
+
+		if err := rows.Scan(dest...); err != nil {
+			return nil, fmt.Errorf("could not scan row: %w", err)
+		}
+
+		row := make([]any, len(dest))
+		for i, ptr := range dest {
+			row[i] = reflect.ValueOf(ptr).Elem().Interface()
+		}
+
+		data = append(data, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error: %w", err)
+	}
+
+	return &queryResult{
+		Columns:   columns,
+		Data:      data,
+		Count:     len(data),
+		Truncated: truncated,
+	}, nil
 }
 
 // executeReadOnlyQuery executes a SQL query inside a read-only transaction

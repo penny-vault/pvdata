@@ -136,18 +136,24 @@ export async function getData(
 
 // ---------- SQL ----------
 
-export async function executeSQL(sql: string) {
+export type SqlBackend = 'postgres' | 'clickhouse'
+
+export async function executeSQL(sql: string, backend: SqlBackend = 'postgres') {
   const res = await authFetch('/sql', {
     method: 'POST',
-    body: JSON.stringify({ query: sql }),
+    body: JSON.stringify({ query: sql, backend }),
   })
   return handleResponse<any>(res)
 }
 
-export async function exportSQL(sql: string, format: 'csv' | 'parquet' = 'csv') {
+export async function exportSQL(
+  sql: string,
+  format: 'csv' | 'parquet' = 'csv',
+  backend: SqlBackend = 'postgres',
+) {
   const res = await authFetch(`/sql/export?format=${format}`, {
     method: 'POST',
-    body: JSON.stringify({ query: sql }),
+    body: JSON.stringify({ query: sql, backend }),
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }))

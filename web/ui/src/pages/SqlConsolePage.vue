@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, shallowRef } from 'vue'
+import { ref, computed, onMounted, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { executeSQL, exportSQL, getPublications } from '@/lib/api'
+import { executeSQL, exportSQL, getPublications, type SqlBackend } from '@/lib/api'
 import { EditorView, basicSetup } from 'codemirror'
 import { EditorState } from '@codemirror/state'
 import { PostgreSQL } from '@codemirror/lang-sql'
@@ -11,6 +11,7 @@ import Button from 'primevue/button'
 import Toolbar from 'primevue/toolbar'
 import Message from 'primevue/message'
 import Card from 'primevue/card'
+import Select from 'primevue/select'
 
 const route = useRoute()
 const editorContainer = ref<HTMLElement | null>(null)
@@ -25,6 +26,16 @@ const showTemplates = ref(false)
 const publications = ref<any[]>([])
 const history = ref<string[]>([])
 const HISTORY_KEY = 'pvdata-sql-history'
+const BACKEND_KEY = 'pvdata-sql-backend'
+
+const backendOptions = [
+  { label: 'Postgres', value: 'postgres' as SqlBackend },
+  { label: 'ClickHouse', value: 'clickhouse' as SqlBackend },
+]
+const backend = ref<SqlBackend>('postgres')
+watch(backend, (v) => {
+  try { localStorage.setItem(BACKEND_KEY, v) } catch {}
+})
 
 function loadHistory() {
   try { const s = localStorage.getItem(HISTORY_KEY); if (s) history.value = JSON.parse(s) } catch { history.value = [] }
@@ -52,7 +63,7 @@ async function onExecute() {
   executing.value = true; error.value = ''; columns.value = []; rows.value = []; rowCount.value = 0
   try {
     saveHistory(query)
-    const result = await executeSQL(query)
+    const result = await executeSQL(query, backend.value)
     columns.value = result.columns || []; rows.value = result.data || []; rowCount.value = result.count ?? rows.value.length
   } catch (e: any) { error.value = e.message || 'Query execution failed' }
   finally { executing.value = false }
@@ -60,7 +71,7 @@ async function onExecute() {
 
 async function onExport(format: 'csv' | 'parquet') {
   const query = getEditorContent().trim(); if (!query) return
-  try { await exportSQL(query, format) } catch (e: any) { error.value = e.message || 'Export failed' }
+  try { await exportSQL(query, format, backend.value) } catch (e: any) { error.value = e.message || 'Export failed' }
 }
 
 function formatCell(value: any): string {
@@ -89,7 +100,18 @@ const gridRows = computed(() =>
 
 onMounted(() => {
   loadHistory()
-  const initialQuery = (route.query.q as string) || "SELECT ticker, event_date, open, high, low, close, volume\nFROM eod\nWHERE event_date >= now() - interval '7 days'\nORDER BY event_date DESC, ticker\nLIMIT 100;"
+  try {
+    const saved = localStorage.getItem(BACKEND_KEY)
+    if (saved === 'postgres' || saved === 'clickhouse') backend.value = saved
+  } catch {}
+  const queryParamBackend = route.query.backend as string | undefined
+  if (queryParamBackend === 'postgres' || queryParamBackend === 'clickhouse') {
+    backend.value = queryParamBackend
+  }
+  const defaultQuery = backend.value === 'clickhouse'
+    ? "SELECT ticker, event_date, open, high, low, close, volume\nFROM intraday\nWHERE event_date >= now() - INTERVAL 1 DAY\nORDER BY event_date DESC, ticker\nLIMIT 100;"
+    : "SELECT ticker, event_date, open, high, low, close, volume\nFROM eod\nWHERE event_date >= now() - interval '7 days'\nORDER BY event_date DESC, ticker\nLIMIT 100;"
+  const initialQuery = (route.query.q as string) || defaultQuery
   const startState = EditorState.create({
     doc: initialQuery,
     extensions: [
@@ -115,6 +137,15 @@ onMounted(() => {
           <Button label="Execute" icon="pi pi-play" :loading="executing" @click="onExecute" />
           <Button label="Export CSV" icon="pi pi-download" text :disabled="rows.length === 0" @click="onExport('csv')" />
           <Button label="Export Parquet" icon="pi pi-download" text :disabled="rows.length === 0" @click="onExport('parquet')" />
+          <Select
+            v-model="backend"
+            :options="backendOptions"
+            option-label="label"
+            option-value="value"
+            size="small"
+            style="width: 160px"
+            aria-label="Query backend"
+          />
         </div>
       </template>
       <template #end>
