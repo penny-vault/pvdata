@@ -188,9 +188,12 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 
 	defer conn.Release()
 
-	assets, err := data.ActiveAssets(ctx, conn)
+	// FIGI resolution reads the unified `assets` view so ticker reuse
+	// across listings resolves per quote date. AllAssets (not
+	// ActiveAssets) is required so since-delisted rows participate.
+	assets, err := data.AllAssets(ctx, conn)
 	if err != nil {
-		logger.Error().Err(err).Msg("could not load active assets")
+		logger.Error().Err(err).Msg("could not load assets")
 
 		runSummary.Status = data.RunFailed
 
@@ -199,63 +202,48 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 
 	log.Debug().Int("NumAssets", len(assets)).Msg("downloading EOD quotes from Tiingo")
 
-	if assetTypeFilter := parseAssetTypeFilter(subscription.Config["assetTypes"]); len(assetTypeFilter) > 0 {
-		filtered := make([]*data.Asset, 0, len(assets))
+	assetTypeFilter := parseAssetTypeFilter(subscription.Config["assetTypes"])
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
 
+	filtered := filterTiingoAssets(assets, assetTypeFilter, tickerFilter, figiFilter)
+
+	if (tickerFilter != "" || figiFilter != "") && len(filtered) == 0 {
+		candidates := make([]string, 0, len(assets))
 		for _, asset := range assets {
-			if _, ok := assetTypeFilter[asset.AssetType]; ok {
-				filtered = append(filtered, asset)
+			if tickerFilter != "" {
+				candidates = append(candidates, asset.Ticker)
+			} else if asset.CompositeFigi != "" {
+				candidates = append(candidates, asset.CompositeFigi)
 			}
 		}
 
-		log.Info().Int("before", len(assets)).Int("after", len(filtered)).Strs("asset_types", assetTypeFilterKeys(assetTypeFilter)).Msg("applied asset type filter")
+		input := tickerFilter
+		if input == "" {
+			input = figiFilter
+		}
 
-		assets = filtered
+		suggestions := provider.SuggestMatch(input, candidates)
+		if len(suggestions) > 0 {
+			log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Tiingo universe; did you mean one of these?")
+		} else {
+			log.Error().Str("input", input).Msg("security not found in Tiingo universe")
+		}
+
+		runSummary.Status = data.RunFailed
+
+		return
 	}
 
-	// Apply ticker/FIGI filter if set
-	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	history := data.NewAssetHistory(filtered)
+
 	if tickerFilter != "" || figiFilter != "" {
-		var filtered []*data.Asset
+		log.Info().Int("filtered_tickers", history.TickerCount()).Msg("applied security filter")
+	}
 
-		for _, asset := range assets {
-			if tickerFilter != "" && strings.EqualFold(asset.Ticker, tickerFilter) {
-				filtered = append(filtered, asset)
-			} else if figiFilter != "" && asset.CompositeFigi == figiFilter {
-				filtered = append(filtered, asset)
-			}
-		}
-
-		if len(filtered) == 0 {
-			candidates := make([]string, 0, len(assets))
-			for _, asset := range assets {
-				if tickerFilter != "" {
-					candidates = append(candidates, asset.Ticker)
-				} else {
-					candidates = append(candidates, asset.CompositeFigi)
-				}
-			}
-
-			input := tickerFilter
-			if input == "" {
-				input = figiFilter
-			}
-
-			suggestions := provider.SuggestMatch(input, candidates)
-			if len(suggestions) > 0 {
-				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Tiingo universe; did you mean one of these?")
-			} else {
-				log.Error().Str("input", input).Msg("security not found in Tiingo universe")
-			}
-
-			runSummary.Status = data.RunFailed
-
-			return
-		}
-
-		assets = filtered
-
-		log.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
+	tickers := history.Tickers()
+	if len(tickers) == 0 {
+		logger.Warn().Msg("no tickers in scope for tiingo EOD fetch")
+		return
 	}
 
 	lookback := provider.LookbackFromContext(ctx, 14*24*time.Hour)
@@ -267,18 +255,18 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 		workerCount = w
 	}
 
-	if workerCount > len(assets) {
-		workerCount = len(assets)
+	if workerCount > len(tickers) {
+		workerCount = len(tickers)
 	}
 
-	logger.Info().Int("workers", workerCount).Int("assets", len(assets)).Msg("starting tiingo EOD worker pool")
+	logger.Info().Int("workers", workerCount).Int("tickers", len(tickers)).Msg("starting tiingo EOD worker pool")
 
 	// Derive a cancellable context so any worker that exhausts the daily
 	// quota can fan out abort to its peers via cancelWorkers().
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
 
-	jobCh := make(chan *data.Asset)
+	jobCh := make(chan string)
 
 	var (
 		wg             sync.WaitGroup
@@ -292,13 +280,13 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 		go func() {
 			defer wg.Done()
 
-			for asset := range jobCh {
+			for pvTicker := range jobCh {
 				if err := limiter.Wait(workerCtx); err != nil {
 					return
 				}
 
 				// reformat ticker for tiingo
-				ticker := strings.ReplaceAll(asset.Ticker, "/", "-")
+				ticker := strings.ReplaceAll(pvTicker, "/", "-")
 				url := fmt.Sprintf("https://api.tiingo.com/tiingo/daily/%s/prices", ticker)
 
 				respContent := make([]*tiingoEod, 0)
@@ -342,10 +330,15 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 					// set tiingo date to correct time zone and market close
 					quoteDate = time.Date(quoteDate.Year(), quoteDate.Month(), quoteDate.Day(), 16, 0, 0, 0, nyc)
 
+					figiVal, ok := history.FIGIAt(pvTicker, quoteDate)
+					if !ok {
+						continue
+					}
+
 					eodQuote := &data.Eod{
 						Date:          quoteDate,
-						Ticker:        asset.Ticker,
-						CompositeFigi: asset.CompositeFigi,
+						Ticker:        pvTicker,
+						CompositeFigi: figiVal,
 						Open:          quote.Open,
 						High:          quote.High,
 						Low:           quote.Low,
@@ -374,11 +367,11 @@ func downloadTiingoEODQuotes(ctx context.Context, subscription *library.Subscrip
 	// Feed the job channel; abort feeding if the worker context is cancelled
 	// (e.g. daily quota exhausted) so workers can drain and exit promptly.
 feed:
-	for _, asset := range assets {
+	for _, ticker := range tickers {
 		select {
 		case <-workerCtx.Done():
 			break feed
-		case jobCh <- asset:
+		case jobCh <- ticker:
 		}
 	}
 
@@ -658,6 +651,35 @@ func tiingoIgnoreTicker(ticker string) bool {
 	ignore = ignore || matcher.Match([]byte(ticker))
 
 	return ignore
+}
+
+// filterTiingoAssets narrows the unified asset slice to rows that
+// match the run's asset-type and --ticker / --figi filters. Filtering
+// at the asset level (not after building AssetHistory) preserves the
+// ticker-keyed invariant: every window for a ticker shares the same
+// scope.
+func filterTiingoAssets(assets []*data.Asset, assetTypeFilter map[data.AssetType]struct{}, tickerFilter, figiFilter string) []*data.Asset {
+	out := make([]*data.Asset, 0, len(assets))
+
+	for _, a := range assets {
+		if len(assetTypeFilter) > 0 {
+			if _, ok := assetTypeFilter[a.AssetType]; !ok {
+				continue
+			}
+		}
+
+		if tickerFilter != "" && !strings.EqualFold(a.Ticker, tickerFilter) {
+			continue
+		}
+
+		if figiFilter != "" && a.CompositeFigi != figiFilter {
+			continue
+		}
+
+		out = append(out, a)
+	}
+
+	return out
 }
 
 func parseAssetTypeFilter(raw string) map[data.AssetType]struct{} {

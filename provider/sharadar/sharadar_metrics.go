@@ -86,65 +86,47 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 
 	defer conn.Release()
 
-	assets, err := data.ActiveAssets(ctx, conn)
+	// FIGI resolution reads the unified `assets` view so ticker reuse
+	// across listings resolves per metric event date. AllAssets (not
+	// ActiveAssets) is required so since-delisted rows participate.
+	assets, err := data.AllAssets(ctx, conn)
 	if err != nil {
-		logger.Error().Err(err).Msg("could not load active assets")
+		logger.Error().Err(err).Msg("could not load assets")
 
 		runSummary.Status = data.RunFailed
 
 		return
 	}
 
-	figiMap := make(map[string]string, len(assets))
-	for _, asset := range assets {
-		figiMap[asset.Ticker] = asset.CompositeFigi
-	}
-
 	// Apply ticker/FIGI filter if set
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+
+	filtered := filterSharadarAssets(assets, tickerFilter, figiFilter)
+
+	if (tickerFilter != "" || figiFilter != "") && len(filtered) == 0 {
+		candidates := candidateLabels(assets, tickerFilter)
+
+		input := tickerFilter
+		if input == "" {
+			input = figiFilter
+		}
+
+		suggestions := provider.SuggestMatch(input, candidates)
+		if len(suggestions) > 0 {
+			log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Sharadar universe; did you mean one of these?")
+		} else {
+			log.Error().Str("input", input).Msg("security not found in Sharadar universe")
+		}
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	history := data.NewAssetHistory(filtered)
+
 	if tickerFilter != "" || figiFilter != "" {
-		filtered := make(map[string]string)
-
-		for ticker, figi := range figiMap {
-			if tickerFilter != "" && strings.EqualFold(ticker, tickerFilter) {
-				filtered[ticker] = figi
-			} else if figiFilter != "" && figi == figiFilter {
-				filtered[ticker] = figi
-			}
-		}
-
-		if len(filtered) == 0 {
-			candidates := make([]string, 0, len(figiMap))
-			if tickerFilter != "" {
-				for ticker := range figiMap {
-					candidates = append(candidates, ticker)
-				}
-			} else {
-				for _, figi := range figiMap {
-					candidates = append(candidates, figi)
-				}
-			}
-
-			input := tickerFilter
-			if input == "" {
-				input = figiFilter
-			}
-
-			suggestions := provider.SuggestMatch(input, candidates)
-			if len(suggestions) > 0 {
-				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Sharadar universe; did you mean one of these?")
-			} else {
-				log.Error().Str("input", input).Msg("security not found in Sharadar universe")
-			}
-
-			runSummary.Status = data.RunFailed
-
-			return
-		}
-
-		figiMap = filtered
-
-		log.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
+		log.Info().Int("filtered_tickers", history.TickerCount()).Msg("applied security filter")
 	}
 
 	// fetch current SP500 constituents and emit index snapshots
@@ -185,7 +167,7 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 
 		var n int
 
-		cursor, n = downloadSharadarMetrics(ctx, subscription, client, limiter, cursor, out, forDate, figiMap)
+		cursor, n = downloadSharadarMetrics(ctx, subscription, client, limiter, cursor, out, forDate, history)
 		numObs += n
 
 		if cursor == "" {
@@ -194,7 +176,7 @@ func downloadAllSharadarMetrics(ctx context.Context, subscription *library.Subsc
 	}
 }
 
-func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, cursor string, out chan<- *data.Observation, forDate string, figiMap map[string]string) (string, int) {
+func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, cursor string, out chan<- *data.Observation, forDate string, history *data.AssetHistory) (string, int) {
 	logger := zerolog.Ctx(ctx)
 
 	if err := limiter.Wait(ctx); err != nil {
@@ -249,7 +231,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 		}
 
 		// convert to pv metric type
-		pvMetric := metric.PvMetric(figiMap, nyc)
+		pvMetric := metric.PvMetric(history, nyc)
 
 		out <- &data.Observation{
 			Metric:           pvMetric,
@@ -264,7 +246,7 @@ func downloadSharadarMetrics(ctx context.Context, subscription *library.Subscrip
 	return gjson.Get(responseBody, "meta.next_cursor_id").String(), count
 }
 
-func (metric *sharadarMetric) PvMetric(figiMap map[string]string, loc *time.Location) *data.Metric {
+func (metric *sharadarMetric) PvMetric(history *data.AssetHistory, loc *time.Location) *data.Metric {
 	pvMetric := &data.Metric{
 		Ticker:     strings.ReplaceAll(metric.Ticker, ".", "/"),
 		MarketCap:  int64(metric.MarketCap * 1e6),
@@ -276,14 +258,14 @@ func (metric *sharadarMetric) PvMetric(figiMap map[string]string, loc *time.Loca
 		EVtoEBITDA: metric.EVtoEBITDA,
 	}
 
-	if figi, ok := figiMap[pvMetric.Ticker]; ok {
-		pvMetric.CompositeFigi = figi
-	}
-
 	if date, err := time.Parse("2006-01-02", metric.Date); err == nil {
 		pvMetric.EventDate = time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 	} else {
 		log.Error().Err(err).Msg("error parsing metric date")
+	}
+
+	if figi, ok := history.FIGIAt(pvMetric.Ticker, pvMetric.EventDate); ok {
+		pvMetric.CompositeFigi = figi
 	}
 
 	return pvMetric

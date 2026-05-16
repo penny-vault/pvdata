@@ -113,9 +113,9 @@ func downloadMassiveMinute(ctx context.Context, sub *library.Subscription, out c
 	}
 
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
-	universe := buildHistoricalUniverse(dbAssets, tickerFilter, figiFilter)
+	universe := data.NewAssetHistory(applySecurityFilter(dbAssets, tickerFilter, figiFilter))
 
-	if universe.tickerCount() == 0 {
+	if universe.TickerCount() == 0 {
 		logger.Warn().Msg("no assets in scope for massive 1-minute; skipping run")
 		return
 	}
@@ -123,7 +123,7 @@ func downloadMassiveMinute(ctx context.Context, sub *library.Subscription, out c
 	logger.Info().
 		Time("start", start).
 		Time("end", end).
-		Int("scope_tickers", universe.tickerCount()).
+		Int("scope_tickers", universe.TickerCount()).
 		Msg("massive flat-files 1-minute loader starting")
 
 	process := func(ctx context.Context, d time.Time) (int, error) {
@@ -147,7 +147,7 @@ func downloadMassiveMinute(ctx context.Context, sub *library.Subscription, out c
 // file not yet published) is treated as an empty result rather than
 // an error. Transient transport / mid-stream failures are retried
 // with exponential backoff before giving up on the date.
-func streamMinuteAggsForDate(ctx context.Context, client *s3.Client, sub *library.Subscription, universe *historicalAssetUniverse, d time.Time, out chan<- *data.Observation) (int, error) {
+func streamMinuteAggsForDate(ctx context.Context, client *s3.Client, sub *library.Subscription, universe *data.AssetHistory, d time.Time, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 	key := minuteAggsKey(d)
 
@@ -187,7 +187,7 @@ func streamMinuteAggsForDate(ctx context.Context, client *s3.Client, sub *librar
 	for _, row := range rows {
 		ticker := massiveTicker2PvTicker(row.Ticker)
 
-		figi, ok := universe.figiAt(ticker, d)
+		figi, ok := universe.FIGIAt(ticker, d)
 		if !ok {
 			unknown[ticker]++
 			continue

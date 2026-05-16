@@ -23,19 +23,19 @@ import (
 )
 
 var _ = Describe("parseIntradayResponse", func() {
-	It("decodes UTC timestamps and OHLCV fields", func() {
+	It("decodes UTC timestamps and OHLCV fields without a FIGI (caller resolves)", func() {
 		body := []byte(`[
 			{"timestamp":1714465800,"gmtoffset":0,"datetime":"2024-04-30 09:30:00","open":170.0,"high":170.5,"low":169.9,"close":170.2,"volume":12345},
 			{"timestamp":1714465860,"gmtoffset":0,"datetime":"2024-04-30 09:31:00","open":170.2,"high":170.4,"low":170.1,"close":170.3,"volume":2345}
 		]`)
 
-		bars, err := parseIntradayResponse(body, "AAPL", "BBG000B9XRY4")
+		bars, err := parseIntradayResponse(body, "AAPL")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(bars).To(HaveLen(2))
 
 		Expect(bars[0].Date).To(Equal(time.Unix(1714465800, 0).UTC()))
 		Expect(bars[0].Ticker).To(Equal("AAPL"))
-		Expect(bars[0].CompositeFigi).To(Equal("BBG000B9XRY4"))
+		Expect(bars[0].CompositeFigi).To(BeEmpty())
 		Expect(bars[0].Open).To(Equal(170.0))
 		Expect(bars[0].Volume).To(Equal(12345.0))
 	})
@@ -43,7 +43,7 @@ var _ = Describe("parseIntradayResponse", func() {
 	It("skips rows with a zero timestamp", func() {
 		body := []byte(`[{"timestamp":0,"open":1,"high":1,"low":1,"close":1,"volume":1}]`)
 
-		bars, err := parseIntradayResponse(body, "AAPL", "BBG000B9XRY4")
+		bars, err := parseIntradayResponse(body, "AAPL")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(bars).To(BeEmpty())
 	})
@@ -118,17 +118,13 @@ var _ = Describe("assetsActiveInWindow", func() {
 	})
 })
 
-var _ = Describe("buildIntradayJobs", func() {
-	It("emits one job per asset using the default exchange", func() {
+var _ = Describe("filterIntradayAssets", func() {
+	It("keeps every asset when no filters are set", func() {
 		assets := []*data.Asset{
 			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock, Active: true},
 			{Ticker: "MSFT", CompositeFigi: "BBG000BPH459", AssetType: data.CommonStock, Active: true},
 		}
-		jobs := buildIntradayJobs(assets, "US", nil, "", "")
-		Expect(jobs).To(HaveLen(2))
-		Expect(jobs[0].Ticker).To(Equal("AAPL"))
-		Expect(jobs[0].Exchange).To(Equal("US"))
-		Expect(jobs[0].CompositeFigi).To(Equal("BBG000B9XRY4"))
+		Expect(filterIntradayAssets(assets, nil, "", "")).To(HaveLen(2))
 	})
 
 	It("excludes mutual funds because they have no intraday data", func() {
@@ -136,18 +132,9 @@ var _ = Describe("buildIntradayJobs", func() {
 			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
 			{Ticker: "VFINX", CompositeFigi: "BBG000B9XRY5", AssetType: data.MutualFund},
 		}
-		jobs := buildIntradayJobs(assets, "US", nil, "", "")
-		Expect(jobs).To(HaveLen(1))
-		Expect(jobs[0].Ticker).To(Equal("AAPL"))
-	})
-
-	It("skips assets with no FIGI", func() {
-		assets := []*data.Asset{
-			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
-			{Ticker: "ORPHAN", CompositeFigi: "", AssetType: data.CommonStock},
-		}
-		jobs := buildIntradayJobs(assets, "US", nil, "", "")
-		Expect(jobs).To(HaveLen(1))
+		got := filterIntradayAssets(assets, nil, "", "")
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Ticker).To(Equal("AAPL"))
 	})
 
 	It("honors the assetTypes filter", func() {
@@ -156,28 +143,28 @@ var _ = Describe("buildIntradayJobs", func() {
 			{Ticker: "SPY", CompositeFigi: "BBG000BDTBL9", AssetType: data.ETF},
 		}
 		filter := map[data.AssetType]struct{}{data.ETF: {}}
-		jobs := buildIntradayJobs(assets, "US", filter, "", "")
-		Expect(jobs).To(HaveLen(1))
-		Expect(jobs[0].Ticker).To(Equal("SPY"))
+		got := filterIntradayAssets(assets, filter, "", "")
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Ticker).To(Equal("SPY"))
 	})
 
-	It("honors a tickerFilter", func() {
+	It("honors a tickerFilter (case-insensitive)", func() {
 		assets := []*data.Asset{
 			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
 			{Ticker: "MSFT", CompositeFigi: "BBG000BPH459", AssetType: data.CommonStock},
 		}
-		jobs := buildIntradayJobs(assets, "US", nil, "msft", "")
-		Expect(jobs).To(HaveLen(1))
-		Expect(jobs[0].Ticker).To(Equal("MSFT"))
+		got := filterIntradayAssets(assets, nil, "msft", "")
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Ticker).To(Equal("MSFT"))
 	})
 
-	It("honors a figiFilter", func() {
+	It("honors a figiFilter (exact match on CompositeFigi)", func() {
 		assets := []*data.Asset{
 			{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", AssetType: data.CommonStock},
 			{Ticker: "MSFT", CompositeFigi: "BBG000BPH459", AssetType: data.CommonStock},
 		}
-		jobs := buildIntradayJobs(assets, "US", nil, "", "BBG000BPH459")
-		Expect(jobs).To(HaveLen(1))
-		Expect(jobs[0].Ticker).To(Equal("MSFT"))
+		got := filterIntradayAssets(assets, nil, "", "BBG000BPH459")
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Ticker).To(Equal("MSFT"))
 	})
 })

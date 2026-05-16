@@ -117,7 +117,7 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 	// like EOD that don't even own AssetKey themselves).
 	//
 	// AllAssets (not ActiveAssets) is used so historical bars for
-	// since-delisted tickers still resolve. The historicalAssetUniverse
+	// since-delisted tickers still resolve. The AssetHistory index
 	// gates each row against the asset's listed/delisted dates, so
 	// today's `active=false` does not drop yesterday's data.
 	dbAssets, err := data.AllAssets(ctx, conn)
@@ -133,9 +133,9 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 	}
 
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
-	universe := buildHistoricalUniverse(dbAssets, tickerFilter, figiFilter)
+	universe := data.NewAssetHistory(applySecurityFilter(dbAssets, tickerFilter, figiFilter))
 
-	if universe.tickerCount() == 0 {
+	if universe.TickerCount() == 0 {
 		logger.Warn().Msg("no assets in scope for massive EOD; skipping run")
 		return
 	}
@@ -143,7 +143,7 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 	logger.Info().
 		Time("start", start).
 		Time("end", end).
-		Int("scope_tickers", universe.tickerCount()).
+		Int("scope_tickers", universe.TickerCount()).
 		Msg("massive flat-files EOD loader starting")
 
 	logger.Info().Time("from", start).Time("to", end).Msg("fetching splits from massive REST")
@@ -234,7 +234,7 @@ func isWeekend(d time.Time) bool {
 // not yet published) is treated as an empty result rather than an
 // error. Transient transport / mid-stream failures are retried with
 // exponential backoff before giving up on the date.
-func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.Subscription, universe *historicalAssetUniverse, splits, divs corporateActions, d time.Time, out chan<- *data.Observation) (int, error) {
+func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.Subscription, universe *data.AssetHistory, splits, divs corporateActions, d time.Time, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 	key := dayAggsKey(d)
 
@@ -282,7 +282,7 @@ func streamDayAggsForDate(ctx context.Context, client *s3.Client, sub *library.S
 	for _, row := range rows {
 		ticker := massiveTicker2PvTicker(row.Ticker)
 
-		figi, ok := universe.figiAt(ticker, d)
+		figi, ok := universe.FIGIAt(ticker, d)
 		if !ok {
 			unknown[ticker]++
 			continue

@@ -135,7 +135,7 @@ var _ = Describe("Massive file import", func() {
 	Describe("emitEODRows", func() {
 		var (
 			sub      *library.Subscription
-			universe *historicalAssetUniverse
+			universe *data.AssetHistory
 			d        time.Time
 		)
 
@@ -143,9 +143,10 @@ var _ = Describe("Massive file import", func() {
 			sub = &library.Subscription{Name: "Massive EOD", ID: uuid.MustParse("3a85a000-0000-0000-0000-000000000000")}
 			d = time.Date(2024, 3, 14, 0, 0, 0, 0, time.UTC)
 
-			universe = newHistoricalAssetUniverse()
-			universe.add("AAA", "BBG000AAAAA1", time.Time{}, time.Time{})
-			universe.add("BRK/A", "BBG000BBBBB2", time.Time{}, time.Time{})
+			universe = data.NewAssetHistory([]*data.Asset{
+				{Ticker: "AAA", CompositeFigi: "BBG000AAAAA1"},
+				{Ticker: "BRK/A", CompositeFigi: "BBG000BBBBB2"},
+			})
 		})
 
 		It("applies splits and dividends, looks up FIGI, and emits an EodQuote per row", func() {
@@ -212,8 +213,9 @@ var _ = Describe("Massive file import", func() {
 	Describe("emitMinuteRows", func() {
 		It("emits IntradayBar with Date derived from WindowStart nanoseconds", func() {
 			sub := &library.Subscription{Name: "Massive 1m", ID: uuid.MustParse("3a85a000-0000-0000-0000-000000000000")}
-			universe := newHistoricalAssetUniverse()
-			universe.add("AAA", "BBG000AAAAA1", time.Time{}, time.Time{})
+			universe := data.NewAssetHistory([]*data.Asset{
+				{Ticker: "AAA", CompositeFigi: "BBG000AAAAA1"},
+			})
 
 			eventTime := time.Date(2024, 3, 14, 13, 30, 0, 0, time.UTC)
 			rows := []aggRow{
@@ -248,8 +250,9 @@ var _ = Describe("Massive file import", func() {
 			Expect(writeFlatFileBackup(path, rows)).To(Succeed())
 
 			sub := &library.Subscription{Name: "Massive 1m", ID: uuid.MustParse("3a85a000-0000-0000-0000-000000000000")}
-			universe := newHistoricalAssetUniverse()
-			universe.add("AAA", "BBG000AAAAA1", time.Time{}, time.Time{})
+			universe := data.NewAssetHistory([]*data.Asset{
+				{Ticker: "AAA", CompositeFigi: "BBG000AAAAA1"},
+			})
 
 			out := make(chan *data.Observation, 4)
 			n, err := importMinuteFiles(context.Background(), sub, universe, []string{path}, out)
@@ -333,8 +336,9 @@ var _ = Describe("Massive file import", func() {
 			Expect(writeFlatFileBackup(path, rows)).To(Succeed())
 
 			sub := &library.Subscription{Name: "Massive EOD", ID: uuid.MustParse("3a85a000-0000-0000-0000-000000000000")}
-			universe := newHistoricalAssetUniverse()
-			universe.add("AAA", "BBG000AAAAA1", time.Time{}, time.Time{})
+			universe := data.NewAssetHistory([]*data.Asset{
+				{Ticker: "AAA", CompositeFigi: "BBG000AAAAA1"},
+			})
 
 			out := make(chan *data.Observation, 4)
 			n, err := importEODFiles(context.Background(), sub, universe, []string{path}, out)
@@ -357,8 +361,9 @@ var _ = Describe("Massive file import", func() {
 			Expect(writeFlatFileBackup(path, []aggRow{{Ticker: "AAA", Close: 10, Volume: 100}})).To(Succeed())
 
 			sub := &library.Subscription{Name: "Massive EOD", ID: uuid.MustParse("3a85a000-0000-0000-0000-000000000000")}
-			universe := newHistoricalAssetUniverse()
-			universe.add("AAA", "BBG000AAAAA1", time.Time{}, time.Time{})
+			universe := data.NewAssetHistory([]*data.Asset{
+				{Ticker: "AAA", CompositeFigi: "BBG000AAAAA1"},
+			})
 
 			out := make(chan *data.Observation, 4)
 			_, err := importEODFiles(context.Background(), sub, universe, []string{path}, out)

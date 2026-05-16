@@ -776,7 +776,10 @@ func (sharadar *Sharadar) ImportFiles(ctx context.Context, sub *library.Subscrip
 }
 
 // allFigiMap returns a ticker -> composite_figi map of every asset
-// (active and delisted), released before returning.
+// (active and delisted), released before returning. Retained for the
+// SP500-changes import path which augments the map with OpenFIGI /
+// synthetic FIGIs for tickers missing from the DB. Date-aware paths
+// (metrics, fundamentals) use loadAssetHistory instead.
 func allFigiMap(ctx context.Context, sub *library.Subscription) (map[string]string, error) {
 	conn, err := sub.Library.AcquireWithTimeout(ctx)
 	if err != nil {
@@ -799,11 +802,83 @@ func allFigiMap(ctx context.Context, sub *library.Subscription) (map[string]stri
 	return figiMap, nil
 }
 
+// filterSharadarAssets narrows an asset slice by --ticker / --figi.
+// Filtering at the asset level (not after building AssetHistory)
+// preserves AssetHistory's ticker-keyed invariant: every window for a
+// ticker shares the same scope.
+func filterSharadarAssets(assets []*data.Asset, tickerFilter, figiFilter string) []*data.Asset {
+	if tickerFilter == "" && figiFilter == "" {
+		return assets
+	}
+
+	out := make([]*data.Asset, 0, len(assets))
+
+	for _, a := range assets {
+		if a.CompositeFigi == "" {
+			continue
+		}
+
+		if tickerFilter != "" && !strings.EqualFold(a.Ticker, tickerFilter) {
+			continue
+		}
+
+		if figiFilter != "" && a.CompositeFigi != figiFilter {
+			continue
+		}
+
+		out = append(out, a)
+	}
+
+	return out
+}
+
+// candidateLabels returns the candidate strings used by SuggestMatch
+// when a --ticker or --figi filter found nothing. Tickers when the
+// filter was ticker-based; FIGIs otherwise.
+func candidateLabels(assets []*data.Asset, tickerFilter string) []string {
+	out := make([]string, 0, len(assets))
+
+	if tickerFilter != "" {
+		for _, a := range assets {
+			out = append(out, a.Ticker)
+		}
+
+		return out
+	}
+
+	for _, a := range assets {
+		if a.CompositeFigi != "" {
+			out = append(out, a.CompositeFigi)
+		}
+	}
+
+	return out
+}
+
+// loadAssetHistory returns a date-aware FIGI index built from the
+// unified `assets` view. Used by import paths whose observations carry
+// an event date (metrics, fundamentals) so reused tickers stamp the
+// FIGI active on that date instead of the current snapshot FIGI.
+func loadAssetHistory(ctx context.Context, sub *library.Subscription) (*data.AssetHistory, error) {
+	conn, err := sub.Library.AcquireWithTimeout(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not acquire database connection: %w", err)
+	}
+	defer conn.Release()
+
+	assets, err := data.AllAssets(ctx, conn)
+	if err != nil {
+		return nil, fmt.Errorf("could not load assets: %w", err)
+	}
+
+	return data.NewAssetHistory(assets), nil
+}
+
 // importFundamentalsRows processes rows for the Fundamentals dataset.
 func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
-	figiMap, err := allFigiMap(ctx, sub)
+	history, err := loadAssetHistory(ctx, sub)
 	if err != nil {
 		return 0, err
 	}
@@ -816,7 +891,7 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 		}
 
 		fundamental := mapRowToSharadarFundamental(rr.Row)
-		pvFundamental := fundamental.PvFundamental(figiMap)
+		pvFundamental := fundamental.PvFundamental(history)
 
 		out <- &data.Observation{
 			Fundamental:      pvFundamental,
@@ -839,7 +914,7 @@ func importFundamentalsRows(ctx context.Context, sub *library.Subscription, rows
 func importMetricsRows(ctx context.Context, sub *library.Subscription, rows <-chan RowResult, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
-	figiMap, err := allFigiMap(ctx, sub)
+	history, err := loadAssetHistory(ctx, sub)
 	if err != nil {
 		return 0, err
 	}
@@ -857,7 +932,7 @@ func importMetricsRows(ctx context.Context, sub *library.Subscription, rows <-ch
 		}
 
 		metric := mapRowToSharadarMetric(rr.Row)
-		pvMetric := metric.PvMetric(figiMap, nyc)
+		pvMetric := metric.PvMetric(history, nyc)
 
 		out <- &data.Observation{
 			Metric:           pvMetric,

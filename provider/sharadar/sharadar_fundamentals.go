@@ -220,60 +220,41 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 
 	defer conn.Release()
 
-	assets, err := data.ActiveAssets(ctx, conn)
+	// FIGI resolution reads the unified `assets` view so ticker reuse
+	// across listings resolves per fundamental event date. AllAssets
+	// (not ActiveAssets) is required so since-delisted rows participate.
+	assets, err := data.AllAssets(ctx, conn)
 	if err != nil {
-		logger.Error().Err(err).Msg("could not load active assets")
+		logger.Error().Err(err).Msg("could not load assets")
 		return "", 0
 	}
 
-	figiMap := make(map[string]string, len(assets))
-	for _, asset := range assets {
-		figiMap[asset.Ticker] = asset.CompositeFigi
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+
+	filtered := filterSharadarAssets(assets, tickerFilter, figiFilter)
+
+	if (tickerFilter != "" || figiFilter != "") && len(filtered) == 0 {
+		candidates := candidateLabels(assets, tickerFilter)
+
+		input := tickerFilter
+		if input == "" {
+			input = figiFilter
+		}
+
+		suggestions := provider.SuggestMatch(input, candidates)
+		if len(suggestions) > 0 {
+			log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Sharadar universe; did you mean one of these?")
+		} else {
+			log.Error().Str("input", input).Msg("security not found in Sharadar universe")
+		}
+
+		return "", 0
 	}
 
-	// Apply ticker/FIGI filter if set
-	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	history := data.NewAssetHistory(filtered)
+
 	if tickerFilter != "" || figiFilter != "" {
-		filtered := make(map[string]string)
-
-		for ticker, figi := range figiMap {
-			if tickerFilter != "" && strings.EqualFold(ticker, tickerFilter) {
-				filtered[ticker] = figi
-			} else if figiFilter != "" && figi == figiFilter {
-				filtered[ticker] = figi
-			}
-		}
-
-		if len(filtered) == 0 {
-			candidates := make([]string, 0, len(figiMap))
-			if tickerFilter != "" {
-				for ticker := range figiMap {
-					candidates = append(candidates, ticker)
-				}
-			} else {
-				for _, figi := range figiMap {
-					candidates = append(candidates, figi)
-				}
-			}
-
-			input := tickerFilter
-			if input == "" {
-				input = figiFilter
-			}
-
-			suggestions := provider.SuggestMatch(input, candidates)
-			if len(suggestions) > 0 {
-				log.Error().Str("input", input).Strs("suggestions", suggestions).Msg("security not found in Sharadar universe; did you mean one of these?")
-			} else {
-				log.Error().Str("input", input).Msg("security not found in Sharadar universe")
-			}
-
-			return "", 0
-		}
-
-		figiMap = filtered
-
-		log.Info().Int("filtered_assets", len(filtered)).Msg("applied security filter")
+		log.Info().Int("filtered_tickers", history.TickerCount()).Msg("applied security filter")
 	}
 
 	url := "https://data.nasdaq.com/api/v3/datatables/SHARADAR/SF1"
@@ -419,7 +400,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 		}
 
 		// convert to pv asset type
-		pvFundamental := fundamental.PvFundamental(figiMap)
+		pvFundamental := fundamental.PvFundamental(history)
 
 		out <- &data.Observation{
 			Fundamental:      pvFundamental,
@@ -435,7 +416,7 @@ func downloadSharadarFundamentals(ctx context.Context, subscription *library.Sub
 }
 
 // PvFundamental converts the sharadar
-func (fundamental *sharadarFundamental) PvFundamental(figiMap map[string]string) *data.Fundamental {
+func (fundamental *sharadarFundamental) PvFundamental(history *data.AssetHistory) *data.Fundamental {
 	var err error
 
 	// get nyc timezone
@@ -588,12 +569,11 @@ func (fundamental *sharadarFundamental) PvFundamental(figiMap map[string]string)
 		ff.LastUpdated = time.Date(ff.LastUpdated.Year(), ff.LastUpdated.Month(), ff.LastUpdated.Day(), 0, 0, 0, 0, nyc)
 	}
 
-	// get composite figi from ticker
-	var ok bool
-
-	ff.CompositeFigi, ok = figiMap[ff.Ticker]
-	if !ok {
-		ff.CompositeFigi = ""
+	// Date-aware FIGI lookup against the unified asset history. Falls
+	// back to empty when no window covers the event date, matching the
+	// previous snapshot-miss semantics.
+	if figi, ok := history.FIGIAt(ff.Ticker, ff.EventDate); ok {
+		ff.CompositeFigi = figi
 	}
 
 	return ff

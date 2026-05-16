@@ -343,53 +343,85 @@ func downloadEodhdEOD(ctx context.Context, subscription *library.Subscription, o
 	if err != nil {
 		log.Panic().Msg("could not acquire database connection")
 	}
-	defer conn.Release()
 
-	dbAssets, err := data.ActiveAssets(ctx, conn, subscription.DataTablesMap[data.AssetKey])
+	// FIGI resolution reads the unified `assets` view so that ticker
+	// reuse across non-overlapping listings resolves to the right FIGI
+	// per trade date, even when the historical row was created by
+	// another provider. AllAssets (not ActiveAssets) is required so
+	// since-delisted rows still participate in the history.
+	dbAssets, err := data.AllAssets(ctx, conn)
+	conn.Release()
+
 	if err != nil {
-		logger.Error().Err(err).Msg("could not load active assets")
+		logger.Error().Err(err).Msg("could not load assets")
 
 		runSummary.Status = data.RunFailed
 
 		return
 	}
 
-	tickerToFigi := make(map[string]string, len(dbAssets))
-	for _, a := range dbAssets {
-		if len(assetTypeFilter) > 0 {
-			if _, ok := assetTypeFilter[a.AssetType]; !ok {
-				continue
-			}
-		}
+	history := data.NewAssetHistory(filterEodhdAssets(dbAssets, assetTypeFilter, tickerFilter, figiFilter))
 
-		tickerToFigi[a.Ticker] = a.CompositeFigi
+	if history.TickerCount() == 0 {
+		logger.Warn().Msg("no assets in scope for eodhd EOD; skipping run")
+		return
 	}
 
 	mode := eodMode(tickerFilter, figiFilter, lookback)
 
 	logger.Info().
 		Str("mode", eodModeName(mode)).
-		Int("scope_assets", len(tickerToFigi)).
+		Int("scope_tickers", history.TickerCount()).
 		Strs("exchanges", exchanges).
 		Dur("lookback", lookback).
 		Msg("eodhd EOD loader starting")
 
 	switch mode {
 	case modeBulk:
-		n, err := runBulkEOD(ctx, client, limiter, exchanges, tickerToFigi, lookback, subscription, out)
+		n, err := runBulkEOD(ctx, client, limiter, exchanges, history, lookback, subscription, out)
 		if errors.Is(err, errDailyRateLimit) {
 			runSummary.Status = data.RunFailed
 		}
 
 		numObs += n
 	case modePerTicker:
-		n, err := runPerTickerEOD(ctx, client, limiter, dbAssets, exchanges, assetTypeFilter, tickerFilter, figiFilter, lookback, subscription, out)
+		n, err := runPerTickerEOD(ctx, client, limiter, history, exchanges, lookback, subscription, out)
 		if errors.Is(err, errDailyRateLimit) {
 			runSummary.Status = data.RunFailed
 		}
 
 		numObs += n
 	}
+}
+
+// filterEodhdAssets narrows the unified asset slice to the rows that
+// match this run's asset-type, ticker, and FIGI filters. Filtering at
+// the asset level (not the history-window level) preserves
+// AssetHistory's invariant that every window for a ticker shares the
+// same ticker; tickers that reuse a symbol across providers/types are
+// pruned consistently before the index is built.
+func filterEodhdAssets(assets []*data.Asset, assetTypeFilter map[data.AssetType]struct{}, tickerFilter, figiFilter string) []*data.Asset {
+	out := make([]*data.Asset, 0, len(assets))
+
+	for _, a := range assets {
+		if len(assetTypeFilter) > 0 {
+			if _, ok := assetTypeFilter[a.AssetType]; !ok {
+				continue
+			}
+		}
+
+		if tickerFilter != "" && !strings.EqualFold(a.Ticker, tickerFilter) {
+			continue
+		}
+
+		if figiFilter != "" && a.CompositeFigi != figiFilter {
+			continue
+		}
+
+		out = append(out, a)
+	}
+
+	return out
 }
 
 func eodModeName(m eodFetchMode) string {
@@ -402,7 +434,7 @@ func eodModeName(m eodFetchMode) string {
 
 // -- Bulk fetch --
 
-func runBulkEOD(ctx context.Context, client *resty.Client, limiter *rate.Limiter, exchanges []string, tickerToFigi map[string]string, lookback time.Duration, subscription *library.Subscription, out chan<- *data.Observation) (int, error) {
+func runBulkEOD(ctx context.Context, client *resty.Client, limiter *rate.Limiter, exchanges []string, history *data.AssetHistory, lookback time.Duration, subscription *library.Subscription, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 	end := time.Now().UTC().Truncate(24 * time.Hour)
 	start := end.Add(-lookback).Truncate(24 * time.Hour)
@@ -425,7 +457,13 @@ func runBulkEOD(ctx context.Context, client *resty.Client, limiter *rate.Limiter
 			}
 
 			for _, r := range records {
-				figiVal, ok := tickerToFigi[r.Ticker]
+				recDate, err := time.Parse("2006-01-02", r.Date)
+				if err != nil {
+					logger.Warn().Err(err).Str("Ticker", r.Ticker).Str("Date", r.Date).Msg("could not parse record date; skipping")
+					continue
+				}
+
+				figiVal, ok := history.FIGIAt(r.Ticker, recDate)
 				if !ok {
 					continue
 				}
@@ -541,32 +579,18 @@ func fetchBulkExtra(ctx context.Context, client *resty.Client, limiter *rate.Lim
 
 const defaultEODWorkers = 10
 
-func runPerTickerEOD(ctx context.Context, client *resty.Client, limiter *rate.Limiter, dbAssets []*data.Asset, exchanges []string, assetTypeFilter map[data.AssetType]struct{}, tickerFilter, figiFilter string, lookback time.Duration, subscription *library.Subscription, out chan<- *data.Observation) (int, error) {
+func runPerTickerEOD(ctx context.Context, client *resty.Client, limiter *rate.Limiter, history *data.AssetHistory, exchanges []string, lookback time.Duration, subscription *library.Subscription, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
 	primaryExchange := exchanges[0]
 
-	assets := make([]*data.Asset, 0, len(dbAssets))
-	for _, a := range dbAssets {
-		if len(assetTypeFilter) > 0 {
-			if _, ok := assetTypeFilter[a.AssetType]; !ok {
-				continue
-			}
-		}
-
-		if tickerFilter != "" && !strings.EqualFold(a.Ticker, tickerFilter) {
-			continue
-		}
-
-		if figiFilter != "" && a.CompositeFigi != figiFilter {
-			continue
-		}
-
-		assets = append(assets, a)
-	}
-
-	if len(assets) == 0 {
-		logger.Warn().Msg("no assets in scope for per-ticker EOD fetch")
+	// Dispatch by distinct ticker rather than by asset row: a ticker
+	// reused across two non-overlapping listings shares a single
+	// EODHD URL, so one fetch is enough and history.FIGIAt picks the
+	// right FIGI per row date.
+	tickers := history.Tickers()
+	if len(tickers) == 0 {
+		logger.Warn().Msg("no tickers in scope for per-ticker EOD fetch")
 		return 0, nil
 	}
 
@@ -575,18 +599,18 @@ func runPerTickerEOD(ctx context.Context, client *resty.Client, limiter *rate.Li
 		workerCount = w
 	}
 
-	if workerCount > len(assets) {
-		workerCount = len(assets)
+	if workerCount > len(tickers) {
+		workerCount = len(tickers)
 	}
 
-	logger.Info().Int("workers", workerCount).Int("assets", len(assets)).Msg("per-ticker EOD worker pool starting")
+	logger.Info().Int("workers", workerCount).Int("tickers", len(tickers)).Msg("per-ticker EOD worker pool starting")
 
 	startStr := time.Now().Add(-lookback).Format("2006-01-02")
 
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
 
-	jobCh := make(chan *data.Asset)
+	jobCh := make(chan string)
 
 	var (
 		wg             sync.WaitGroup
@@ -600,12 +624,12 @@ func runPerTickerEOD(ctx context.Context, client *resty.Client, limiter *rate.Li
 		go func() {
 			defer wg.Done()
 
-			for asset := range jobCh {
+			for ticker := range jobCh {
 				if err := limiter.Wait(workerCtx); err != nil {
 					return
 				}
 
-				eodRows, splits, divs, err := fetchPerTickerAll(workerCtx, client, limiter, asset.Ticker, primaryExchange, startStr)
+				eodRows, splits, divs, err := fetchPerTickerAll(workerCtx, client, limiter, ticker, primaryExchange, startStr)
 				if errors.Is(err, errDailyRateLimit) {
 					dailyLimitFlag.Store(true)
 					cancelWorkers()
@@ -618,15 +642,26 @@ func runPerTickerEOD(ctx context.Context, client *resty.Client, limiter *rate.Li
 						return
 					}
 
-					logger.Warn().Err(err).Str("Ticker", asset.Ticker).Msg("per-ticker EOD fetch failed, skipping")
+					logger.Warn().Err(err).Str("Ticker", ticker).Msg("per-ticker EOD fetch failed, skipping")
 
 					continue
 				}
 
 				for _, row := range eodRows {
-					eod, err := buildEodRecord(asset.Ticker, asset.CompositeFigi, row, divs[row.Date], splits[row.Date])
+					rowDate, err := time.Parse("2006-01-02", row.Date)
 					if err != nil {
-						logger.Warn().Err(err).Str("Ticker", asset.Ticker).Str("Date", row.Date).Msg("could not build EOD record")
+						logger.Warn().Err(err).Str("Ticker", ticker).Str("Date", row.Date).Msg("could not parse row date; skipping")
+						continue
+					}
+
+					figiVal, ok := history.FIGIAt(ticker, rowDate)
+					if !ok {
+						continue
+					}
+
+					eod, err := buildEodRecord(ticker, figiVal, row, divs[row.Date], splits[row.Date])
+					if err != nil {
+						logger.Warn().Err(err).Str("Ticker", ticker).Str("Date", row.Date).Msg("could not build EOD record")
 						continue
 					}
 
@@ -647,11 +682,11 @@ func runPerTickerEOD(ctx context.Context, client *resty.Client, limiter *rate.Li
 	}
 
 feed:
-	for _, asset := range assets {
+	for _, ticker := range tickers {
 		select {
 		case <-workerCtx.Done():
 			break feed
-		case jobCh <- asset:
+		case jobCh <- ticker:
 		}
 	}
 

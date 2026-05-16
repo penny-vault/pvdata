@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
@@ -95,7 +96,7 @@ func (massive *Massive) ImportFiles(ctx context.Context, sub *library.Subscripti
 		return
 	}
 
-	if universe.tickerCount() == 0 {
+	if universe.TickerCount() == 0 {
 		logger.Warn().Msg("no assets in scope for massive import; skipping run")
 		return
 	}
@@ -182,7 +183,7 @@ func expandImportPaths(paths []string) ([]string, error) {
 
 // loadImportUniverse mirrors downloadMassiveEOD's universe construction
 // so imported rows resolve FIGI exactly as live-fetched rows would.
-func loadImportUniverse(ctx context.Context, sub *library.Subscription) (*historicalAssetUniverse, error) {
+func loadImportUniverse(ctx context.Context, sub *library.Subscription) (*data.AssetHistory, error) {
 	conn, err := sub.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not acquire database connection: %w", err)
@@ -198,14 +199,41 @@ func loadImportUniverse(ctx context.Context, sub *library.Subscription) (*histor
 
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
 
-	return buildHistoricalUniverse(dbAssets, tickerFilter, figiFilter), nil
+	return data.NewAssetHistory(applySecurityFilter(dbAssets, tickerFilter, figiFilter)), nil
+}
+
+// applySecurityFilter narrows an asset slice to a single ticker or
+// FIGI when the run is scoped by --ticker / --figi. With no filters
+// set it returns the input slice unchanged so callers do not pay a
+// copy. The ticker filter is case-insensitive; the FIGI filter is an
+// exact string match against composite_figi.
+func applySecurityFilter(assets []*data.Asset, tickerFilter, figiFilter string) []*data.Asset {
+	if tickerFilter == "" && figiFilter == "" {
+		return assets
+	}
+
+	out := make([]*data.Asset, 0, len(assets))
+
+	for _, a := range assets {
+		if tickerFilter != "" && !strings.EqualFold(a.Ticker, tickerFilter) {
+			continue
+		}
+
+		if figiFilter != "" && a.CompositeFigi != figiFilter {
+			continue
+		}
+
+		out = append(out, a)
+	}
+
+	return out
 }
 
 // importEODFiles iterates day-aggregate parquet files, joining each
 // row against splits and dividends loaded lazily from the colocated
 // corporate-actions backups. Returns the number of Observations
 // emitted and the first fatal error.
-func importEODFiles(ctx context.Context, sub *library.Subscription, universe *historicalAssetUniverse, files []string, out chan<- *data.Observation) (int, error) {
+func importEODFiles(ctx context.Context, sub *library.Subscription, universe *data.AssetHistory, files []string, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 	cache := newCorporateActionsCache()
 
@@ -249,7 +277,7 @@ func importEODFiles(ctx context.Context, sub *library.Subscription, universe *hi
 // imports never need corporate actions because IntradayBars carry raw
 // OHLCV; adjustments are applied at query time against the EOD splits
 // table.
-func importMinuteFiles(ctx context.Context, sub *library.Subscription, universe *historicalAssetUniverse, files []string, out chan<- *data.Observation) (int, error) {
+func importMinuteFiles(ctx context.Context, sub *library.Subscription, universe *data.AssetHistory, files []string, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 	total := 0
 
@@ -280,7 +308,7 @@ func importMinuteFiles(ctx context.Context, sub *library.Subscription, universe 
 // emitEODRows mirrors streamDayAggsForDate's per-row transformation
 // but reads from in-memory rows and uses the date parsed from the
 // backup filename rather than the live S3 key.
-func emitEODRows(ctx context.Context, sub *library.Subscription, universe *historicalAssetUniverse, splits, divs corporateActions, d time.Time, rows []aggRow, out chan<- *data.Observation) (int, error) {
+func emitEODRows(ctx context.Context, sub *library.Subscription, universe *data.AssetHistory, splits, divs corporateActions, d time.Time, rows []aggRow, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
 	eventTime, err := buildMassiveEodEvent(d)
@@ -295,7 +323,7 @@ func emitEODRows(ctx context.Context, sub *library.Subscription, universe *histo
 	for _, row := range rows {
 		ticker := massiveTicker2PvTicker(row.Ticker)
 
-		figi, ok := universe.figiAt(ticker, d)
+		figi, ok := universe.FIGIAt(ticker, d)
 		if !ok {
 			unknown[ticker]++
 			continue
@@ -339,7 +367,7 @@ func emitEODRows(ctx context.Context, sub *library.Subscription, universe *histo
 
 // emitMinuteRows mirrors streamMinuteAggsForDate's per-row
 // transformation, sourcing rows from a parquet backup.
-func emitMinuteRows(ctx context.Context, sub *library.Subscription, universe *historicalAssetUniverse, d time.Time, rows []aggRow, out chan<- *data.Observation) (int, error) {
+func emitMinuteRows(ctx context.Context, sub *library.Subscription, universe *data.AssetHistory, d time.Time, rows []aggRow, out chan<- *data.Observation) (int, error) {
 	logger := zerolog.Ctx(ctx)
 
 	n := 0
@@ -348,7 +376,7 @@ func emitMinuteRows(ctx context.Context, sub *library.Subscription, universe *hi
 	for _, row := range rows {
 		ticker := massiveTicker2PvTicker(row.Ticker)
 
-		figi, ok := universe.figiAt(ticker, d)
+		figi, ok := universe.FIGIAt(ticker, d)
 		if !ok {
 			unknown[ticker]++
 			continue
