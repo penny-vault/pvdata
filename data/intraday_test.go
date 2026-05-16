@@ -34,12 +34,12 @@ var _ = Describe("IntradayKey DataType", func() {
 		Expect(dt.DateColumn).To(Equal("event_date"))
 	})
 
-	It("renders ClickHouse DDL with ReplacingMergeTree and monthly partitions", func() {
+	It("renders ClickHouse DDL with ReplacingMergeTree and yearly partitions", func() {
 		dt := data.DataTypes[data.IntradayKey]
 		sql := dt.ExpandedSchema("intraday_bar_eodhd_abc12")
 		Expect(sql).To(ContainSubstring("intraday_bar_eodhd_abc12"))
 		Expect(sql).To(ContainSubstring("ENGINE = ReplacingMergeTree"))
-		Expect(sql).To(ContainSubstring("PARTITION BY toYYYYMM(event_date)"))
+		Expect(sql).To(ContainSubstring("PARTITION BY toYear(event_date)"))
 		Expect(sql).To(ContainSubstring("ORDER BY (composite_figi, event_date)"))
 		// no Postgres-specific syntax should leak in
 		Expect(strings.Contains(sql, "PARTITION BY RANGE")).To(BeFalse())

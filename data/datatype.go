@@ -335,8 +335,9 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
 		Backend:    BackendClickHouse,
 		// ReplacingMergeTree gives last-write-wins on the (composite_figi,
 		// event_date) sort key, the ClickHouse equivalent of the previous
-		// Postgres ON CONFLICT DO UPDATE behaviour. Monthly partitions match
-		// the historical PG layout and keep MergeTree part counts bounded.
+		// Postgres ON CONFLICT DO UPDATE behaviour. Yearly partitions keep
+		// the total part count low while still allowing whole-year retention
+		// drops via ALTER TABLE ... DROP PARTITION.
 		//
 		// Per-column codec stack rationale:
 		//   event_date: DoubleDelta exploits the regular 60-second spacing
@@ -356,7 +357,7 @@ CREATE INDEX %[1]s_index_ticker_idx ON %[1]s(index_ticker, event_date);`,
     volume          Float64 CODEC(Gorilla, ZSTD)
 )
 ENGINE = ReplacingMergeTree
-PARTITION BY toYYYYMM(event_date)
+PARTITION BY toYear(event_date)
 ORDER BY (composite_figi, event_date);`,
 		Migrations:    []string{},
 		Version:       0,
