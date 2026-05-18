@@ -290,6 +290,15 @@ func chooseDatesForAsset(c DateCandidates) AssignedDates {
 // listing date strictly after the first bar contradicts the bound
 // and is rejected.
 //
+// The function must never return a zero time: a null listed value in
+// the database breaks downstream queries that treat null as "always
+// active." When every high-confidence candidate fails its gates, the
+// algorithm falls back to the earliest piece of evidence we do have
+// of the asset trading — the EOD first bar at the coverage edge, or
+// the walk first-seen at the walk-start edge — even though those
+// values are imprecise. A best-guess listing date is always
+// preferable to no listing date at all.
+//
 // The relationship between the chosen listing and the chosen
 // delisting is enforced at the delisting step (chooseDelistingDate
 // rejects any candidate that is not strictly after the chosen
@@ -323,6 +332,24 @@ func chooseListingDate(c DateCandidates) (time.Time, string) {
 			c.SECEarliestFilingMatchingForm,
 			"sec_earliest_filing_matching_form",
 			!c.SECEarliestFilingMatchingForm.IsZero(),
+		},
+		// Edge-bar fallbacks last. listed must never be null, so
+		// when every higher-priority candidate is rejected (e.g.
+		// SEC's earliest filing for a misattributed CIK postdates
+		// the EOD first bar bound), use the earliest evidence we do
+		// have of the asset trading. These edge-of-coverage values
+		// cannot tell us whether trading started before our window,
+		// but they at least say "the asset was trading by this
+		// date" — which is the best we can honestly do.
+		{
+			c.MassiveEODArchiveFirstBar,
+			"massive_eod_archive_first_bar_edge",
+			!c.MassiveEODArchiveFirstBar.IsZero(),
+		},
+		{
+			c.MassiveReferenceWalkFirstSeen,
+			"massive_reference_walk_first_seen_edge",
+			!c.MassiveReferenceWalkFirstSeen.IsZero(),
 		},
 	}
 

@@ -205,6 +205,35 @@ var _ = Describe("AssignDatesForTicker", func() {
 			Expect(got[1].DelistingDate).To(Equal(d("2016-10-17")))
 		})
 
+		It("falls back to the EOD first bar at the coverage edge when every higher-priority candidate is rejected, so listed is never empty", func() {
+			// MRH-style: Massive returns a misattributed CIK whose
+			// SEC earliest filing (2011-11-10) postdates the EOD
+			// first bar at coverage edge (2003-09-10). Strict gates
+			// reject the SEC candidate because it would imply the
+			// asset listed after a date we have proof it was
+			// already trading. With no walk evidence and no Massive
+			// reference list_date, the algorithm must still commit
+			// to a listing date rather than leave it null — fall
+			// back to the EOD first bar even at the coverage edge.
+			candidates := []DateCandidates{{
+				AssetType:                      data.CommonStock,
+				Active:                         false,
+				MassiveEODArchiveFirstBar:      d("2003-09-10"),
+				MassiveEODArchiveLastBar:       d("2015-07-31"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-08"),
+				SECEarliestFilingMatchingForm:  d("2011-11-10"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate.IsZero()).To(BeFalse())
+			Expect(got[0].ListingDate).To(Equal(d("2003-09-10")))
+			Expect(got[0].ListingSource).To(Equal("massive_eod_archive_first_bar_edge"))
+			Expect(got[0].DelistingDate).To(Equal(d("2015-08-01")))
+		})
+
 		It("treats an EOD first bar at the coverage edge as an upper bound on the listing date and rejects walk firstSeen that postdates it", func() {
 			// ATE-style: the EOD archive shows a single lifecycle
 			// whose first bar 2003-09-10 sits at the coverage start

@@ -346,6 +346,20 @@ func (api *massiveAssetFetcher) assignDatesForGroup(ctx context.Context, assets 
 		if !r.DelistingDate.IsZero() && assets[i].Active && r.DelistingDate.Before(now) {
 			assets[i].Active = false
 		}
+
+		// listed must never be empty. AssignDatesForTicker is supposed
+		// to fall back to the earliest available evidence rather than
+		// leave it null, so an empty value here is a regression that
+		// needs investigation rather than a silent acceptance.
+		if assets[i].ListingDate == "" {
+			logger.Warn().
+				Str("Ticker", assets[i].Ticker).
+				Str("CompositeFigi", assets[i].CompositeFigi).
+				Str("CIK", assets[i].CIK).
+				Str("Name", assets[i].Name).
+				Time("ValidFor", assets[i].ValidFor).
+				Msg("massive: assignDatesForGroup left listing date empty; the algorithm should have fallen back to the earliest available evidence")
+		}
 	}
 }
 

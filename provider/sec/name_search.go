@@ -202,64 +202,111 @@ func FindCIKByName(ctx context.Context, name string, year int) (string, bool) {
 	return cik, true
 }
 
-// fetchAndCacheCIKByName performs the network call and populates the
-// cache. Split from FindCIKByName for unit-testability of the
+// fetchAndCacheCIKByName performs the network calls and populates
+// the cache. Split from FindCIKByName for unit-testability of the
 // caching/normalization layer independent of the network.
+//
+// Two attempts are made, in order:
+//
+//  1. Exact-phrase search using the original name. Most precise; for
+//     entities whose SEC display name matches the asset's name
+//     verbatim, this returns the right CIK directly.
+//  2. Exact-phrase search using the suffix-stripped normalized form,
+//     fired only when the first attempt produced no candidate and
+//     the stripped form differs from the original. This catches
+//     entities whose SEC display name uses a different corporate
+//     suffix than the asset's name (e.g., Massive says "ZALE
+//     CORPORATION" while Zale's own SEC filings use "ZALE CORP").
+//
+// Both attempts pipe their hits through pickBestCIK, which requires
+// the candidate's display name to normalize to the same key as the
+// asset's name and to appear in at least two filings. The relaxed
+// second query widens the search net but does not loosen that gate,
+// so unrelated filings that merely mention the asset's name in body
+// text never end up returned as the candidate CIK.
 func fetchAndCacheCIKByName(ctx context.Context, originalName, normalized string, year int, key string) (string, error) {
-	client := submissionsHTTPClient()
-	if client == nil {
-		return "", nil
-	}
-
-	// Search a ±3 year window so the result captures the entity that
-	// was active during the era we care about, even if its first 10-K
-	// landed a year or two after the ticker started trading.
-	startYear := year - 3
-	endYear := year + 3
-
-	startdt := fmt.Sprintf("%04d-01-01", startYear)
-	enddt := fmt.Sprintf("%04d-12-31", endYear)
-
-	// Quote the name for an exact-phrase search; this avoids SEC's
-	// tokenizer matching individual words across unrelated filings.
-	query := fmt.Sprintf(`"%s"`, strings.TrimSpace(originalName))
-
-	req := client.R().
-		SetContext(ctx).
-		SetQueryParam("q", query).
-		SetQueryParam("forms", "10-K,10-K/A,10-KSB,10-KSB/A,10-KSB40,10-K405").
-		SetQueryParam("dateRange", "custom").
-		SetQueryParam("startdt", startdt).
-		SetQueryParam("enddt", enddt)
-
-	logger := zerolog.Ctx(ctx)
-	logger.Debug().
-		Str("Name", originalName).
-		Str("From", startdt).
-		Str("To", enddt).
-		Msg("sec: GET /search-index (name search)")
-
-	resp, err := req.Get(nameSearchURL)
+	cik, err := searchForCIK(ctx, originalName, normalized, year)
 	if err != nil {
-		return "", fmt.Errorf("sec name search %s: %w", originalName, err)
+		return "", err
 	}
 
-	if resp.StatusCode() != http.StatusOK {
-		return "", fmt.Errorf("sec name search %s: status %d", originalName, resp.StatusCode())
+	if cik == "" {
+		lowered := strings.ToLower(strings.TrimSpace(originalName))
+		if normalized != "" && normalized != lowered {
+			retryCIK, retryErr := searchForCIK(ctx, normalized, normalized, year)
+			if retryErr == nil && retryCIK != "" {
+				cik = retryCIK
+			}
+		}
 	}
-
-	var parsed nameSearchResp
-	if err := json.Unmarshal(resp.Body(), &parsed); err != nil {
-		return "", fmt.Errorf("sec name search decode %s: %w", originalName, err)
-	}
-
-	cik := pickBestCIK(parsed.Hits.Hits, normalized)
 
 	nameSearchCacheMu.Lock()
 	nameSearchCache[key] = cik
 	nameSearchCacheMu.Unlock()
 
 	return cik, nil
+}
+
+// searchForCIK issues a single exact-phrase EDGAR full-text search
+// for query within a ±3 year window around year and returns whatever
+// CIK pickBestCIK selects from the hits using normalized as the
+// display-name gate. The function performs no caching; the caller is
+// responsible for storing the final result.
+//
+// The query intentionally does not pass a `forms=` filter. EDGAR's
+// full-text-search backend does not parse the comma-separated list
+// as multiple values; passing `forms=10-K,10-K/A,...` is treated as
+// a single literal string that never matches a real form code, and
+// the result set is filtered down to almost nothing — even the
+// asset's own 10-K filings disappear. The display-name normalization
+// gate inside pickBestCIK is what provides precision; restricting to
+// 10-K family forms only mattered as an optimization, and removing
+// it actually improves the match rate without weakening any
+// correctness check.
+func searchForCIK(ctx context.Context, query, normalized string, year int) (string, error) {
+	client := submissionsHTTPClient()
+	if client == nil {
+		return "", nil
+	}
+
+	startYear := year - 3
+	endYear := year + 3
+
+	startdt := fmt.Sprintf("%04d-01-01", startYear)
+	enddt := fmt.Sprintf("%04d-12-31", endYear)
+
+	quoted := fmt.Sprintf(`"%s"`, strings.TrimSpace(query))
+
+	req := client.R().
+		SetContext(ctx).
+		SetQueryParam("q", quoted).
+		SetQueryParam("dateRange", "custom").
+		SetQueryParam("startdt", startdt).
+		SetQueryParam("enddt", enddt)
+
+	logger := zerolog.Ctx(ctx)
+	logger.Debug().
+		Str("Query", query).
+		Str("Normalized", normalized).
+		Str("From", startdt).
+		Str("To", enddt).
+		Msg("sec: GET /search-index (name search)")
+
+	resp, err := req.Get(nameSearchURL)
+	if err != nil {
+		return "", fmt.Errorf("sec name search %s: %w", query, err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return "", fmt.Errorf("sec name search %s: status %d", query, resp.StatusCode())
+	}
+
+	var parsed nameSearchResp
+	if err := json.Unmarshal(resp.Body(), &parsed); err != nil {
+		return "", fmt.Errorf("sec name search decode %s: %w", query, err)
+	}
+
+	return pickBestCIK(parsed.Hits.Hits, normalized), nil
 }
 
 // pickBestCIK chooses the CIK that appears most often in hits whose

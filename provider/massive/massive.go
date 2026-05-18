@@ -991,6 +991,17 @@ func (api *massiveAssetFetcher) enrichForPublish(ctx context.Context, asset *dat
 		permid.Enrich(ctx, asset)
 	}
 
+	// Detect and correct misattributed CIKs before sec.EnrichSubmissions
+	// runs, so the SEC fill uses the right entity. The Massive-side
+	// helper gates on walk firstSeen and EOD archive evidence rather
+	// than on asset.ListingDate, which is the more general signal —
+	// listing dates have not been cross-source assigned yet at this
+	// point in the pipeline, but walk and EOD evidence are populated
+	// during the walk phase and are available throughout enrichment.
+	if asset.CIK != "" {
+		api.correctMisattributedCIK(ctx, asset)
+	}
+
 	// Fill empty descriptive fields (Name, SIC, Description,
 	// CorporateUrl, HeadquartersLocation) from SEC EDGAR's submissions
 	// endpoint when we have a CIK. No-op when `sec.userAgent` is not
