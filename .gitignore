@@ -74,3 +74,6 @@ yarn-error.log*
 # Worktrees
 .worktrees/
 go1.24.2.linux-arm64.tar.gz
+
+# Claude Code per-machine state (scheduled task locks, local settings).
+.claude/
