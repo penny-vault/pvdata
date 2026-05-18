@@ -36,6 +36,8 @@ import (
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/permid"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/penny-vault/pvdata/provider/sec"
+	"github.com/penny-vault/pvdata/provider/zacks"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
@@ -48,8 +50,9 @@ func init() {
 }
 
 var (
-	ErrInvalidStatusCode = errors.New("invalid status code received")
-	massiveExchangeMap   = map[string]data.Exchange{
+	ErrInvalidStatusCode        = errors.New("invalid status code received")
+	ErrHistoricalWalkIncomplete = errors.New("historical asset walk incomplete")
+	massiveExchangeMap          = map[string]data.Exchange{
 		"XNAS": data.NasdaqExchange,
 		"BATS": data.BATSExchange,
 		"XASE": data.NYSEMktExchange,
@@ -234,6 +237,13 @@ type massiveAssetFetcher struct {
 	walkWindowsByCIK  map[string]walkWindow
 	walkStart         time.Time
 	walkEnd           time.Time
+
+	// eodArchive indexes the per-day aggregate parquet files under
+	// parquet_backup_dir/<subscription_slug>. Loaded lazily on first
+	// date-assignment call and shared read-only across publish
+	// goroutines. nil when no parquet_backup_dir is configured.
+	eodArchive     *EODArchive
+	eodArchiveOnce sync.Once
 }
 
 // walkWindow holds the first and last business day on which an asset
@@ -336,6 +346,197 @@ type massiveStock struct {
 	LastUpdated     string          `json:"last_updated_utc"`
 }
 
+// defaultTrackedAssetTypes is the Massive `type` allowlist applied
+// after the bulk /v3/reference/tickers response is fetched. The walk
+// no longer sends a server-side `&type=` filter — Massive's reference
+// data omits the type tag for most pre-2010 tickers, so a server-side
+// type filter silently drops thousands of common-stock issuers each
+// snapshot. Instead the walk fetches without a type filter and this
+// allowlist runs locally; records with an empty type fall through to
+// sec.ResolveAssetType for classification.
+var defaultTrackedAssetTypes = []string{"CS", "ADRC", "ETF"}
+
+// trackedTypeSet returns the per-run allowlist as a lookup map. Reads
+// the context's AssetTypeFilter so a --asset-type override on the
+// command line narrows the set without changing the default.
+func trackedTypeSet(ctx context.Context) map[string]struct{} {
+	types := provider.AssetTypeFilterFromContext(ctx, defaultTrackedAssetTypes)
+	out := make(map[string]struct{}, len(types))
+
+	for _, t := range types {
+		out[t] = struct{}{}
+	}
+
+	return out
+}
+
+// filterToTrackedTypes keeps assets whose Massive `type` is in tracked,
+// promotes untyped-but-CIK-bearing records via sec.ResolveAssetType,
+// and drops everything else (preferreds, warrants, structured products,
+// untyped no-CIK foreign listings, etc.). The returned slice reuses
+// the input's backing array; callers must not retain the original.
+//
+// Per-record outcomes:
+//   - typed and in tracked  -> kept verbatim
+//   - typed and not tracked -> dropped (PFD, SP, WARRANT, OTHER, ...)
+//   - untyped, has CIK      -> SEC ResolveAssetType; if it returns a
+//     tracked type the asset is promoted to that type and kept,
+//     otherwise dropped
+//   - untyped, no CIK       -> dropped with a single debug log line
+//
+// Per-asset decisions log at Debug by default; when traceAsset matches
+// (i.e. --ticker is set and the asset matches it), they elevate to
+// Info so an operator running a one-ticker test sees the resolve path
+// in real time.
+func filterToTrackedTypes(ctx context.Context, assets []*data.Asset, tracked map[string]struct{}) []*data.Asset {
+	logger := zerolog.Ctx(ctx)
+	kept := assets[:0]
+
+	for _, asset := range assets {
+		if asset == nil {
+			continue
+		}
+
+		traced := asset != nil && traceAsset(ctx, asset.Ticker)
+		t := string(asset.AssetType)
+
+		validForStr := ""
+		if !asset.ValidFor.IsZero() {
+			validForStr = asset.ValidFor.Format("2006-01-02")
+		}
+
+		if t != "" {
+			if _, ok := tracked[t]; ok {
+				if traced {
+					logger.Info().
+						Str("Stage", "filter-typed-keep").
+						Str("Ticker", asset.Ticker).
+						Str("AssetType", t).
+						Str("CIK", asset.CIK).
+						Str("ValidFor", validForStr).
+						Msg("trace: keeping typed asset")
+				}
+
+				kept = append(kept, asset)
+			} else if traced {
+				logger.Info().
+					Str("Stage", "filter-typed-drop").
+					Str("Ticker", asset.Ticker).
+					Str("AssetType", t).
+					Str("ValidFor", validForStr).
+					Msg("trace: dropping typed asset (type not in tracked allowlist)")
+			}
+
+			continue
+		}
+
+		if asset.CIK == "" {
+			if traced {
+				logger.Info().
+					Str("Stage", "filter-untyped-no-cik").
+					Str("Ticker", asset.Ticker).
+					Str("CompositeFigi", asset.CompositeFigi).
+					Str("ValidFor", validForStr).
+					Msg("untyped record without CIK; not emitting")
+			} else {
+				logger.Debug().
+					Str("Stage", "filter-untyped-no-cik").
+					Str("Ticker", asset.Ticker).
+					Str("CompositeFigi", asset.CompositeFigi).
+					Str("ValidFor", validForStr).
+					Msg("untyped record without CIK; not emitting")
+			}
+
+			continue
+		}
+
+		if traced {
+			logger.Info().
+				Str("Stage", "filter-untyped-resolve").
+				Str("Ticker", asset.Ticker).
+				Str("CIK", asset.CIK).
+				Str("ValidFor", validForStr).
+				Msg("trace: calling sec.ResolveAssetType")
+		}
+
+		year := 0
+		if !asset.ValidFor.IsZero() {
+			year = asset.ValidFor.Year()
+		}
+
+		resolved, resolvedCIK, ok := sec.ResolveAssetTypeWithCIKCorrection(ctx, asset.CIK, asset.Ticker, asset.Name, year)
+		if ok && resolvedCIK != asset.CIK {
+			logger.Info().
+				Str("Stage", "filter-cik-corrected").
+				Str("Ticker", asset.Ticker).
+				Str("OldCIK", asset.CIK).
+				Str("NewCIK", resolvedCIK).
+				Str("ResolvedType", string(resolved)).
+				Str("Name", asset.Name).
+				Str("ValidFor", validForStr).
+				Msg("corrected misattributed CIK via SEC name search at walk-time filter")
+
+			asset.CIK = resolvedCIK
+		}
+
+		if !ok {
+			if traced {
+				logger.Info().
+					Str("Stage", "filter-sec-unresolved").
+					Str("Ticker", asset.Ticker).
+					Str("CIK", asset.CIK).
+					Str("ValidFor", validForStr).
+					Msg("SEC could not resolve type for untyped record; dropping")
+			} else {
+				logger.Debug().
+					Str("Stage", "filter-sec-unresolved").
+					Str("Ticker", asset.Ticker).
+					Str("CIK", asset.CIK).
+					Str("ValidFor", validForStr).
+					Msg("SEC could not resolve type for untyped record; dropping")
+			}
+
+			continue
+		}
+
+		if _, want := tracked[string(resolved)]; !want {
+			if traced {
+				logger.Info().
+					Str("Stage", "filter-sec-untracked").
+					Str("Ticker", asset.Ticker).
+					Str("CIK", asset.CIK).
+					Str("ResolvedType", string(resolved)).
+					Str("ValidFor", validForStr).
+					Msg("SEC-resolved type not in tracked allowlist; dropping")
+			} else {
+				logger.Debug().
+					Str("Stage", "filter-sec-untracked").
+					Str("Ticker", asset.Ticker).
+					Str("CIK", asset.CIK).
+					Str("ResolvedType", string(resolved)).
+					Str("ValidFor", validForStr).
+					Msg("SEC-resolved type not in tracked allowlist; dropping")
+			}
+
+			continue
+		}
+
+		if traced {
+			logger.Info().
+				Str("Stage", "filter-sec-promote").
+				Str("Ticker", asset.Ticker).
+				Str("CIK", asset.CIK).
+				Str("ResolvedType", string(resolved)).
+				Msg("trace: promoting via SEC-resolved type")
+		}
+
+		asset.AssetType = resolved
+		kept = append(kept, asset)
+	}
+
+	return kept
+}
+
 func downloadMassiveAssets(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
 	logger := zerolog.Ctx(ctx)
 
@@ -396,20 +597,34 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 	// view, otherwise tickers delisted during the lookback window would
 	// appear "still active" to delistedAssets() and never get marked
 	// inactive.
-	var todayUniverse []*data.Asset
+	tracked := trackedTypeSet(ctx)
 
-	for _, assetType := range []string{"CS", "ADRC", "ETF"} {
-		tmpAssets, err := api.assets(ctx, assetType, time.Time{})
-		if err != nil {
-			logger.Error().Err(err).Str("AssetType", assetType).Msg("error getting ticker information")
+	logger.Info().Msg("stage: fetching today's snapshot (active=true, no type filter)")
 
-			runSummary.Status = data.RunFailed
+	todaySnapshotStart := time.Now()
 
-			return
-		}
+	todayRaw, err := api.assets(ctx, "", time.Time{})
+	if err != nil {
+		logger.Error().Err(err).Msg("error getting ticker information")
 
-		todayUniverse = append(todayUniverse, tmpAssets...)
+		runSummary.Status = data.RunFailed
+
+		return
 	}
+
+	logger.Info().
+		Int("Raw", len(todayRaw)).
+		Dur("Elapsed", time.Since(todaySnapshotStart).Round(time.Millisecond)).
+		Msg("stage: today's snapshot fetched; running tracked-type filter (SEC for untyped)")
+
+	filterStart := time.Now()
+	todayUniverse := filterToTrackedTypes(ctx, todayRaw, tracked)
+
+	logger.Info().
+		Int("Raw", len(todayRaw)).
+		Int("Kept", len(todayUniverse)).
+		Dur("Elapsed", time.Since(filterStart).Round(time.Millisecond)).
+		Msg("stage: today's snapshot filtered")
 
 	// Walk business days in the lookback window using the API's as-of
 	// date parameter to discover tickers that were active during the
@@ -445,7 +660,9 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 	historicalMap := map[string]*data.Asset{}
 
-	if err := api.walkHistoricalAssets(ctx, startMidnight, todayMidnight, []string{"CS", "ADRC", "ETF"}, historicalMap); err != nil {
+	walkStart := time.Now()
+
+	if err := api.walkHistoricalAssets(ctx, startMidnight, todayMidnight, tracked, historicalMap); err != nil {
 		logger.Error().Err(err).Msg("error getting historical ticker information")
 
 		runSummary.Status = data.RunFailed
@@ -453,11 +670,21 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 		return
 	}
 
+	logger.Info().
+		Int("HistoricalCount", len(historicalMap)).
+		Dur("Elapsed", time.Since(walkStart).Round(time.Second)).
+		Msg("stage: historical walk complete")
+
 	// Cross-check walk-discovered composites with OpenFIGI and collapse
 	// (ticker, share_class) groups that the walk left with multiple
 	// composites. Removes Massive's foreign-exchange substitutions that
 	// would otherwise persist as duplicate XNAS rows.
+	logger.Info().Int("HistoricalCount", len(historicalMap)).Msg("stage: sanitizing walk composites via OpenFIGI")
+
+	sanitizeStart := time.Now()
+
 	api.sanitizeWalkComposites(ctx, historicalMap)
+	logger.Info().Dur("Elapsed", time.Since(sanitizeStart).Round(time.Second)).Msg("stage: walk composite sanitize complete")
 
 	for id, asset := range historicalMap {
 		if !traceAsset(ctx, asset.Ticker) {
@@ -555,6 +782,10 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 	// remove any assets that haven't been updated since our last
 	// look
+	logger.Info().Int("Candidates", len(assets)).Msg("stage: filtering assets against last-updated DB cursor")
+
+	filterUpdStart := time.Now()
+
 	assetDetail, err := api.filterAssetsByLastUpdated(ctx, assets)
 	if err != nil {
 		// logged by caller
@@ -563,14 +794,26 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 		return
 	}
 
+	logger.Info().
+		Int("Kept", len(assetDetail)).
+		Dur("Elapsed", time.Since(filterUpdStart).Round(time.Second)).
+		Msg("stage: last-updated filter complete")
+
 	// fetch asset details
-	logger.Info().Int("NumToQueryDetailsFor", len(assetDetail)).Msg("querying massive for asset details")
+	logger.Info().Int("NumToQueryDetailsFor", len(assetDetail)).Msg("stage: querying massive for asset details")
+
+	detailsStart := time.Now()
 
 	api.assetDetails(ctx, assetDetail)
+	logger.Info().Dur("Elapsed", time.Since(detailsStart).Round(time.Second)).Msg("stage: asset detail + per-asset publish complete")
 
 	// get delisting date for inactive assets — operates on today's
 	// snapshot only so the disjoint-set logic against active DB rows
 	// is correct.
+	logger.Info().Int("TodaySnapshot", len(todayUniverse)).Msg("stage: checking for newly-delisted assets")
+
+	delistStart := time.Now()
+
 	err = api.delistedAssets(ctx, todayUniverse)
 	if err != nil {
 		// logged by caller
@@ -578,6 +821,9 @@ func downloadMassiveAssets(ctx context.Context, subscription *library.Subscripti
 
 		return
 	}
+
+	logger.Info().Dur("Elapsed", time.Since(delistStart).Round(time.Second)).Msg("stage: delisted-asset check complete")
+	logger.Info().Msg("stage: Stock Tickers run complete")
 }
 
 func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
@@ -703,36 +949,77 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 	}
 }
 
-func (api *massiveAssetFetcher) publish(ctx context.Context, asset *data.Asset) {
+// enrichForPublish runs the per-asset enrichments (FIGI, PermID, SEC
+// submissions, Zacks classifications) on a single asset. This is the
+// stage that fills in fields Massive's per-ticker reference did not
+// supply. Date assignment is intentionally not done here: it has been
+// promoted to a per-ticker-group step (assignDatesForGroup) so the
+// algorithm can reconcile date windows across two assets that share
+// the same ticker. Callers run this first, accumulate the enriched
+// assets, then run assignDatesForGroup on each ticker group before
+// publish.
+func (api *massiveAssetFetcher) enrichForPublish(ctx context.Context, asset *data.Asset) {
 	logger := zerolog.Ctx(ctx)
 
 	if traceAsset(ctx, asset.Ticker) {
 		logger.Info().
-			Str("Stage", "publish-entry").
+			Str("Stage", "enrichForPublish-entry").
 			Str("Ticker", asset.Ticker).
 			Str("CompositeFigi", asset.CompositeFigi).
 			Str("CIK", asset.CIK).
 			Str("DelistingDate", asset.DelistingDate).
-			Msg("trace: publish entry")
+			Msg("trace: enrichForPublish entry")
 	}
 
 	if asset.CompositeFigi == "" {
-		figi.Enrich(ctx, asset)
+		logger.Debug().Str("Ticker", asset.Ticker).Msg("enrichForPublish: calling figi.Enrich")
+		api.enrichFigi(ctx, asset)
 
 		if traceAsset(ctx, asset.Ticker) {
 			logger.Info().
-				Str("Stage", "publish-post-enrich").
+				Str("Stage", "enrichForPublish-post-figi").
 				Str("Ticker", asset.Ticker).
 				Str("CompositeFigi", asset.CompositeFigi).
 				Str("CIK", asset.CIK).
 				Str("DelistingDate", asset.DelistingDate).
-				Msg("trace: publish figi.Enrich result")
+				Msg("trace: enrichForPublish figi.Enrich result")
 		}
 	}
 
 	if asset.OrganizationPermID == "" || asset.InstrumentPermID == "" {
+		logger.Debug().Str("Ticker", asset.Ticker).Msg("enrichForPublish: calling permid.Enrich")
 		permid.Enrich(ctx, asset)
 	}
+
+	// Fill empty descriptive fields (Name, SIC, Description,
+	// CorporateUrl, HeadquartersLocation) from SEC EDGAR's submissions
+	// endpoint when we have a CIK. No-op when `sec.userAgent` is not
+	// configured. Results are cached process-wide so the same CIK
+	// across many assets only costs one network round-trip per run.
+	if asset.CIK != "" {
+		logger.Debug().Str("Ticker", asset.Ticker).Str("CIK", asset.CIK).Msg("enrichForPublish: calling sec.EnrichSubmissions")
+		sec.EnrichSubmissions(ctx, asset)
+	}
+
+	// Fill empty Sector / Industry from the most recent Zacks
+	// classification snapshot in B2. No-op when backblaze credentials
+	// are not configured. Lookup is keyed by composite_figi (preferred)
+	// then ticker. Zacks only covers currently-rated tickers — this
+	// has no effect on predecessor or long-delisted assets.
+	if asset.Sector == "" || asset.Industry == "" {
+		logger.Debug().Str("Ticker", asset.Ticker).Msg("enrichForPublish: calling zacks.EnrichClassification")
+		zacks.EnrichClassification(ctx, asset)
+	}
+}
+
+// publish sends a fully-enriched and date-assigned asset on the
+// publishChan for the SaveObservations consumer to persist. Assets
+// still missing a composite_figi at this stage are dropped because
+// the asset_description table's primary key requires both ticker and
+// composite_figi. Enrichment (figi/permid/sec/zacks) and date
+// assignment must have run before this function is called.
+func (api *massiveAssetFetcher) publish(ctx context.Context, asset *data.Asset) {
+	logger := zerolog.Ctx(ctx)
 
 	if asset.CompositeFigi == "" {
 		if traceAsset(ctx, asset.Ticker) {
@@ -799,88 +1086,205 @@ type historicalAssetJob struct {
 // not race on map writes; the keep-newest-by-ValidFor invariant is
 // preserved from the previous serial loop. Workers all queue through
 // api.limiter so the API rate cap is still honoured.
-func (api *massiveAssetFetcher) walkHistoricalAssets(ctx context.Context, start, end time.Time, assetTypes []string, historicalMap map[string]*data.Asset) error {
+// updateMaxUnix atomically bumps target to candidate when candidate is
+// larger. Used by walk workers to track the most recent date that has
+// been processed (so the heartbeat can report progress in calendar
+// terms, not just job count, when workers process out of order).
+func updateMaxUnix(target *atomic.Int64, candidate int64) {
+	for {
+		current := target.Load()
+		if candidate <= current {
+			return
+		}
+
+		if target.CompareAndSwap(current, candidate) {
+			return
+		}
+	}
+}
+
+func (api *massiveAssetFetcher) walkHistoricalAssets(ctx context.Context, start, end time.Time, tracked map[string]struct{}, historicalMap map[string]*data.Asset) error {
 	logger := zerolog.Ctx(ctx)
 	workers := assetWalkConcurrency()
+
+	trackedList := make([]string, 0, len(tracked))
+	for t := range tracked {
+		trackedList = append(trackedList, t)
+	}
+
+	slices.Sort(trackedList)
 
 	logger.Info().
 		Int("Workers", workers).
 		Time("Start", start).
 		Time("End", end).
-		Strs("AssetTypes", assetTypes).
-		Msg("starting parallel historical asset walk")
+		Strs("TrackedTypes", trackedList).
+		Msg("starting parallel historical asset walk (no API-side type filter; tracked-set applied post-fetch)")
 
 	jobCh := make(chan historicalAssetJob, workers*4)
 
-	var mu sync.Mutex
+	var (
+		mu          sync.Mutex
+		failedJobs  []historicalAssetJob
+		failedJobMu sync.Mutex
+	)
 
 	walkWindowsByFigi := make(map[string]walkWindow, 16384)
 	walkWindowsByCIK := make(map[string]walkWindow, 16384)
 
-	g, gctx := errgroup.WithContext(ctx)
+	processPage := func(job historicalAssetJob, tmpAssets []*data.Asset) {
+		// Stamp ValidFor before the tracked-type filter so the filter's
+		// drop logs can report the as-of date the record was observed
+		// on. Without this the "untyped record without CIK" / "SEC
+		// could not resolve type" entries lacked any temporal anchor,
+		// making it impossible to correlate them with the heartbeat.
+		for _, a := range tmpAssets {
+			a.ValidFor = job.date
+		}
 
-	for range workers {
-		g.Go(func() error {
+		tmpAssets = filterToTrackedTypes(ctx, tmpAssets, tracked)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, a := range tmpAssets {
+			id := walkHistoricalKey(a)
+
+			existing, ok := historicalMap[id]
+			if !ok || existing.ValidFor.Before(job.date) {
+				historicalMap[id] = a
+			}
+
+			if a.CompositeFigi != "" {
+				updateWalkWindow(walkWindowsByFigi, a.Ticker+":"+a.CompositeFigi, job.date)
+			}
+
+			if a.CIK != "" {
+				updateWalkWindow(walkWindowsByCIK, a.Ticker+":"+a.CIK, job.date)
+			}
+
+			if traceAsset(ctx, a.Ticker) {
+				logger.Info().
+					Str("Stage", "walk-observation").
+					Str("Ticker", a.Ticker).
+					Str("Date", job.date.Format("2006-01-02")).
+					Str("CompositeFigi", a.CompositeFigi).
+					Str("ShareClassFigi", a.ShareClassFigi).
+					Str("CIK", a.CIK).
+					Str("Name", a.Name).
+					Str("AssetType", string(a.AssetType)).
+					Str("WalkKey", id).
+					Msg("trace: walk surfaced asset")
+			}
+		}
+	}
+
+	runWorker := func(gctx context.Context, jobsCompleted, lastCompletedUnix *atomic.Int64) func() error {
+		return func() error {
 			for job := range jobCh {
 				tmpAssets, err := fetchHistoricalAssetPage(gctx, api, job, logger)
 				if err != nil {
-					// Context errors are propagated so an outer cancel
-					// (Ctrl-C, parent run failure) still tears the walk
-					// down. Anything else means we have already retried
-					// the page and exhausted attempts; log and skip so
-					// a long backfill across thousands of (date, type)
-					// pairs is not lost to one page.
 					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 						return err
 					}
 
-					logger.Error().
+					failedJobMu.Lock()
+
+					failedJobs = append(failedJobs, job)
+					failedJobMu.Unlock()
+
+					logger.Warn().
 						Err(err).
-						Str("AssetType", job.assetType).
 						Time("Date", job.date).
-						Msg("historical asset page failed after retries; continuing walk")
+						Msg("historical asset page failed; queued for end-of-walk retry")
+
+					jobsCompleted.Add(1)
+					updateMaxUnix(lastCompletedUnix, job.date.Unix())
 
 					continue
 				}
 
-				mu.Lock()
-				for _, a := range tmpAssets {
-					a.ValidFor = job.date
-
-					id := walkHistoricalKey(a)
-
-					existing, ok := historicalMap[id]
-					if !ok || existing.ValidFor.Before(job.date) {
-						historicalMap[id] = a
-					}
-
-					if a.CompositeFigi != "" {
-						updateWalkWindow(walkWindowsByFigi, a.Ticker+":"+a.CompositeFigi, job.date)
-					}
-
-					if a.CIK != "" {
-						updateWalkWindow(walkWindowsByCIK, a.Ticker+":"+a.CIK, job.date)
-					}
-
-					if traceAsset(ctx, a.Ticker) {
-						logger.Info().
-							Str("Stage", "walk-observation").
-							Str("Ticker", a.Ticker).
-							Str("Date", job.date.Format("2006-01-02")).
-							Str("CompositeFigi", a.CompositeFigi).
-							Str("ShareClassFigi", a.ShareClassFigi).
-							Str("CIK", a.CIK).
-							Str("Name", a.Name).
-							Str("AssetType", string(a.AssetType)).
-							Str("WalkKey", id).
-							Msg("trace: walk surfaced asset")
-					}
-				}
-				mu.Unlock()
+				processPage(job, tmpAssets)
+				jobsCompleted.Add(1)
+				updateMaxUnix(lastCompletedUnix, job.date.Unix())
 			}
 
 			return nil
-		})
+		}
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+
+	// Heartbeat goroutine: emits walk progress every 30 seconds so a
+	// long backfill is never silent for more than half a minute. Reads
+	// historicalMap under mu so the count is consistent. Exits when ctx
+	// is cancelled or the done channel closes.
+	heartbeatDone := make(chan struct{})
+
+	var jobsCompleted atomic.Int64
+
+	totalJobs := 0
+
+	for d := start; d.Before(end); d = d.AddDate(0, 0, 1) {
+		if d.Weekday() != time.Saturday && d.Weekday() != time.Sunday {
+			totalJobs++
+		}
+	}
+
+	heartbeatStart := time.Now()
+
+	var lastCompletedUnix atomic.Int64
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-heartbeatDone:
+				return
+			case <-gctx.Done():
+				return
+			case <-ticker.C:
+				done := jobsCompleted.Load()
+
+				mu.Lock()
+				mapSize := len(historicalMap)
+				mu.Unlock()
+
+				failedJobMu.Lock()
+				failedSoFar := len(failedJobs)
+				failedJobMu.Unlock()
+
+				lastDate := "—"
+				if u := lastCompletedUnix.Load(); u > 0 {
+					lastDate = time.Unix(u, 0).UTC().Format("2006-01-02")
+				}
+
+				eta := "—"
+				elapsed := time.Since(heartbeatStart)
+
+				if done > 0 && int(done) < totalJobs {
+					perJob := elapsed / time.Duration(done)
+					remaining := totalJobs - int(done)
+					eta = (perJob * time.Duration(remaining)).Round(time.Second).String()
+				}
+
+				logger.Info().
+					Int64("DatesDone", done).
+					Int("DatesTotal", totalJobs).
+					Str("LastCompletedDate", lastDate).
+					Int("HistoricalMapSize", mapSize).
+					Int("FailedQueued", failedSoFar).
+					Str("Elapsed", elapsed.Round(time.Second).String()).
+					Str("ETA", eta).
+					Msg("walk heartbeat")
+			}
+		}
+	}()
+
+	for range workers {
+		g.Go(runWorker(gctx, &jobsCompleted, &lastCompletedUnix))
 	}
 
 	g.Go(func() error {
@@ -891,20 +1295,57 @@ func (api *massiveAssetFetcher) walkHistoricalAssets(ctx context.Context, start,
 				continue
 			}
 
-			for _, assetType := range assetTypes {
-				select {
-				case jobCh <- historicalAssetJob{date: d, assetType: assetType}:
-				case <-gctx.Done():
-					return gctx.Err()
-				}
+			select {
+			case jobCh <- historicalAssetJob{date: d}:
+			case <-gctx.Done():
+				return gctx.Err()
 			}
 		}
 
 		return nil
 	})
 
-	if err := g.Wait(); err != nil {
+	err := g.Wait()
+
+	close(heartbeatDone)
+
+	if err != nil {
 		return err
+	}
+
+	if len(failedJobs) > 0 {
+		logger.Warn().
+			Int("FailedJobs", len(failedJobs)).
+			Msg("historical walk retrying failed pages serially")
+
+		var stillFailed []historicalAssetJob
+
+		for _, job := range failedJobs {
+			tmpAssets, err := fetchHistoricalAssetPage(ctx, api, job, logger)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err
+				}
+
+				stillFailed = append(stillFailed, job)
+
+				continue
+			}
+
+			processPage(job, tmpAssets)
+		}
+
+		if len(stillFailed) > 0 {
+			dates := make([]string, 0, len(stillFailed))
+			for _, j := range stillFailed {
+				dates = append(dates, j.date.Format("2006-01-02"))
+			}
+
+			return fmt.Errorf("%w: %d historical asset pages still failing after end-of-walk retry: %s",
+				ErrHistoricalWalkIncomplete, len(stillFailed), strings.Join(dates, ","))
+		}
+
+		logger.Info().Int("Recovered", len(failedJobs)).Msg("end-of-walk retry recovered all failed pages")
 	}
 
 	// Publish the walk-derived windows for assetDetail post-processing.
@@ -1244,14 +1685,30 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string, as
 	req := api.client.R().
 		SetQueryParam("market", "stocks").
 		SetQueryParam("active", "true").
-		SetQueryParam("type", assetType).
 		SetQueryParam("limit", "1000").
 		SetResult(&respContent)
+
+	if assetType != "" {
+		req = req.SetQueryParam("type", assetType)
+	}
 
 	asOfStr := ""
 	if !asOfDate.IsZero() {
 		asOfStr = asOfDate.Format("2006-01-02")
 		req = req.SetQueryParam("date", asOfStr)
+	}
+
+	// Scope the walk to a single ticker when --ticker is set so a
+	// targeted backfill doesn't fetch thousands of irrelevant rows
+	// per snapshot date. The post-walk security filter still runs as
+	// a defence-in-depth check; this is purely a server-side prune.
+	//
+	// Massive uses `.` notation for class-share tickers (BF.A) while
+	// the rest of pvdata uses `/` (BF/A). Convert back before the API
+	// call so class-share filters actually match.
+	tickerFilter, _ := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" {
+		req = req.SetQueryParam("ticker", pvTicker2MassiveTicker(tickerFilter))
 	}
 
 	logger.Info().
@@ -1261,6 +1718,7 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string, as
 		Str("AssetType", assetType).
 		Str("Limit", "1000").
 		Str("AsOfDate", asOfStr).
+		Str("TickerFilter", tickerFilter).
 		Msg("massive reference/tickers initial request")
 
 	resp, err := req.Get(tickersURL)
@@ -1357,31 +1815,34 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 		}
 	}
 
-	// Apply walk-derived dates first so figi.Enrich sees the correct
-	// DelistingDate on walk-discovered predecessors like Blockbuster
-	// (BBI 1999-2010). Without this, predecessor rows still carry an
-	// empty DelistingDate at this point, figi.Enrich's OpenFIGI step
-	// runs and finds nothing (the predecessor's composite is long
-	// gone from OpenFIGI), the synthetic-from-CIK step is skipped
-	// because it gates on DelistingDate, and the asset is dropped a
-	// few lines below with "skipping ticker due to unknown figi".
+	// Assign dates first so figi.Enrich sees the correct DelistingDate
+	// on walk-discovered predecessors like Blockbuster (BBI 1999-2010).
+	// Without this, predecessor rows still carry an empty DelistingDate
+	// at this point, figi.Enrich's OpenFIGI step runs and finds nothing
+	// (the predecessor's composite is long gone from OpenFIGI), the
+	// synthetic-from-CIK step is skipped because it gates on
+	// DelistingDate, and the asset is dropped a few lines below with
+	// "skipping ticker due to unknown figi". The same assignDates call
+	// runs again from publish() after FIGI is filled in; assignDates is
+	// deterministic on its inputs and the SEC-submissions cache makes
+	// the repeat call free.
 	for _, asset := range toEnrich {
-		api.applyWalkDerivedDates(asset)
+		api.assignDates(ctx, asset)
 
 		if traceAsset(ctx, asset.Ticker) {
 			logger.Info().
-				Str("Stage", "post-applyWalkDerivedDates").
+				Str("Stage", "post-assignDates-pre-figi").
 				Str("Ticker", asset.Ticker).
 				Str("CompositeFigi", asset.CompositeFigi).
 				Str("CIK", asset.CIK).
 				Str("ListingDate", asset.ListingDate).
 				Str("DelistingDate", asset.DelistingDate).
-				Msg("trace: applyWalkDerivedDates result")
+				Msg("trace: assignDates result before figi.Enrich")
 		}
 	}
 
 	log.Debug().Int("NumAssetsToEnrich", len(toEnrich)).Msg("Enriching assets with FIGI")
-	figi.Enrich(ctx, toEnrich...)
+	api.enrichFigi(ctx, toEnrich...)
 
 	for _, asset := range toEnrich {
 		if !traceAsset(ctx, asset.Ticker) {
@@ -1448,7 +1909,17 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 			return nil, err
 		}
 
-		if lastUpdated.Before(asset.LastUpdated) {
+		// In a daily run, skip rows whose DB last_updated is at or
+		// after the API's last_updated_utc — they're already current.
+		// In a backfill, refresh regardless: the walk may have
+		// discovered new history (predecessor windows, etc.) even
+		// when the API row itself looks unchanged, and earlier runs
+		// may have stamped last_updated with time.Now() via the
+		// possibleInactive path, which would otherwise pin the row
+		// forever.
+		backfill := api.walkEnd.Sub(api.walkStart) > defaultAssetLookback
+
+		if lastUpdated.Before(asset.LastUpdated) || backfill {
 			assetUpdate = append(assetUpdate, asset)
 
 			if traceAsset(ctx, asset.Ticker) {
@@ -1458,7 +1929,8 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 					Str("CompositeFigi", asset.CompositeFigi).
 					Time("DBLastUpdated", lastUpdated).
 					Time("APILastUpdated", asset.LastUpdated).
-					Msg("trace: DB row exists but API is newer; queued in assetUpdate (subject to 100-cap)")
+					Bool("Backfill", backfill).
+					Msg("trace: DB row exists; queued in assetUpdate")
 			}
 		} else if traceAsset(ctx, asset.Ticker) {
 			logger.Info().
@@ -1483,9 +1955,18 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 		}
 	})
 
-	// limit updates to a max of 100 assets
+	// Daily-run cap: refresh at most dailyRunUpdateCap stale rows so a
+	// routine 14-day catch-up doesn't churn through the entire DB. On
+	// a backfill (walk span > defaultAssetLookback, i.e. the operator
+	// passed --start-date or a long --lookback) the cap is dropped:
+	// predecessor rediscovery is the point of the run and capping it
+	// would leave thousands of stale rows uncorrected.
 	assetUpdateLen := len(assetUpdate)
-	numAssetsToUpdate := int(math.Min(float64(assetUpdateLen), 100))
+	numAssetsToUpdate := assetUpdateLen
+
+	if api.walkEnd.Sub(api.walkStart) <= defaultAssetLookback {
+		numAssetsToUpdate = int(math.Min(float64(assetUpdateLen), dailyRunUpdateCap))
+	}
 
 	if numAssetsToUpdate > 0 {
 		assetDetail = append(assetDetail, assetUpdate[:numAssetsToUpdate]...)
@@ -1631,114 +2112,149 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 
 	deactivated := make(map[string]*data.Asset, len(inactiveMap))
 
-	for _, assetType := range []string{"CS", "ADRC", "ETF"} {
-		// query massive for inactive assets
-		var respContent massiveResponse
+	// Query Massive for inactive assets without an API-side type
+	// filter; the post-fetch trackedTypeSet allowlist mirrors the live
+	// walk so the two passes agree on which records to consider.
+	tracked := trackedTypeSet(ctx)
+
+	var respContent massiveResponse
+
+	if err := api.limiter.Wait(ctx); err != nil {
+		return err
+	}
+
+	const tickersURL = "https://api.massive.com/v3/reference/tickers"
+
+	tickerFilter, _ := provider.SecurityFilterFromContext(ctx)
+
+	logger.Info().
+		Str("URL", tickersURL).
+		Str("Active", "false").
+		Str("Sort", "last_updated_utc").
+		Str("Order", "desc").
+		Str("Limit", "1000").
+		Str("TickerFilter", tickerFilter).
+		Msg("massive reference/tickers initial request (inactive lookup, no type filter)")
+
+	req := api.client.R().
+		SetQueryParam("active", "false").
+		SetQueryParam("sort", "last_updated_utc").
+		SetQueryParam("order", "desc").
+		SetQueryParam("limit", "1000").
+		SetResult(&respContent)
+
+	if tickerFilter != "" {
+		req = req.SetQueryParam("ticker", pvTicker2MassiveTicker(tickerFilter))
+	}
+
+	resp, err := req.Get(tickersURL)
+	if err != nil {
+		logger.Error().Err(err).Msg("error when retrieving inactive assets")
+	}
+
+	// limit the number of queries as a safety precaution to ensure
+	// that we are not in an infinite loop
+	maxQueries := 300
+	updatedCount := 0
+
+	for ii := 0; ii < maxQueries; ii++ {
+		if resp.StatusCode() >= 300 {
+			logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
+				Str("URL", "https://api.massive.com/v3/reference/tickers").
+				Msg("received an invalid status code when querying massive reference/tickers endpoint")
+
+			return fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
+		}
+
+		// de-serealize stock content
+		massiveAssets := make([]*massiveStock, 0, 1000)
+		if err := json.Unmarshal(*respContent.Results, &massiveAssets); err != nil {
+			log.Error().Err(err).Msg("json unmarshal of massive assets failed")
+			return err
+		}
+
+		logger.Debug().Int("ReceivedNAssets", len(massiveAssets)).Msg("got inactive tickers")
+
+		// Apply the post-fetch tracked-type allowlist. Build skinny
+		// data.Asset records carrying only the fields the filter needs
+		// (Ticker, CompositeFigi, AssetType, CIK), then pair each kept
+		// record back to its raw massiveStock so we can read the
+		// DelistDate / LastUpdated fields the filter doesn't touch.
+		pageAssets := make([]*data.Asset, 0, len(massiveAssets))
+		rawByKey := make(map[string]*massiveStock, len(massiveAssets))
+
+		for _, ms := range massiveAssets {
+			pvTicker := massiveTicker2PvTicker(ms.Ticker)
+			pageAssets = append(pageAssets, &data.Asset{
+				Ticker:        pvTicker,
+				CompositeFigi: ms.CompositeFIGI,
+				AssetType:     data.AssetType(ms.Type),
+				CIK:           ms.CIK,
+			})
+			rawByKey[pvTicker+":"+ms.CompositeFIGI] = ms
+		}
+
+		pageAssets = filterToTrackedTypes(ctx, pageAssets, tracked)
+
+		for _, asset := range pageAssets {
+			inactiveAsset, ok := inactiveMap[asset.ID()]
+			if !ok {
+				continue
+			}
+
+			raw, ok := rawByKey[asset.Ticker+":"+asset.CompositeFigi]
+			if !ok {
+				continue
+			}
+
+			lastUpdated, err := time.Parse(time.RFC3339, raw.LastUpdated)
+			if err != nil {
+				logger.Error().Err(err).Str("Ticker", raw.Ticker).Msg("could not parse last updated string for tickers")
+			}
+
+			lastUpdated = lastUpdated.In(nyc)
+
+			inactiveAsset.DelistingDate = strings.Split(raw.DelistDate, "T")[0]
+			inactiveAsset.LastUpdated = lastUpdated
+			inactiveAsset.Active = false
+			deactivated[asset.ID()] = inactiveAsset
+			api.publish(ctx, inactiveAsset)
+
+			updatedCount++
+		}
+
+		// check if all results have been returned
+		if respContent.Next == "" || updatedCount >= len(inactive) {
+			break
+		}
+
+		// get next result
+		next := respContent.Next
+		respContent.Next = ""
+
+		logger.Debug().Str("Next", next).Int("ii", ii).Msg("making next query")
 
 		if err := api.limiter.Wait(ctx); err != nil {
 			return err
 		}
 
-		const tickersURL = "https://api.massive.com/v3/reference/tickers"
-
-		logger.Info().
-			Str("URL", tickersURL).
-			Str("Active", "false").
-			Str("Sort", "last_updated_utc").
-			Str("Order", "desc").
-			Str("Limit", "1000").
-			Str("AssetType", assetType).
-			Msg("massive reference/tickers initial request (inactive lookup)")
-
-		resp, err := api.client.R().
-			SetQueryParam("active", "false").
-			SetQueryParam("sort", "last_updated_utc").
-			SetQueryParam("order", "desc").
-			SetQueryParam("limit", "1000").
-			SetQueryParam("type", assetType).
+		resp, err = api.client.R().
 			SetResult(&respContent).
-			Get(tickersURL)
+			Get(next)
 		if err != nil {
-			logger.Error().Err(err).Msg("error when retrieving inactive assets")
-		}
-
-		// limit the number of queries as a safety precaution to ensure
-		// that we are not in an infinite loop
-		maxQueries := 300
-		updatedCount := 0
-
-		for ii := 0; ii < maxQueries; ii++ {
-			if resp.StatusCode() >= 300 {
-				logger.Error().Int("StatusCode", resp.StatusCode()).Str("ResponseBody", string(resp.Body())).
-					Str("URL", "https://api.massive.com/v3/reference/tickers").
-					Msg("received an invalid status code when querying massive reference/tickers endpoint")
-
-				return fmt.Errorf("%w (%d): %s", ErrInvalidStatusCode, resp.StatusCode(), string(resp.Body()))
-			}
-
-			// de-serealize stock content
-			massiveAssets := make([]*massiveStock, 0, 1000)
-			if err := json.Unmarshal(*respContent.Results, &massiveAssets); err != nil {
-				log.Error().Err(err).Msg("json unmarshal of massive assets failed")
-				return err
-			}
-
-			logger.Debug().Int("ReceivedNAssets", len(massiveAssets)).Msg("got inactive tickers")
-
-			for _, massiveAsset := range massiveAssets {
-				lastUpdated, err := time.Parse(time.RFC3339, massiveAsset.LastUpdated)
-				if err != nil {
-					logger.Error().Err(err).Str("Ticker", massiveAsset.Ticker).Msg("could not parse last updated string for tickers")
-				}
-
-				lastUpdated = lastUpdated.In(nyc)
-
-				asset := data.Asset{
-					Ticker:        massiveTicker2PvTicker(massiveAsset.Ticker),
-					CompositeFigi: massiveAsset.CompositeFIGI,
-				}
-
-				// lookup the completely filled out asset and update its values
-				// publish the updated asset
-				if inactiveAsset, ok := inactiveMap[asset.ID()]; ok {
-					inactiveAsset.DelistingDate = strings.Split(massiveAsset.DelistDate, "T")[0]
-					inactiveAsset.LastUpdated = lastUpdated
-					inactiveAsset.Active = false
-					deactivated[asset.ID()] = inactiveAsset
-					api.publish(ctx, inactiveAsset)
-
-					updatedCount++
-				}
-			}
-
-			// check if all results have been returned
-			if respContent.Next == "" || updatedCount >= len(inactive) {
-				break
-			}
-
-			// get next result
-			next := respContent.Next
-			respContent.Next = ""
-
-			logger.Debug().Str("Next", next).Int("ii", ii).Msg("making next query")
-
-			if err := api.limiter.Wait(ctx); err != nil {
-				return err
-			}
-
-			resp, err = api.client.R().
-				SetResult(&respContent).
-				Get(next)
-			if err != nil {
-				logger.Error().Err(err).Msg("resty returned an error when querying reference/tickers")
-				return err
-			}
+			logger.Error().Err(err).Msg("resty returned an error when querying reference/tickers")
+			return err
 		}
 	}
 
 	// find the disjoint set of Assets that are possibly inactive and those
 	// that were deactivated. Assets can only appear in the aforementioned set
-	// for a limited period of time before we mark them as inactive
+	// for a limited period of time before we mark them as inactive.
+	//
+	// When the stale row had no DelistingDate, publish() / assignDates
+	// will pull it from the walk window (lastSeen + 1 trading day) so
+	// the asset never lands with active=false and a missing delisting
+	// date.
 	for _, possibleInactiveAsset := range inactiveMap {
 		if _, ok := deactivated[possibleInactiveAsset.ID()]; !ok {
 			// asset was not de-activated ... check to see how old it is
@@ -1748,6 +2264,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 				// inactive
 				possibleInactiveAsset.LastUpdated = time.Now().In(nyc)
 				possibleInactiveAsset.Active = false
+
 				api.publish(ctx, possibleInactiveAsset)
 			}
 		}
@@ -1774,6 +2291,16 @@ func (api *massiveAssetFetcher) assetDetails(ctx context.Context, assets []*data
 	jobCh := make(chan *data.Asset, workers*4)
 	progressLogger := newDetailsProgressLogger(logger, total)
 
+	// Phase 1: fan out asset-detail fetches and per-asset enrichments
+	// in parallel, accumulating the enriched assets into a single
+	// slice. Date assignment is intentionally not done here so that
+	// Phase 2 can group same-ticker assets together and let
+	// AssignDatesForTicker apply cross-asset reconciliation.
+	var (
+		resultsMu sync.Mutex
+		results   = make([]*data.Asset, 0, len(assets))
+	)
+
 	g, gctx := errgroup.WithContext(ctx)
 
 	for range workers {
@@ -1795,7 +2322,13 @@ func (api *massiveAssetFetcher) assetDetails(ctx context.Context, assets []*data
 					continue
 				}
 
-				api.publish(gctx, fullAsset)
+				api.enrichForPublish(gctx, fullAsset)
+
+				resultsMu.Lock()
+
+				results = append(results, fullAsset)
+				resultsMu.Unlock()
+
 				progressLogger.tick()
 			}
 
@@ -1819,6 +2352,33 @@ func (api *massiveAssetFetcher) assetDetails(ctx context.Context, assets []*data
 
 	if err := g.Wait(); err != nil {
 		logger.Error().Err(err).Msg("asset-details fan-out aborted")
+
+		return
+	}
+
+	// Phase 2: group enriched assets by ticker so AssignDatesForTicker
+	// sees every same-ticker asset together. Ticker groups with more
+	// than one asset are the cross-asset reconciliation cases (e.g.
+	// BBI = Blockbuster + Brickell). Single-asset groups still flow
+	// through assignDatesForGroup because the algorithm's other
+	// safeguards (priority order, edge buffers, listing-before-
+	// delisting) apply in either case.
+	groups := make(map[string][]*data.Asset, len(results))
+	for _, a := range results {
+		groups[a.Ticker] = append(groups[a.Ticker], a)
+	}
+
+	logger.Info().
+		Int("EnrichedAssets", len(results)).
+		Int("TickerGroups", len(groups)).
+		Msg("asset-details Phase 1 complete; starting date assignment and publish")
+
+	for _, group := range groups {
+		api.assignDatesForGroup(ctx, group)
+
+		for _, a := range group {
+			api.publish(ctx, a)
+		}
 	}
 }
 
@@ -1868,16 +2428,19 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 	var respContent massiveResponse
 
 	logger := zerolog.Ctx(ctx)
-	detailsURL := fmt.Sprintf("https://api.massive.com/v3/reference/tickers/%s", asset.Ticker)
+	detailsURL := fmt.Sprintf("https://api.massive.com/v3/reference/tickers/%s", pvTicker2MassiveTicker(asset.Ticker))
 
-	if traceAsset(ctx, asset.Ticker) {
-		logger.Info().
-			Str("Stage", "assetDetail-entry").
-			Str("Ticker", asset.Ticker).
-			Str("CompositeFigi", asset.CompositeFigi).
-			Time("ValidFor", asset.ValidFor).
-			Msg("trace: calling /v3/reference/tickers details endpoint")
+	validForStr := ""
+	if !asset.ValidFor.IsZero() {
+		validForStr = asset.ValidFor.Format("2006-01-02")
 	}
+
+	logger.Info().
+		Str("Ticker", asset.Ticker).
+		Str("CompositeFigi", asset.CompositeFigi).
+		Str("CIK", asset.CIK).
+		Str("ValidFor", validForStr).
+		Msg("massive asset-detail request")
 
 	if err := api.limiter.Wait(ctx); err != nil {
 		return nil, err
@@ -1916,6 +2479,30 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		return nil, err
 	}
 
+	logger.Info().
+		Str("Ticker", massiveAsset.Ticker).
+		Str("Name", massiveAsset.Name).
+		Str("Type", massiveAsset.Type).
+		Str("CIK", massiveAsset.CIK).
+		Str("CompositeFigi", massiveAsset.CompositeFIGI).
+		Str("ListDate", massiveAsset.ListDate).
+		Str("DelistDate", massiveAsset.DelistDate).
+		Bool("Active", massiveAsset.Active).
+		Str("ValidFor", validForStr).
+		Msg("massive asset-detail response")
+
+	// Predecessor delisted bound from same-ticker successor's list_date.
+	// When the historical detail describes a predecessor entity (no
+	// composite_figi returned, ValidFor in the past), check whether the
+	// current /tickers/{ticker} endpoint describes a successor entity
+	// (different CIK). If so, that successor's list_date is the true
+	// boundary at which the predecessor stopped trading under this
+	// ticker. Without this, the walk-derived delisted (lastSeen+1) lags
+	// the snapshot transition and overlaps the successor's listed
+	// window (e.g. AA: snapshot shows Alcoa Inc through 2016-10-31 but
+	// Alcoa Corp's list_date is 2016-10-18, the real split date).
+	successorDelistDate := api.lookupSuccessorBoundary(ctx, asset.Ticker, massiveAsset.CIK, massiveAsset.CompositeFIGI, asset.ValidFor)
+
 	location := ""
 	if massiveAsset.Address.City != "" {
 		location = fmt.Sprintf("%s, %s", massiveAsset.Address.City, massiveAsset.Address.State)
@@ -1937,6 +2524,8 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 			return nil, err
 		}
 
+		logger.Debug().Str("Ticker", asset.Ticker).Str("URL", massiveAsset.Branding.IconURL).Msg("massive: GET icon")
+
 		resp, err := api.client.R().Get(massiveAsset.Branding.IconURL)
 		if err != nil {
 			logger.Error().Err(err).Msg("error when fetching asset icon")
@@ -1956,6 +2545,8 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		if err := api.limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
+
+		logger.Debug().Str("Ticker", asset.Ticker).Str("URL", massiveAsset.Branding.LogoURL).Msg("massive: GET logo")
 
 		resp, err := api.client.R().Get(massiveAsset.Branding.LogoURL)
 		if err != nil {
@@ -1991,15 +2582,41 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		cik = asset.CIK
 	}
 
+	// Preserve the upstream-resolved AssetType when Massive's details
+	// response omits the `type` field. This is the common case for
+	// long-delisted tickers (e.g. AABC, ABCW pre-2010): the bulk
+	// /v3/reference/tickers endpoint returns no type at all, walk-time
+	// filterToTrackedTypes promotes the asset via sec.ResolveAssetType,
+	// and we MUST carry that resolution through. Without this fallback
+	// the AssetType lands as "" in the DB and PostgreSQL rejects the
+	// row with "invalid input value for enum assettype".
+	resolvedType := data.AssetType(strings.TrimSpace(massiveAsset.Type))
+	if resolvedType == "" {
+		resolvedType = asset.AssetType
+	}
+
+	pvTicker := massiveTicker2PvTicker(massiveAsset.Ticker)
+
+	// A successor-derived delisted means we definitively know the
+	// predecessor is no longer trading under this ticker. Massive's
+	// historical snapshot at ValidFor still reports active=true (it
+	// reflects the as-of-date state, when the predecessor was alive),
+	// so without this override the row would land in the DB as
+	// active=true.
+	active := massiveAsset.Active
+	if strings.TrimSpace(successorDelistDate) != "" {
+		active = false
+	}
+
 	assetDetail := &data.Asset{
-		Ticker:               massiveTicker2PvTicker(massiveAsset.Ticker),
+		Ticker:               pvTicker,
 		CompositeFigi:        massiveAsset.CompositeFIGI,
 		ShareClassFigi:       massiveAsset.ShareClassFIGI,
 		Name:                 massiveAsset.Name,
 		Description:          massiveAsset.Description,
-		Active:               massiveAsset.Active,
+		Active:               active,
 		PrimaryExchange:      massiveExchangeMap[massiveAsset.PrimaryExchange],
-		AssetType:            data.AssetType(massiveAsset.Type),
+		AssetType:            resolvedType,
 		HeadquartersLocation: location,
 		CIK:                  cik,
 		OrganizationPermID:   asset.OrganizationPermID,
@@ -2010,12 +2627,17 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		IconMimeType:         iconMimeType,
 		Logo:                 logo,
 		LogoMimeType:         logoMimeType,
-		ListingDate:          massiveAsset.ListDate,
+		ListingDate:          api.cleanedListDate(ctx, massiveAsset, pvTicker, cik),
+		DelistingDate:        successorDelistDate,
 		LastUpdated:          asset.LastUpdated,
-		ValidFor:             asset.ValidFor,
+		// When we resolved the predecessor's delisted via a current
+		// successor lookup, the assertion is fresh — not a stale
+		// historical observation. Bump ValidFor to now so SaveDB's
+		// stale-observation guard (data/asset.go: delisted CASE) does
+		// not preserve a previously-written, less-accurate delisted
+		// value.
+		ValidFor: pickValidFor(asset.ValidFor, successorDelistDate),
 	}
-
-	api.applyWalkDerivedDates(assetDetail)
 
 	if traceAsset(ctx, assetDetail.Ticker) {
 		logger.Info().
@@ -2034,34 +2656,181 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 	return assetDetail, nil
 }
 
-// walkDerivedBufferDays is how many calendar days the walk-derived
-// cutoff backs off from the walk boundaries before declaring an
-// asset listed/delisted. Sized to absorb the longest market closures
-// we expect to see in a continuous walk: regular long weekends
-// (Thanksgiving Thu–Sun is 4 calendar days), Christmas/NYE clusters
-// when the holiday falls on a Friday, and unscheduled closures like
-// Hurricane Sandy in October 2012 (markets closed 5 days). 14 days
-// gives comfortable margin around all of these so an actively-traded
-// asset is never falsely flagged as delisted just because the walk
-// happened to land right after a long closure.
-const walkDerivedBufferDays = 14
+// pickValidFor returns asset.ValidFor in the common case, or time.Now()
+// when a successor-derived delisting date was resolved. The bump is
+// required because SaveDB guards delisted against being overwritten by
+// observations whose ValidFor predates the stored delisted; the
+// successor lookup is current information, not a stale snapshot, so the
+// guard should not apply.
+func pickValidFor(walkValidFor time.Time, successorDelistDate string) time.Time {
+	if strings.TrimSpace(successorDelistDate) == "" {
+		return walkValidFor
+	}
 
-// applyWalkDerivedDates fills ListingDate / DelistingDate on asset
-// from the historical-walk windows when assetDetail did not provide
-// them. The per-ticker details endpoint is authoritative when it
-// returns data; this fallback covers entities whose details endpoint
-// omits a listing or delisting timestamp (typical for long-delisted
-// tickers where the per-ticker endpoint returns NOT_FOUND or sparse
-// fields).
+	return time.Now()
+}
+
+// lookupSuccessorBoundary returns the list_date of a same-ticker
+// successor entity when the predecessor at predecessorCIK has been
+// superseded under the same ticker symbol. Returns "" when the input
+// does not look like a predecessor query, when the current-entity
+// lookup fails, or when no distinct successor exists.
 //
-// Lookup is tried first by ticker:composite_figi and then by
-// ticker:cik. The CIK fallback covers the case where the walk
-// observed the asset with an empty list-response FIGI (so the
-// FIGI-keyed index missed it) but assetDetail has since filled in
-// the FIGI — CIK is stable across the two responses.
-func (api *massiveAssetFetcher) applyWalkDerivedDates(asset *data.Asset) {
-	if api.walkWindowsByFigi == nil && api.walkWindowsByCIK == nil {
-		return
+// Predecessor detection: the historical detail returned no composite
+// FIGI and the caller queried a non-zero ValidFor in the past. A
+// "successor" is the entity returned by the current /tickers/{ticker}
+// endpoint (no date) whose CIK differs from predecessorCIK; its
+// list_date is by construction the boundary at which the new entity
+// took over the ticker, and therefore the predecessor's delisted.
+func (api *massiveAssetFetcher) lookupSuccessorBoundary(ctx context.Context, ticker, predecessorCIK, predecessorComposite string, validFor time.Time) string {
+	if validFor.IsZero() || predecessorComposite != "" {
+		return ""
+	}
+
+	logger := zerolog.Ctx(ctx)
+
+	if err := api.limiter.Wait(ctx); err != nil {
+		return ""
+	}
+
+	var respContent massiveResponse
+
+	detailsURL := fmt.Sprintf("https://api.massive.com/v3/reference/tickers/%s", pvTicker2MassiveTicker(ticker))
+
+	logger.Debug().Str("Ticker", ticker).Str("URL", detailsURL).Msg("massive: GET current details (successor boundary lookup)")
+
+	resp, err := api.client.R().SetResult(&respContent).Get(detailsURL)
+	if err != nil || resp.StatusCode() >= 300 || respContent.Results == nil {
+		return ""
+	}
+
+	var current massiveStock
+	if err := json.Unmarshal(*respContent.Results, &current); err != nil {
+		return ""
+	}
+
+	if current.CIK == "" || current.CIK == predecessorCIK {
+		return ""
+	}
+
+	listDate := strings.TrimSpace(current.ListDate)
+	if listDate == "" {
+		return ""
+	}
+
+	// Predecessor's last trading day is the trading day immediately
+	// before successor.listed (the successor's first trading day).
+	// Calendar minus one is wrong when listed is a Monday or
+	// post-holiday — the predecessor's true last trading day is the
+	// previous Friday or the day before the holiday. Without this,
+	// `delisted` lands on a non-trading day that no minute-bar can
+	// match against and the semantic last-trading-day is wrong.
+	parsed, err := time.Parse("2006-01-02", listDate)
+	if err != nil {
+		return ""
+	}
+
+	predecessorDelisted := api.previousTradingDay(ctx, parsed)
+	if predecessorDelisted == "" {
+		return ""
+	}
+
+	if traceAsset(ctx, ticker) {
+		logger.Info().
+			Str("Stage", "lookupSuccessorBoundary").
+			Str("Ticker", ticker).
+			Str("PredecessorCIK", predecessorCIK).
+			Str("SuccessorCIK", current.CIK).
+			Str("SuccessorListDate", listDate).
+			Str("PredecessorDelisted", predecessorDelisted).
+			Msg("trace: successor list_date discovered, predecessor delisted = previous trading day")
+	}
+
+	return predecessorDelisted
+}
+
+// previousTradingDay returns the trading day immediately before t,
+// formatted as YYYY-MM-DD. Uses the database's trading_days() function
+// to respect both weekends and market holidays. Returns "" on error or
+// when no trading day is found in the 14-day lookback window (long
+// enough to clear Thanksgiving / Christmas clusters).
+func (api *massiveAssetFetcher) previousTradingDay(ctx context.Context, t time.Time) string {
+	pool := api.subscription.Library.Pool
+	if pool == nil {
+		return ""
+	}
+
+	start := t.AddDate(0, 0, -14)
+	end := t.AddDate(0, 0, -1)
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return ""
+	}
+	defer conn.Release()
+
+	var prev time.Time
+
+	err = conn.QueryRow(ctx,
+		`SELECT dt FROM trading_days($1::date, $2::date) AS dt ORDER BY dt DESC LIMIT 1`,
+		start, end,
+	).Scan(&prev)
+	if err != nil {
+		return ""
+	}
+
+	return prev.Format("2006-01-02")
+}
+
+// cleanedListDate returns massiveAsset.ListDate, or "" when the value
+// is inconsistent with what the walk has already observed about the
+// asset. Massive's per-ticker details endpoint sometimes returns the
+// successor entity's list_date alongside the predecessor's CIK and
+// name on dates near a corporate event (verified on AA at 2016-10-25
+// returning list_date=2016-10-18 with cik=0000004281, describing
+// Alcoa Inc rather than Alcoa Corp). Without this guard the bad
+// list_date overwrites applyWalkDerivedDates' fallback and predecessor
+// bars before list_date drop from FIGIAt lookups.
+//
+// Invariant: a list_date cannot be later than the date the walk first
+// observed this asset in snapshots. CIK is preferred over composite
+// FIGI because the snapshot endpoint populates CIK consistently while
+// composite FIGI is sometimes absent on historical rows.
+// massiveListDateSentinels are values Massive returns as a stand-in
+// for "list_date unknown" rather than a real first-trading day. They
+// are rejected before the walk-window check so they neither pollute
+// the catalog nor block the walk-derived fallback. Verified examples:
+//
+//   - 1899-12-30 (Excel 1900-system epoch) — observed on BF/A despite
+//     Brown-Forman's true listing being 1933.
+//   - 1972-06-01 — 174 records share this date, including AAL, ADI,
+//     AIR, AVY, ALK etc. that all IPO'd in different years.
+var massiveListDateSentinels = map[string]struct{}{
+	"1899-12-30": {},
+	"1972-06-01": {},
+}
+
+func (api *massiveAssetFetcher) cleanedListDate(ctx context.Context, massiveAsset massiveStock, pvTicker, cik string) string {
+	raw := strings.TrimSpace(massiveAsset.ListDate)
+	if raw == "" {
+		return ""
+	}
+
+	if _, ok := massiveListDateSentinels[raw]; ok {
+		if traceAsset(ctx, pvTicker) {
+			zerolog.Ctx(ctx).Info().
+				Str("Stage", "cleanedListDate-sentinel").
+				Str("Ticker", pvTicker).
+				Str("ListDate", raw).
+				Msg("trace: rejecting known Massive list_date sentinel")
+		}
+
+		return ""
+	}
+
+	listDate, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return raw
 	}
 
 	var (
@@ -2069,40 +2838,66 @@ func (api *massiveAssetFetcher) applyWalkDerivedDates(asset *data.Asset) {
 		ok  bool
 	)
 
-	if asset.CompositeFigi != "" && api.walkWindowsByFigi != nil {
-		win, ok = api.walkWindowsByFigi[asset.Ticker+":"+asset.CompositeFigi]
+	if cik != "" && api.walkWindowsByCIK != nil {
+		win, ok = api.walkWindowsByCIK[pvTicker+":"+cik]
 	}
 
-	if !ok && asset.CIK != "" && api.walkWindowsByCIK != nil {
-		win, ok = api.walkWindowsByCIK[asset.Ticker+":"+asset.CIK]
+	if !ok && massiveAsset.CompositeFIGI != "" && api.walkWindowsByFigi != nil {
+		win, ok = api.walkWindowsByFigi[pvTicker+":"+massiveAsset.CompositeFIGI]
 	}
 
-	if !ok {
-		return
+	reject := ok && !win.firstSeen.IsZero() && listDate.After(win.firstSeen)
+
+	if traceAsset(ctx, pvTicker) {
+		zerolog.Ctx(ctx).Info().
+			Str("Stage", "cleanedListDate").
+			Str("Ticker", pvTicker).
+			Str("CIK", cik).
+			Str("CompositeFigi", massiveAsset.CompositeFIGI).
+			Str("ListDate", raw).
+			Bool("WindowFound", ok).
+			Time("FirstSeen", win.firstSeen).
+			Time("LastSeen", win.lastSeen).
+			Bool("Reject", reject).
+			Msg("trace: cleanedListDate evaluation")
 	}
 
-	buffer := time.Duration(walkDerivedBufferDays) * 24 * time.Hour
-
-	if asset.DelistingDate == "" {
-		if win.lastSeen.Before(api.walkEnd.Add(-buffer)) {
-			asset.DelistingDate = win.lastSeen.AddDate(0, 0, 1).Format("2006-01-02")
-		}
+	if !reject {
+		return raw
 	}
 
-	if asset.ListingDate == "" {
-		if win.firstSeen.After(api.walkStart.Add(buffer)) {
-			asset.ListingDate = win.firstSeen.Format("2006-01-02")
-		}
-	}
+	return ""
 }
+
+// applyWalkDerivedDates fills ListingDate / DelistingDate on asset
+// from the historical-walk windows when assetDetail did not provide
+// them. The per-ticker details endpoint is authoritative when it
+// returns data; this fallback covers entities whose details endpoint
+// omits a listing or delisting timestamp (typical for long-delisted
+// tickers where the per-ticker endpoint returns NOT_FOUND or sparse
+// fields). All listing and delisting date decisions now flow through
+// AssignDatesForTicker (see date_assignment.go / date_assignment_wiring.go).
 
 func massiveTicker2PvTicker(ticker string) string {
 	return strings.ReplaceAll(ticker, ".", "/")
 }
 
+// pvTicker2MassiveTicker reverses massiveTicker2PvTicker for outbound
+// API calls. Massive's `/v3/reference/tickers` endpoint uses `.` for
+// class-share separators (BF.A) while the rest of pvdata uses `/`
+// (BF/A). Sending `BF/A` returns empty results.
+func pvTicker2MassiveTicker(ticker string) string {
+	return strings.ReplaceAll(ticker, "/", ".")
+}
+
 const maxIconLogoFetchesPerRun = 100
 const maxMissingBrandingPerRun = 100
 const defaultAssetLookback = 14 * 24 * time.Hour
+
+// dailyRunUpdateCap bounds how many stale-existing-row refreshes a
+// daily run will perform. Backfills (walk span longer than
+// defaultAssetLookback) bypass this cap.
+const dailyRunUpdateCap = 100
 
 // parseIconLogoLimit reads the iconLogoLimit subscription config and
 // returns (budget, missingBrandingCap):

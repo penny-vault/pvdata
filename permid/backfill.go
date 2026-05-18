@@ -71,6 +71,19 @@ func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, e
 		return 0, nil
 	}
 
+	// Honour the per-run API budget set by WithAPIBudget. --no-permid
+	// sets the budget to 0 specifically to avoid the rate-limited
+	// Refinitiv path; without this check, BackfillEmpty would still
+	// grind through up to DefaultBackfillLimit assets at PermID's 5
+	// req/s cap, which was exactly the silent stall the operator hit
+	// before this guard was added.
+	if remaining := apiBudgetFromContext(ctx); remaining.Load() <= 0 {
+		logger.Info().Msg("permid: API budget is 0 (likely --no-permid); skipping backfill")
+		return 0, nil
+	}
+
+	logger.Info().Int("Limit", limit).Msg("permid: starting backfill of empty PermIDs")
+
 	subs, err := lib.Subscriptions(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("permid backfill: load subscriptions: %w", err)

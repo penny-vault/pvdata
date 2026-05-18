@@ -70,146 +70,6 @@ var _ = Describe("updateWalkWindow", func() {
 	})
 })
 
-var _ = Describe("applyWalkDerivedDates", func() {
-	const (
-		walkStartStr = "2003-09-10"
-		walkEndStr   = "2026-05-11"
-	)
-
-	newFetcher := func() *massiveAssetFetcher {
-		return &massiveAssetFetcher{
-			walkWindowsByFigi: map[string]walkWindow{},
-			walkWindowsByCIK:  map[string]walkWindow{},
-			walkStart:         mustParseDate(walkStartStr),
-			walkEnd:           mustParseDate(walkEndStr),
-		}
-	}
-
-	It("is a no-op when no walk has been run", func() {
-		api := &massiveAssetFetcher{}
-		asset := &data.Asset{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4"}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.DelistingDate).To(Equal(""))
-		Expect(asset.ListingDate).To(Equal(""))
-	})
-
-	It("is a no-op when the asset has no matching walk window", func() {
-		api := newFetcher()
-		asset := &data.Asset{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4"}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.DelistingDate).To(Equal(""))
-		Expect(asset.ListingDate).To(Equal(""))
-	})
-
-	It("derives DelistingDate via the FIGI index when lastSeen is well before walkEnd", func() {
-		api := newFetcher()
-		api.walkWindowsByFigi["BBI:BBG_BLOCKBUSTER"] = walkWindow{
-			firstSeen: mustParseDate("2003-09-10"),
-			lastSeen:  mustParseDate("2010-04-15"),
-		}
-		asset := &data.Asset{Ticker: "BBI", CompositeFigi: "BBG_BLOCKBUSTER"}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.DelistingDate).To(Equal("2010-04-16"))
-	})
-
-	It("does not derive DelistingDate when lastSeen is within the buffer window", func() {
-		api := newFetcher()
-		// lastSeen 5 days before walkEnd; buffer is 14 days so this
-		// is within the no-flag zone.
-		api.walkWindowsByFigi["AAPL:BBG000B9XRY4"] = walkWindow{
-			firstSeen: mustParseDate("2003-09-10"),
-			lastSeen:  mustParseDate("2026-05-06"),
-		}
-		asset := &data.Asset{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4"}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.DelistingDate).To(Equal(""))
-	})
-
-	It("falls back to the CIK index when the FIGI lookup misses", func() {
-		// Simulates the case where the walk recorded the asset without
-		// a list-response FIGI (so walkWindowsByFigi is empty for
-		// this ticker) but assetDetail has since filled in the FIGI.
-		// The CIK index, populated from the same walk row's CIK, is
-		// the fallback that lets us find the window.
-		api := newFetcher()
-		api.walkWindowsByCIK["BBI:0001085734"] = walkWindow{
-			firstSeen: mustParseDate("2003-09-10"),
-			lastSeen:  mustParseDate("2010-04-15"),
-		}
-		asset := &data.Asset{
-			Ticker:        "BBI",
-			CompositeFigi: "BBG_FILLED_BY_ASSETDETAIL",
-			CIK:           "0001085734",
-		}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.DelistingDate).To(Equal("2010-04-16"))
-	})
-
-	It("does not override an assetDetail-provided DelistingDate", func() {
-		api := newFetcher()
-		api.walkWindowsByFigi["BBI:BBG_BLOCKBUSTER"] = walkWindow{
-			firstSeen: mustParseDate("2003-09-10"),
-			lastSeen:  mustParseDate("2010-04-15"),
-		}
-		asset := &data.Asset{
-			Ticker:        "BBI",
-			CompositeFigi: "BBG_BLOCKBUSTER",
-			DelistingDate: "2010-07-07", // authoritative
-		}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.DelistingDate).To(Equal("2010-07-07"))
-	})
-
-	It("derives ListingDate when firstSeen is well after walkStart", func() {
-		api := newFetcher()
-		api.walkWindowsByFigi["ATVI:BBG000CVWGS6"] = walkWindow{
-			firstSeen: mustParseDate("2008-07-09"),
-			lastSeen:  mustParseDate("2023-10-12"),
-		}
-		asset := &data.Asset{Ticker: "ATVI", CompositeFigi: "BBG000CVWGS6"}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.ListingDate).To(Equal("2008-07-09"))
-		Expect(asset.DelistingDate).To(Equal("2023-10-13"))
-	})
-
-	It("does not derive ListingDate when firstSeen is within the start-side buffer", func() {
-		api := newFetcher()
-		// firstSeen 10 days after walkStart; buffer 14 days so this
-		// is too close to the boundary to assert "first listed
-		// during the walk".
-		api.walkWindowsByFigi["AAPL:BBG000B9XRY4"] = walkWindow{
-			firstSeen: mustParseDate("2003-09-20"),
-			lastSeen:  mustParseDate("2026-05-08"),
-		}
-		asset := &data.Asset{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4"}
-		api.applyWalkDerivedDates(asset)
-		Expect(asset.ListingDate).To(Equal(""))
-	})
-
-	It("treats two same-ticker different-CIK entities as separate windows", func() {
-		// BBI = Blockbuster (CIK 1085734) up to 2010, then BBI =
-		// Brickell Biotech (CIK 0819050) from 2022. With ticker:cik
-		// keys the two coexist; lookups by the live asset's CIK
-		// find the correct window.
-		api := newFetcher()
-		api.walkWindowsByCIK["BBI:0001085734"] = walkWindow{
-			firstSeen: mustParseDate("2003-09-10"),
-			lastSeen:  mustParseDate("2010-04-15"),
-		}
-		api.walkWindowsByCIK["BBI:0000819050"] = walkWindow{
-			firstSeen: mustParseDate("2022-09-01"),
-			lastSeen:  mustParseDate("2026-05-08"),
-		}
-
-		blockbuster := &data.Asset{Ticker: "BBI", CIK: "0001085734"}
-		api.applyWalkDerivedDates(blockbuster)
-		Expect(blockbuster.DelistingDate).To(Equal("2010-04-16"))
-
-		brickell := &data.Asset{Ticker: "BBI", CIK: "0000819050"}
-		api.applyWalkDerivedDates(brickell)
-		Expect(brickell.DelistingDate).To(Equal(""))
-	})
-})
 
 var _ = Describe("sanitizeWalkComposites", func() {
 	var (
@@ -406,5 +266,70 @@ var _ = Describe("walkHistoricalKey", func() {
 		}
 
 		Expect(walkHistoricalKey(blockbuster)).NotTo(Equal(walkHistoricalKey(brickell)))
+	})
+})
+
+var _ = Describe("cleanedListDate", func() {
+	ctx := context.Background()
+
+	newFetcher := func() *massiveAssetFetcher {
+		return &massiveAssetFetcher{
+			walkWindowsByFigi: map[string]walkWindow{},
+			walkWindowsByCIK:  map[string]walkWindow{},
+		}
+	}
+
+	It("passes the value through when no walk window exists", func() {
+		api := newFetcher()
+		got := api.cleanedListDate(ctx, massiveStock{ListDate: "2016-10-18"}, "AA", "0000004281")
+		Expect(got).To(Equal("2016-10-18"))
+	})
+
+	It("passes the value through when list_date is on or before firstSeen", func() {
+		api := newFetcher()
+		api.walkWindowsByCIK["AA:0001675149"] = walkWindow{
+			firstSeen: mustParseDate("2016-11-01"),
+			lastSeen:  mustParseDate("2026-05-08"),
+		}
+		got := api.cleanedListDate(ctx, massiveStock{ListDate: "2016-10-18", CIK: "0001675149"}, "AA", "0001675149")
+		Expect(got).To(Equal("2016-10-18"))
+	})
+
+	It("rejects a list_date that postdates the walk's firstSeen (predecessor case)", func() {
+		// Reproduces the AA predecessor bug: Massive's per-ticker
+		// details endpoint at date=2016-10-31 returns the successor's
+		// list_date (2016-10-18) alongside the predecessor's CIK
+		// (0000004281). The walk has observed AA under that CIK
+		// continuously since 2004-06-25, so the list_date cannot be
+		// later than 2004-06-25 for this entity.
+		api := newFetcher()
+		api.walkWindowsByCIK["AA:0000004281"] = walkWindow{
+			firstSeen: mustParseDate("2004-06-25"),
+			lastSeen:  mustParseDate("2016-10-31"),
+		}
+		got := api.cleanedListDate(ctx, massiveStock{ListDate: "2016-10-18", CIK: "0000004281"}, "AA", "0000004281")
+		Expect(got).To(Equal(""))
+	})
+
+	It("falls back to the FIGI index when the CIK index does not match", func() {
+		api := newFetcher()
+		api.walkWindowsByFigi["AAPL:BBG000B9XRY4"] = walkWindow{
+			firstSeen: mustParseDate("2004-06-25"),
+			lastSeen:  mustParseDate("2026-05-08"),
+		}
+		got := api.cleanedListDate(ctx, massiveStock{ListDate: "2016-10-18", CompositeFIGI: "BBG000B9XRY4"}, "AAPL", "")
+		Expect(got).To(Equal(""))
+	})
+
+	It("returns empty when list_date is empty", func() {
+		api := newFetcher()
+		got := api.cleanedListDate(ctx, massiveStock{ListDate: ""}, "AAPL", "")
+		Expect(got).To(Equal(""))
+	})
+
+	It("returns the raw value when list_date is malformed", func() {
+		api := newFetcher()
+		got := api.cleanedListDate(ctx, massiveStock{ListDate: "not-a-date"}, "AAPL", "")
+		Expect(got).To(Equal("not-a-date"))
 	})
 })

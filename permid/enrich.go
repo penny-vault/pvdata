@@ -17,7 +17,9 @@ package permid
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/rs/zerolog"
@@ -107,19 +109,72 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 	fillFromAssetIndex(ctx, assets)
 
 	if APIKey() == "" {
-		logger.Debug().Msg("permid: no API key configured; skipping PermID API resolution")
+		logger.Debug().Int("Assets", len(assets)).Msg("permid: no API key configured; skipping PermID API resolution")
 		return
 	}
 
 	remaining := apiBudgetFromContext(ctx)
 	if remaining.Load() <= 0 {
-		logger.Debug().Msg("permid: API budget exhausted; skipping PermID API resolution")
+		// Budget==0 is the --no-permid path (or end-of-quota), and is
+		// expected; log it at Info once per Enrich call so an operator
+		// running with --no-permid sees the path is being short-circuited
+		// rather than wondering why descriptive fields stay empty.
+		logger.Info().
+			Int("Assets", len(assets)).
+			Msg("permid: API budget exhausted (likely --no-permid); skipping PermID API resolution")
+
 		return
 	}
 
+	startBudget := remaining.Load()
+	startTime := time.Now()
+
+	logger.Info().
+		Int("Assets", len(assets)).
+		Int64("RemainingBudget", startBudget).
+		Msg("permid: starting PermID API resolution")
+
 	limiter := RateLimit()
 
+	var (
+		processed int
+		resolved  int
+	)
+
+	defer func() {
+		logger.Info().
+			Int("Assets", len(assets)).
+			Int("Processed", processed).
+			Int("Resolved", resolved).
+			Int64("BudgetConsumed", startBudget-remaining.Load()).
+			Int64("RemainingBudget", remaining.Load()).
+			Str("Elapsed", time.Since(startTime).Round(time.Second).String()).
+			Msg("permid: finished PermID API resolution")
+	}()
+
+	progressTick := time.Now()
+
 	for _, asset := range assets {
+		processed++
+
+		// Heartbeat every 30s so a big batch (e.g. BackfillEmpty's 250
+		// candidates) is never silent for longer than that while the 5
+		// req/s rate limiter slowly drains the queue.
+		if time.Since(progressTick) > 30*time.Second {
+			progressTick = time.Now()
+
+			logger.Info().
+				Int("Processed", processed).
+				Int("Total", len(assets)).
+				Int("ResolvedSoFar", resolved).
+				Int64("RemainingBudget", remaining.Load()).
+				Str("Elapsed", time.Since(startTime).Round(time.Second).String()).
+				Msg("permid: heartbeat")
+		}
+
+		startOrg := asset.OrganizationPermID
+		startInstrument := asset.InstrumentPermID
+
 		if asset.OrganizationPermID != "" && asset.InstrumentPermID != "" {
 			continue
 		}
@@ -180,7 +235,7 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 
 			remaining.Add(-1)
 
-			gotOrg, gotInstr, err := LookupByTicker(ctx, asset.Ticker, asset.Name, orgPermID, limiter)
+			result, err := LookupByTicker(ctx, asset.Ticker, asset.Name, orgPermID, limiter)
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return
@@ -201,8 +256,8 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 					Str("Ticker", asset.Ticker).
 					Msg("permid: ticker lookup failed")
 			} else {
-				if orgPermID == "" && gotOrg != "" {
-					orgPermID = gotOrg
+				if orgPermID == "" && result.OrgPermID != "" {
+					orgPermID = result.OrgPermID
 
 					logger.Debug().
 						Str("Ticker", asset.Ticker).
@@ -210,20 +265,115 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 						Msg("permid: resolved Organization PermID from ticker (name-gated)")
 				}
 
-				if gotInstr != "" {
-					asset.InstrumentPermID = gotInstr
+				if result.InstrumentPermID != "" {
+					asset.InstrumentPermID = result.InstrumentPermID
 
 					logger.Debug().
 						Str("Ticker", asset.Ticker).
-						Str("InstrumentPermID", gotInstr).
+						Str("InstrumentPermID", result.InstrumentPermID).
 						Msg("permid: resolved Instrument PermID from ticker")
 				}
+
+				fillFromLookup(asset, result, logger)
 			}
 		}
 
 		if asset.OrganizationPermID == "" && orgPermID != "" {
 			asset.OrganizationPermID = orgPermID
 		}
+
+		if asset.OrganizationPermID != startOrg || asset.InstrumentPermID != startInstrument {
+			resolved++
+		}
+	}
+}
+
+// fillFromLookup populates empty descriptive fields on asset from a
+// PermID search result. Only empty fields are filled; nothing already
+// resolved by a higher-priority source (Massive details, OpenFIGI,
+// asset index) is overwritten.
+//
+// Mapping:
+//   - asset.Name              <- result.OrgName
+//   - asset.CorporateUrl      <- result.OrgURL
+//   - asset.AssetType         <- assetClassToAssetType(result.AssetClass)
+//   - asset.PrimaryExchange   <- micToExchange(result.InstrumentMIC)
+func fillFromLookup(asset *data.Asset, result *LookupResult, logger *zerolog.Logger) {
+	if result == nil {
+		return
+	}
+
+	if asset.Name == "" && result.OrgName != "" {
+		asset.Name = result.OrgName
+	}
+
+	if asset.CorporateUrl == "" && result.OrgURL != "" {
+		asset.CorporateUrl = result.OrgURL
+	}
+
+	if asset.AssetType == "" || asset.AssetType == data.UnknownAsset {
+		if mapped := assetClassToAssetType(result.AssetClass); mapped != "" {
+			asset.AssetType = mapped
+		}
+	}
+
+	if asset.PrimaryExchange == "" || asset.PrimaryExchange == data.UnknownExchange {
+		if mapped := micToExchange(result.InstrumentMIC); mapped != "" {
+			asset.PrimaryExchange = mapped
+		}
+	}
+
+	if logger != nil && result.OrgName != "" {
+		logger.Debug().
+			Str("Ticker", asset.Ticker).
+			Str("PermIDOrgName", result.OrgName).
+			Str("PermIDAssetClass", result.AssetClass).
+			Str("PermIDMic", result.InstrumentMIC).
+			Msg("permid: filled descriptive fields from lookup result")
+	}
+}
+
+// assetClassToAssetType maps Refinitiv's assetClass string onto our
+// data.AssetType enum. Unknown values return "" so the caller leaves
+// the asset's AssetType untouched.
+func assetClassToAssetType(assetClass string) data.AssetType {
+	switch strings.ToLower(strings.TrimSpace(assetClass)) {
+	case "ordinary shares", "common stock":
+		return data.CommonStock
+	case "depository receipts", "american depository receipts":
+		return data.ADRC
+	case "exchange traded fund", "etf":
+		return data.ETF
+	case "exchange traded note", "etn":
+		return data.ETN
+	case "closed end fund", "closed-end fund":
+		return data.CEF
+	case "mutual fund":
+		return data.MutualFund
+	default:
+		return ""
+	}
+}
+
+// micToExchange maps a MIC code onto our data.Exchange enum. Returns ""
+// for MICs we don't know about so the caller leaves the field alone
+// rather than landing UNK in the DB.
+func micToExchange(mic string) data.Exchange {
+	switch strings.ToUpper(strings.TrimSpace(mic)) {
+	case "XNYS":
+		return data.NYSEExchange
+	case "XNAS", "XNGS", "XNCM", "XNMS":
+		return data.NasdaqExchange
+	case "XASE":
+		return data.NYSEMktExchange
+	case "BATS":
+		return data.BATSExchange
+	case "ARCX":
+		return data.ARCAExchange
+	case "OTC":
+		return data.OTCExchange
+	default:
+		return ""
 	}
 }
 

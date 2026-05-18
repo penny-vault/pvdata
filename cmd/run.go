@@ -104,12 +104,40 @@ provided then each subscription will execute sequentially.`,
 			log.Info().Str("figi", figiFilter).Msg("filtering run to single security")
 		}
 
+		// --asset-type narrows providers that walk per-asset-type
+		// (currently Massive) so debug runs don't enumerate every
+		// category. Accepts a comma-separated list (e.g. "CS,PFD").
+		if raw := strings.TrimSpace(viper.GetString("asset-type")); raw != "" {
+			parts := strings.Split(raw, ",")
+			types := make([]string, 0, len(parts))
+
+			for _, p := range parts {
+				if t := strings.ToUpper(strings.TrimSpace(p)); t != "" {
+					types = append(types, t)
+				}
+			}
+
+			if len(types) > 0 {
+				ctx = context.WithValue(ctx, provider.AssetTypeFilterKey, types)
+				log.Info().Strs("asset_types", types).Msg("filtering run to selected asset types")
+			}
+		}
+
 		// Attach a shared PermID API budget for the whole run. Without
 		// this, every per-asset permid.Enrich call (e.g. from massive's
 		// publish() path) would allocate its own 250-call budget and
 		// the per-run cap would never actually limit anything. One
 		// pool, decremented atomically across every Enrich invocation.
-		ctx = permid.WithAPIBudget(ctx, permid.DefaultEnrichAPIBudget)
+		// --no-permid sets the budget to 0, which short-circuits every
+		// API path in permid.Enrich; the local DB-index fill still runs.
+		permidBudget := permid.DefaultEnrichAPIBudget
+		if viper.GetBool("no-permid") {
+			permidBudget = 0
+
+			log.Info().Msg("permid API enrichment disabled via --no-permid; local DB-index fill still runs")
+		}
+
+		ctx = permid.WithAPIBudget(ctx, permidBudget)
 
 		if zipPath := viper.GetString("companyfacts-zip"); zipPath != "" {
 			ctx = context.WithValue(ctx, provider.CompanyFactsZipKey, zipPath)
@@ -159,7 +187,7 @@ provided then each subscription will execute sequentially.`,
 
 		logFile := filepath.Join(home, ".pvdata.log")
 
-		logWriter, err := tui.NewDualWriter(logFile)
+		logWriter, err := tui.NewDualWriter(logFile, viper.GetBool("tui"))
 		if err != nil {
 			log.Fatal().Err(err).Str("LogFile", logFile).Msg("could not create log writer")
 		}
@@ -177,11 +205,12 @@ provided then each subscription will execute sequentially.`,
 
 		// The TUI is opt-in: the default mode is headless (logs streamed
 		// to stderr) so `pvdata run` plays well with cron, scripts, and
-		// CI. Pass --tui to get the interactive run dashboard.
+		// CI. Pass --tui to get the interactive run dashboard. In headless
+		// mode the global logger is kept on logWriter (DualWriter -> file
+		// + stderr) so a long walk's progress lands both on the terminal
+		// and in ~/.pvdata.log; replacing log.Logger with a stderr-only
+		// writer here would silently drop every walk entry from the file.
 		if !viper.GetBool("tui") {
-			consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
-			log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
-
 			runManager.RunAll(ctx)
 		} else {
 			if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
@@ -212,13 +241,19 @@ func init() {
 	runCmd.Flags().String("end-date", "", "Stop data fetch at this date (YYYY-MM-DD); defaults to today. Combine with --start-date for a bounded historical window")
 	runCmd.Flags().String("ticker", "", "Filter run to a single security by ticker (e.g. AAPL)")
 	runCmd.Flags().String("figi", "", "Filter run to a single security by composite FIGI (e.g. BBG000B9XRY4)")
+	runCmd.Flags().String("asset-type", "", "Filter the Massive asset walk to one or more types (comma-separated, e.g. CS,PFD); default walks CS,ADRC,ETF")
 	runCmd.Flags().String("companyfacts-zip", "", "Use a local companyfacts.zip instead of downloading from SEC")
 	runCmd.Flags().String("filing-cutoff", "", "Exclude SEC filings filed after this date (YYYY-MM-DD format)")
 	runCmd.Flags().Int("asset-workers", 0, "Worker count for the Massive asset discovery + details fan-out (0 = use default of 32)")
 	runCmd.Flags().Bool("tui", false, "Show the interactive run dashboard (default: headless logging to stderr)")
+	runCmd.Flags().Bool("no-permid", false, "Skip Refinitiv PermID API enrichment for this run (local DB-index fill still runs); use when iterating on a long walk where the rate-limited PermID lookups are not needed")
 
 	if err := viper.BindPFlag("tui", runCmd.Flags().Lookup("tui")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind tui flag")
+	}
+
+	if err := viper.BindPFlag("no-permid", runCmd.Flags().Lookup("no-permid")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind no-permid flag")
 	}
 
 	if err := viper.BindPFlag("lookback", runCmd.Flags().Lookup("lookback")); err != nil {
@@ -239,6 +274,10 @@ func init() {
 
 	if err := viper.BindPFlag("figi", runCmd.Flags().Lookup("figi")); err != nil {
 		log.Fatal().Err(err).Msg("could not bind figi flag")
+	}
+
+	if err := viper.BindPFlag("asset-type", runCmd.Flags().Lookup("asset-type")); err != nil {
+		log.Fatal().Err(err).Msg("could not bind asset-type flag")
 	}
 
 	if err := viper.BindPFlag("companyfacts-zip", runCmd.Flags().Lookup("companyfacts-zip")); err != nil {

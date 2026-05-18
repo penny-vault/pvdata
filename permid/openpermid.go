@@ -26,6 +26,7 @@ import (
 	"github.com/adrg/strutil/metrics"
 	"github.com/go-resty/resty/v2"
 	"github.com/penny-vault/pvdata/provider"
+	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 	"golang.org/x/time/rate"
 )
@@ -78,6 +79,34 @@ type Entity struct {
 	AssetClass       string `json:"assetClass"`
 	IsIssuedBy       string `json:"isIssuedBy"`
 	IsIssuedByName   string `json:"isIssuedByName"`
+
+	// Organization-only enrichment fields.
+	HasHoldingClassification string `json:"hasHoldingClassification"`
+	HasURL                   string `json:"hasURL"`
+
+	// Quote-only enrichment fields.
+	HasMic            string `json:"hasMic"`
+	HasRIC            string `json:"hasRIC"`
+	HasExchangeTicker string `json:"hasExchangeTicker"`
+	IsQuoteOf         string `json:"isQuoteOf"`
+	HasPrimaryQuote   string `json:"hasPrimaryQuote"`
+}
+
+// LookupResult is the rich return type from LookupByTicker — it holds
+// the resolved PermIDs alongside enrichment fields (canonical name,
+// corporate URL, asset class, MIC) that callers can use to fill empty
+// fields on the requesting asset. Empty strings mean "no value
+// available"; callers should not overwrite asset fields that already
+// have a value.
+type LookupResult struct {
+	OrgPermID        string
+	InstrumentPermID string
+
+	OrgName       string // from organizations[].organizationName
+	OrgURL        string // from organizations[].hasURL
+	OrgClass      string // from organizations[].hasHoldingClassification
+	InstrumentMIC string // from quotes[].hasMic for the instrument's primary quote
+	AssetClass    string // from instruments[].assetClass
 }
 
 // sharedRateLimiter is the process-wide rate limiter for every
@@ -109,6 +138,12 @@ func APIKey() string {
 	return viper.GetString("permid.apikey")
 }
 
+// permidRequestTimeout bounds individual Refinitiv /permid calls.
+// Without this, a stalled connection at Refinitiv's edge can hang the
+// publish pipeline indefinitely (no log lines appear because resty
+// blocks inside Get until the underlying TCP read returns).
+const permidRequestTimeout = 30 * time.Second
+
 // Search calls the PermID search endpoint with the given query string
 // (e.g. "ticker:AAPL" or "cik:0000320193") and returns the parsed
 // response. The caller is responsible for waiting on the rate limiter
@@ -121,7 +156,9 @@ func Search(ctx context.Context, query string) (*SearchResponse, error) {
 
 	var resp SearchResponse
 
-	client := resty.New()
+	client := resty.New().SetTimeout(permidRequestTimeout)
+
+	zerolog.Ctx(ctx).Debug().Str("Query", query).Str("URL", PermIDSearchURL).Msg("permid: GET /search")
 
 	r, err := client.R().
 		SetContext(ctx).
@@ -184,30 +221,52 @@ func LookupByCIK(ctx context.Context, cik string, limiter *rate.Limiter) (string
 // Either return value can be empty when no candidate passes the
 // safety gate. A non-nil error indicates an API failure; an empty
 // result with nil error means "no match, but the API call succeeded".
-func LookupByTicker(ctx context.Context, ticker, name, knownOrgPermID string, limiter *rate.Limiter) (orgPermID, instrumentPermID string, err error) {
+func LookupByTicker(ctx context.Context, ticker, name, knownOrgPermID string, limiter *rate.Limiter) (*LookupResult, error) {
 	ticker = strings.TrimSpace(ticker)
 	if ticker == "" {
-		return "", "", nil
+		return &LookupResult{}, nil
 	}
 
 	if err := limiter.Wait(ctx); err != nil {
-		return "", "", err
+		return nil, err
 	}
 
 	resp, err := Search(ctx, "ticker:"+ticker)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
-	orgPermID = knownOrgPermID
+	out := &LookupResult{}
+
+	orgPermID := knownOrgPermID
 	if orgPermID == "" {
 		for _, e := range resp.Result.Organizations.Entities {
 			if NameMatches(name, e.OrganizationName) {
 				orgPermID = rawID(e.ID)
+				out.OrgName = e.OrganizationName
+				out.OrgURL = strings.TrimSpace(e.HasURL)
+				out.OrgClass = strings.TrimSpace(e.HasHoldingClassification)
+
 				break
 			}
 		}
+	} else {
+		// Already know the org; still capture its descriptive fields
+		// when we can find a matching organizations entry.
+		for _, e := range resp.Result.Organizations.Entities {
+			if rawID(e.ID) != orgPermID {
+				continue
+			}
+
+			out.OrgName = e.OrganizationName
+			out.OrgURL = strings.TrimSpace(e.HasURL)
+			out.OrgClass = strings.TrimSpace(e.HasHoldingClassification)
+
+			break
+		}
 	}
+
+	var primaryQuoteID string
 
 	for _, e := range resp.Result.Instruments.Entities {
 		if !strings.EqualFold(e.PrimaryTicker, ticker) {
@@ -222,12 +281,30 @@ func LookupByTicker(ctx context.Context, ticker, name, knownOrgPermID string, li
 			continue
 		}
 
-		instrumentPermID = rawID(e.ID)
+		out.InstrumentPermID = rawID(e.ID)
+		out.AssetClass = strings.TrimSpace(e.AssetClass)
+		primaryQuoteID = rawID(e.HasPrimaryQuote)
 
 		break
 	}
 
-	return orgPermID, instrumentPermID, nil
+	// Resolve the primary quote's MIC when present so callers can fill
+	// PrimaryExchange on assets where Massive's snapshot omits it.
+	if primaryQuoteID != "" {
+		for _, e := range resp.Result.Quotes.Entities {
+			if rawID(e.ID) != primaryQuoteID {
+				continue
+			}
+
+			out.InstrumentMIC = strings.TrimSpace(e.HasMic)
+
+			break
+		}
+	}
+
+	out.OrgPermID = orgPermID
+
+	return out, nil
 }
 
 // NameMatches applies the same Jaro-Winkler ≥ 0.85 gate used by the
