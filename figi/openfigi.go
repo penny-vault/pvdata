@@ -16,6 +16,10 @@ package figi
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -55,11 +59,120 @@ type OpenFigiQuery struct {
 	IncludeUnlistedEquities *bool  `json:"includeUnlistedEquities,omitempty"`
 }
 
-func RateLimit() *rate.Limiter {
-	dur := (time.Second * 6) / 25
-	openFigiRate := rate.Every(dur)
+// sharedRateLimiter is the process-wide rate limiter for every
+// outbound OpenFIGI request. OpenFIGI's published mapping-endpoint
+// quota for an API-key user is 25 requests per 6 seconds (see
+// https://www.openfigi.com/api#rate-limit). We operate at 80 percent
+// of that cap (20 requests per 6 seconds) to leave headroom for
+// clock skew, retried requests after a 429, and any concurrent
+// callers we have not yet identified.
+//
+// A single shared limiter is required because the Massive walk and
+// asset-detail fan-out runs dozens of workers; a per-call limiter
+// would let each worker burst independently and aggregate well past
+// the cap, which is what produced the 429s.
+var sharedRateLimiter = newOpenFIGIRateLimiter()
 
-	return rate.NewLimiter(openFigiRate, 10)
+// openFIGIPublishedRequestsPerWindow / openFIGIWindow encode
+// OpenFIGI's published mapping-endpoint rate limit for an API-key
+// user. openFIGIHeadroomNumerator / openFIGIHeadroomDenominator
+// express the fraction of that cap we actually operate at — 80
+// percent — so the rate stays demonstrably below what OpenFIGI
+// allows.
+const (
+	openFIGIPublishedRequestsPerWindow = 25
+	openFIGIWindow                     = 6 * time.Second
+	openFIGIHeadroomNumerator          = 4
+	openFIGIHeadroomDenominator        = 5
+)
+
+func newOpenFIGIRateLimiter() *rate.Limiter {
+	cap := (openFIGIPublishedRequestsPerWindow * openFIGIHeadroomNumerator) / openFIGIHeadroomDenominator
+	perRequest := openFIGIWindow / time.Duration(cap)
+
+	return rate.NewLimiter(rate.Every(perRequest), cap)
+}
+
+// RateLimit returns the process-wide OpenFIGI rate limiter. Every
+// outbound request must Wait on this limiter before going out so the
+// aggregate request rate stays under OpenFIGI's published cap
+// regardless of how many goroutines are calling in parallel.
+func RateLimit() *rate.Limiter {
+	return sharedRateLimiter
+}
+
+// ErrRateLimited indicates OpenFIGI returned HTTP 429. The caller is
+// expected to honor the Retry-After header (handled inside mapFigis)
+// before retrying.
+var ErrRateLimited = errors.New("openfigi: rate-limited (429)")
+
+// openFIGIBackoffMu guards the package-wide backoff window. When one
+// goroutine sees a 429 and computes a sleep, it stores the deadline
+// here so every other goroutine that subsequently calls mapFigis
+// blocks until the deadline before issuing a new request.
+var (
+	openFIGIBackoffMu      sync.Mutex
+	openFIGIBackoffUntil   time.Time
+	openFIGIDefaultBackoff = 6 * time.Second
+)
+
+// waitForBackoff blocks until any active 429-driven backoff window
+// has expired. Returns ctx.Err() if ctx is cancelled while waiting.
+func waitForBackoff(ctx context.Context) error {
+	openFIGIBackoffMu.Lock()
+	until := openFIGIBackoffUntil
+	openFIGIBackoffMu.Unlock()
+
+	if until.IsZero() {
+		return nil
+	}
+
+	d := time.Until(until)
+	if d <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// recordBackoff sets the package-wide backoff window to the supplied
+// duration in the future. Concurrent callers that see overlapping
+// 429s converge on the latest deadline rather than stacking sleeps.
+func recordBackoff(d time.Duration) {
+	openFIGIBackoffMu.Lock()
+	defer openFIGIBackoffMu.Unlock()
+
+	deadline := time.Now().Add(d)
+	if deadline.After(openFIGIBackoffUntil) {
+		openFIGIBackoffUntil = deadline
+	}
+}
+
+// parseRetryAfter parses the Retry-After header per RFC 9110: either
+// a non-negative integer number of seconds, or an HTTP-date. Returns
+// (0, false) when the value is missing or unparseable.
+func parseRetryAfter(value string) (time.Duration, bool) {
+	if value == "" {
+		return 0, false
+	}
+
+	if secs, err := strconv.Atoi(value); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second, true
+	}
+
+	if t, err := http.ParseTime(value); err == nil {
+		return max(time.Until(t), 0), true
+	}
+
+	return 0, false
 }
 
 func batchSize() int {
@@ -71,6 +184,12 @@ func batchSize() int {
 	return 100
 }
 
+// openFIGIMaxRetries bounds how many times a single mapFigis call
+// will retry after a 429. Three is enough to ride out a brief
+// upstream throttling event without locking the worker on a CIK that
+// is being rejected for a different reason.
+const openFIGIMaxRetries = 3
+
 func mapFigis(query []*OpenFigiQuery) ([]*MappingResponse, error) {
 	maxBatch := batchSize()
 	if len(query) > maxBatch {
@@ -78,27 +197,63 @@ func mapFigis(query []*OpenFigiQuery) ([]*MappingResponse, error) {
 	}
 
 	apiKey := viper.GetString("openfigi.apikey")
-	mappingResponse := make([]*MappingResponse, 0)
 	client := resty.New()
-	resp, err := client.R().
-		SetHeader("X-OPENFIGI-APIKEY", apiKey).
-		SetBody(query).
-		SetResult(&mappingResponse).
-		Post(OPENFIGI_MAPPING_URL)
 
-	log.Debug().Str("URL", OPENFIGI_MAPPING_URL).Int("NumTickers", len(query)).Msg("map tickers to FIGIs")
+	ctx := context.Background()
 
-	if err != nil {
-		log.Error().Err(err).Msg("OpenFigi api called errored out")
-		return []*MappingResponse{}, err
+	for attempt := 0; ; attempt++ {
+		if err := waitForBackoff(ctx); err != nil {
+			return []*MappingResponse{}, err
+		}
+
+		mappingResponse := make([]*MappingResponse, 0)
+
+		log.Debug().Str("URL", OPENFIGI_MAPPING_URL).Int("NumTickers", len(query)).Int("Attempt", attempt).Msg("openfigi: POST /mapping")
+
+		resp, err := client.R().
+			SetHeader("X-OPENFIGI-APIKEY", apiKey).
+			SetBody(query).
+			SetResult(&mappingResponse).
+			Post(OPENFIGI_MAPPING_URL)
+		if err != nil {
+			log.Error().Err(err).Msg("OpenFigi api called errored out")
+			return []*MappingResponse{}, err
+		}
+
+		if resp.StatusCode() == http.StatusTooManyRequests {
+			backoff, ok := parseRetryAfter(resp.Header().Get("Retry-After"))
+			if !ok {
+				backoff = openFIGIDefaultBackoff
+			}
+
+			recordBackoff(backoff)
+
+			log.Warn().
+				Int("StatusCode", resp.StatusCode()).
+				Int("Attempt", attempt).
+				Dur("Backoff", backoff).
+				Str("RetryAfter", resp.Header().Get("Retry-After")).
+				Msg("openfigi rate-limited (429); backing off before retry")
+
+			if attempt >= openFIGIMaxRetries {
+				log.Error().
+					Int("Attempts", attempt+1).
+					Str("Body", string(resp.Body())).
+					Msg("openfigi rate-limit retries exhausted; giving up on batch")
+
+				return []*MappingResponse{}, ErrRateLimited
+			}
+
+			continue
+		}
+
+		if resp.StatusCode() >= 400 {
+			log.Error().Int("StatusCode", resp.StatusCode()).Str("Body", string(resp.Body())).Msg("openfigi api call returned invalid status code")
+			return []*MappingResponse{}, errors.New("openfigi: non-200 response")
+		}
+
+		return mappingResponse, nil
 	}
-
-	if resp.StatusCode() >= 400 {
-		log.Error().Int("StatusCode", resp.StatusCode()).Str("Body", string(resp.Body())).Msg("openfigi api call returned invalid status code")
-		return []*MappingResponse{}, err
-	}
-
-	return mappingResponse, nil
 }
 
 // Enrich fills CompositeFigi / ShareClassFigi / AssetType on each asset
@@ -204,14 +359,41 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 		}
 	}
 
-	// Step 3: synthetic mint for delisted assets still without a FIGI.
+	// Step 3: synthetic mint for assets that are NOT currently active
+	// and still have no FIGI. Two signals say "not currently active":
+	//   - DelistingDate is set (delistedAssets/today snapshot has
+	//     confirmed the ticker stopped trading), OR
+	//   - ValidFor (the source observation's as-of date) is more than
+	//     14 days in the past. Historical-walk observations of
+	//     delisted-before-our-walk tickers carry a past ValidFor but
+	//     no DelistingDate yet — that comes later from delistedAssets,
+	//     which only runs for current-DB-active rows. Without this
+	//     signal, the first time we discover a long-delisted ticker
+	//     via the historical walk we'd drop it for missing FIGI even
+	//     though OpenFIGI is guaranteed to return nothing for it.
+	//
+	// The 14-day window matches the buffer applyWalkDerivedDates uses
+	// when deciding whether a walk's first/last-seen dates are
+	// authoritative — staying inside that window means we treat the
+	// observation as "current snapshot" and defer FIGI minting to the
+	// OpenFIGI live path.
+	const historicalAge = 14 * 24 * time.Hour
+
 	for _, asset := range assets {
 		if asset.CompositeFigi != "" {
 			continue
 		}
 
-		if asset.DelistingDate == "" {
+		isHistorical := asset.DelistingDate != "" ||
+			(!asset.ValidFor.IsZero() && time.Since(asset.ValidFor) > historicalAge)
+
+		if !isHistorical {
 			continue
+		}
+
+		reason := "delisted"
+		if asset.DelistingDate == "" {
+			reason = "historical-walk-observation"
 		}
 
 		switch {
@@ -222,7 +404,9 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 				Str("CIK", asset.CIK).
 				Str("CompositeFigi", asset.CompositeFigi).
 				Str("DelistingDate", asset.DelistingDate).
-				Msg("minted synthetic FIGI from CIK+ticker for delisted asset")
+				Time("ValidFor", asset.ValidFor).
+				Str("Reason", reason).
+				Msg("minted synthetic FIGI from CIK+ticker")
 		case asset.Ticker != "" && asset.Name != "":
 			asset.CompositeFigi = GenerateSyntheticFIGI(asset.Ticker, asset.Name)
 			logger.Debug().
@@ -230,13 +414,17 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 				Str("Name", asset.Name).
 				Str("CompositeFigi", asset.CompositeFigi).
 				Str("DelistingDate", asset.DelistingDate).
-				Msg("minted synthetic FIGI from ticker+name for delisted asset (no CIK)")
+				Time("ValidFor", asset.ValidFor).
+				Str("Reason", reason).
+				Msg("minted synthetic FIGI from ticker+name (no CIK)")
 		default:
 			logger.Warn().
 				Str("Ticker", asset.Ticker).
 				Str("Name", asset.Name).
 				Str("DelistingDate", asset.DelistingDate).
-				Msg("cannot mint synthetic FIGI for delisted asset: no CIK and no name; asset will be dropped downstream")
+				Time("ValidFor", asset.ValidFor).
+				Str("Reason", reason).
+				Msg("cannot mint synthetic FIGI: no CIK and no name; asset will be dropped downstream")
 		}
 	}
 }
