@@ -214,20 +214,26 @@ type massiveAssetFetcher struct {
 	missingBrandingCap int
 	cooldown           globalBackoff
 
-	// walkWindowsByFigi and walkWindowsByCIK record the (firstSeen,
-	// lastSeen) pair for every asset observed during the historical
-	// walk. Two indexes because Massive's list response sometimes
-	// omits composite_figi while filling it in on the per-ticker
-	// details endpoint — keying only on ticker:figi would miss that
-	// case. The CIK index handles it: assets without a list-time
-	// FIGI but with a CIK still get a window we can find later
-	// using the FIGI assetDetail eventually returned alongside the
-	// same CIK.
+	// walkWindowsByFigi, walkWindowsByCIK and walkWindowsByName record
+	// the (firstSeen, lastSeen) pair for every asset observed during
+	// the historical walk. Three indexes because Massive's reference
+	// response can return any of:
+	//   - composite_figi + CIK + type        → indexed under figi (and CIK as duplicate)
+	//   - CIK + type only (no figi)          → indexed under CIK
+	//   - name only (no figi, no CIK, often no type) → indexed under
+	//     ticker:name:NAME. These are records like Mestek's 2003-2004
+	//     years where Massive's catalog is missing structured
+	//     metadata for an old delisted ticker.
 	//
-	// Both maps are populated once by the walk under a local mutex,
-	// then published here after g.Wait(); reads from assetDetail
-	// post-processing are spawned after the publication so no
-	// further synchronization is needed. nil before / outside a
+	// The name-keyed index exists so date-assignment can still find a
+	// temporal record for an asset that Massive labelled sparsely.
+	// Without it, the walk would silently lose entire historical
+	// lifetimes for any ticker Massive happens to type-tag late.
+	//
+	// All three maps are populated once by the walk under a local
+	// mutex, then published here after g.Wait(); reads from
+	// assetDetail post-processing are spawned after the publication
+	// so no further synchronization is needed. nil before / outside a
 	// historical walk.
 	//
 	// walkStart/walkEnd record the [start, end) window so the
@@ -235,6 +241,7 @@ type massiveAssetFetcher struct {
 	// windows.
 	walkWindowsByFigi map[string]walkWindow
 	walkWindowsByCIK  map[string]walkWindow
+	walkWindowsByName map[string]walkWindow
 	walkStart         time.Time
 	walkEnd           time.Time
 
@@ -405,6 +412,34 @@ func filterToTrackedTypes(ctx context.Context, assets []*data.Asset, tracked map
 			validForStr = asset.ValidFor.Format("2006-01-02")
 		}
 
+		// Ticker-shape and name-based drops run before the type
+		// allowlist because Massive serves units, warrants, rights,
+		// and its own test symbols typed as CS, so the typed-keep
+		// branch would otherwise let them through.
+		if dropReason, drop := marketIneligibleReason(asset); drop {
+			if traced {
+				logger.Info().
+					Str("Stage", "filter-market-ineligible").
+					Str("Ticker", asset.Ticker).
+					Str("AssetType", t).
+					Str("Name", asset.Name).
+					Str("Reason", dropReason).
+					Str("ValidFor", validForStr).
+					Msg("trace: dropping market-ineligible record")
+			} else {
+				logger.Debug().
+					Str("Stage", "filter-market-ineligible").
+					Str("Ticker", asset.Ticker).
+					Str("AssetType", t).
+					Str("Name", asset.Name).
+					Str("Reason", dropReason).
+					Str("ValidFor", validForStr).
+					Msg("dropping market-ineligible record")
+			}
+
+			continue
+		}
+
 		if t != "" {
 			if _, ok := tracked[t]; ok {
 				if traced {
@@ -535,6 +570,154 @@ func filterToTrackedTypes(ctx context.Context, assets []*data.Asset, tracked map
 	}
 
 	return kept
+}
+
+// marketIneligibleSuffixes is the set of ticker suffixes (after the
+// slash separator pvdata uses for class-share / lifecycle decorations)
+// that mark a record as a non-tradable instrument. Tickers ending in
+// these are units (SPAC share + warrant bundles), warrants, rights,
+// or when-distributed placeholders — none of which pvdata tracks.
+var marketIneligibleSuffixes = []string{"/U", "/UN", "/W", "/WS", "/R", "/RT", "/WD"}
+
+// marketIneligibleNamePatterns is the set of case-insensitive name
+// substrings that mark a record as a placeholder / non-tradable
+// security regardless of its asset_type. Patterns with leading or
+// trailing whitespace are word-boundary-aware to avoid matching
+// substrings of legitimate company names (e.g. "preferred" inside
+// "Preferred Apartment Communities" — rare, but the leading space on
+// " pfd" is safer than a bare token).
+var marketIneligibleNamePatterns = []string{
+	"when issued",
+	"when-issued",
+	"w.i.",
+	"ex-distribution",
+	"ex distribution",
+	"ex-dist",
+	"test symbol",
+	" pfd",
+	"pfd ",
+	"preferred",
+	" warrant",
+	"subscription rt",
+	" w.d.",
+}
+
+// hasLowercaseLetter reports whether s contains at least one ASCII
+// lowercase letter. Used to detect Massive's placeholder-ticker
+// convention (lowercase markers w=when-issued, p=preferred, r=rights,
+// rw=rights-when-issued) which is not valid for real US equities.
+func hasLowercaseLetter(s string) bool {
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			return true
+		}
+	}
+
+	return false
+}
+
+// marketIneligibleReason reports whether an asset should be dropped
+// regardless of its asset_type, and returns a short reason string for
+// logging.
+//
+// Three drop paths, in priority order so a single asset reports its
+// most specific reason:
+//
+//  1. Ticker contains a lowercase letter. Massive uses lowercase
+//     markers (`w` for when-issued, `p` for preferred, `r` for rights,
+//     `rw` for rights when-issued) inside otherwise-uppercase tickers.
+//     None of these are tradable equities. Filtering on any lowercase
+//     character catches all four variants in one rule.
+//  2. Ticker suffix matches marketIneligibleSuffixes (units, warrants,
+//     rights, when-distributed in slash-decorated form).
+//  3. Name matches a marketIneligibleNamePatterns substring (placeholder
+//     securities Massive types as CS but flags in the display name —
+//     when-issued, ex-distribution, preferred, warrant, etc.).
+//
+// Returns ("", false) when the asset is eligible.
+func marketIneligibleReason(asset *data.Asset) (string, bool) {
+	if asset == nil {
+		return "", false
+	}
+
+	if hasLowercaseLetter(asset.Ticker) {
+		return "ticker_has_lowercase_marker", true
+	}
+
+	for _, suffix := range marketIneligibleSuffixes {
+		if strings.HasSuffix(asset.Ticker, suffix) {
+			return "ticker_suffix=" + suffix, true
+		}
+	}
+
+	lowerName := strings.ToLower(asset.Name)
+	for _, pat := range marketIneligibleNamePatterns {
+		if strings.Contains(lowerName, pat) {
+			return "name_contains=" + strings.TrimSpace(pat), true
+		}
+	}
+
+	return "", false
+}
+
+// shortDelistedDurationDays is the minimum allowed duration for a
+// delisted security whose listed-to-delisted window has no
+// corresponding EOD archive coverage. Records shorter than this with
+// no EOD evidence are almost certainly Massive-catalog placeholders
+// rather than real listings — Massive frequently surfaces a ticker on
+// a single date with a name like "Avadim Health, Inc. Common Stock"
+// for entities that never actually traded. The threshold is generous
+// (about 6 months) because the EOD-coverage gate carries most of the
+// safety: any real security that traded for the window has bars in
+// the archive and is exempt regardless of how short the window is.
+const shortDelistedDurationDays = 180
+
+// shortDelistedNoCoverageReason reports whether a delisted asset
+// should be dropped at publish time. The check applies only to
+// already-delisted records (Active=false with DelistingDate set);
+// currently-trading assets are never dropped by this rule, so a
+// freshly-listed stock with only a few days of history publishes
+// normally.
+//
+// The two gates that must both fire for a drop:
+//
+//  1. The (DelistingDate - ListingDate) duration is shorter than
+//     shortDelistedDurationDays.
+//  2. The EOD archive has no range overlapping the asset's
+//     [ListingDate, DelistingDate] window — we have no trade-data
+//     evidence the security actually existed for that window.
+//
+// Returns ("", false) when the asset should publish.
+func (api *massiveAssetFetcher) shortDelistedNoCoverageReason(asset *data.Asset) (string, bool) {
+	if asset == nil || asset.Active {
+		return "", false
+	}
+
+	listed := parseISODate(asset.ListingDate)
+	delisted := parseISODate(asset.DelistingDate)
+
+	if listed.IsZero() || delisted.IsZero() {
+		return "", false
+	}
+
+	durationDays := int(delisted.Sub(listed) / (24 * time.Hour))
+	if durationDays >= shortDelistedDurationDays {
+		return "", false
+	}
+
+	archive := api.eodArchiveForRun()
+	if archive == nil {
+		return "", false
+	}
+
+	ranges := archive.Ranges(asset.Ticker)
+	for _, r := range ranges {
+		if !r.End.Before(listed) && !r.Start.After(delisted) {
+			return "", false
+		}
+	}
+
+	return fmt.Sprintf("duration=%dd_no_eod_coverage", durationDays), true
 }
 
 func downloadMassiveAssets(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
@@ -1045,6 +1228,20 @@ func (api *massiveAssetFetcher) publish(ctx context.Context, asset *data.Asset) 
 		return
 	}
 
+	if reason, drop := api.shortDelistedNoCoverageReason(asset); drop {
+		logger.Info().
+			Str("Stage", "publish-drop-short-delisted-no-coverage").
+			Str("Ticker", asset.Ticker).
+			Str("CompositeFigi", asset.CompositeFigi).
+			Str("Name", asset.Name).
+			Str("ListingDate", asset.ListingDate).
+			Str("DelistingDate", asset.DelistingDate).
+			Str("Reason", reason).
+			Msg("publish: dropping delisted asset whose window has no EOD coverage and is shorter than the minimum")
+
+		return
+	}
+
 	api.publishChan <- &data.Observation{
 		AssetObject:      asset,
 		ObservationDate:  time.Now(),
@@ -1142,23 +1339,57 @@ func (api *massiveAssetFetcher) walkHistoricalAssets(ctx context.Context, start,
 
 	walkWindowsByFigi := make(map[string]walkWindow, 16384)
 	walkWindowsByCIK := make(map[string]walkWindow, 16384)
+	walkWindowsByName := make(map[string]walkWindow, 16384)
 
 	processPage := func(job historicalAssetJob, tmpAssets []*data.Asset) {
-		// Stamp ValidFor before the tracked-type filter so the filter's
-		// drop logs can report the as-of date the record was observed
-		// on. Without this the "untyped record without CIK" / "SEC
-		// could not resolve type" entries lacked any temporal anchor,
-		// making it impossible to correlate them with the heartbeat.
+		// Stamp ValidFor before any downstream step so trace logs and
+		// filter drop logs can report the as-of date the record was
+		// observed on.
 		for _, a := range tmpAssets {
 			a.ValidFor = job.date
 		}
 
-		tmpAssets = filterToTrackedTypes(ctx, tmpAssets, tracked)
+		// Snapshot the untyped + no-CIK records before filterToTrackedTypes
+		// drops them. These are records like Mestek's 2003-2004 rows
+		// where Massive returned only a ticker and a name; the filter
+		// has no way to promote them, but they are still temporal
+		// evidence that the ticker was alive on this date. We index
+		// them by ticker:name:NAME so date-assignment can find a walk
+		// window via a name-based fallback.
+		var nameOnly []*data.Asset
+
+		for _, a := range tmpAssets {
+			if a.AssetType == "" && a.CIK == "" && a.Name != "" {
+				nameOnly = append(nameOnly, a)
+			}
+		}
+
+		// filterToTrackedTypes mutates the surviving records' CIK in
+		// place when sec.ResolveAssetTypeWithCIKCorrection promotes
+		// them. Run it before indexing walkWindowsByFigi /
+		// walkWindowsByCIK so those indexes use the corrected CIK
+		// (otherwise a later lookup by the asset's now-corrected CIK
+		// would miss the entry recorded under the old CIK).
+		filtered := filterToTrackedTypes(ctx, tmpAssets, tracked)
 
 		mu.Lock()
 		defer mu.Unlock()
 
-		for _, a := range tmpAssets {
+		for _, a := range nameOnly {
+			updateWalkWindow(walkWindowsByName, a.Ticker+":name:"+a.Name, job.date)
+
+			if traceAsset(ctx, a.Ticker) {
+				logger.Info().
+					Str("Stage", "walk-observation").
+					Str("Ticker", a.Ticker).
+					Str("Date", job.date.Format("2006-01-02")).
+					Str("Name", a.Name).
+					Str("WalkKey", a.Ticker+":name:"+a.Name).
+					Msg("trace: walk surfaced name-only asset (recorded for temporal index, not emission)")
+			}
+		}
+
+		for _, a := range filtered {
 			id := walkHistoricalKey(a)
 
 			existing, ok := historicalMap[id]
@@ -1166,12 +1397,19 @@ func (api *massiveAssetFetcher) walkHistoricalAssets(ctx context.Context, start,
 				historicalMap[id] = a
 			}
 
-			if a.CompositeFigi != "" {
+			switch {
+			case a.CompositeFigi != "":
 				updateWalkWindow(walkWindowsByFigi, a.Ticker+":"+a.CompositeFigi, job.date)
-			}
-
-			if a.CIK != "" {
+			case a.CIK != "":
 				updateWalkWindow(walkWindowsByCIK, a.Ticker+":"+a.CIK, job.date)
+			case a.Name != "":
+				// Typed survivor with no FIGI and no CIK — Mestek's
+				// 2004-06-25..2006-08-30 records are the canonical
+				// example. Massive eventually tagged them as CS but
+				// still does not supply FIGI/CIK. Without this
+				// branch the post-filter loop would silently drop
+				// the temporal signal for these records.
+				updateWalkWindow(walkWindowsByName, a.Ticker+":name:"+a.Name, job.date)
 			}
 
 			if traceAsset(ctx, a.Ticker) {
@@ -1365,6 +1603,7 @@ func (api *massiveAssetFetcher) walkHistoricalAssets(ctx context.Context, start,
 	// this returns, so no further synchronization is needed.
 	api.walkWindowsByFigi = walkWindowsByFigi
 	api.walkWindowsByCIK = walkWindowsByCIK
+	api.walkWindowsByName = walkWindowsByName
 	api.walkStart = start
 	api.walkEnd = end
 
@@ -1442,7 +1681,7 @@ type compositeConfirmer func(ctx context.Context, figis []string) map[string]*fi
 // sanitizeWalkComposites is the api-bound entry point that wires the
 // production OpenFIGI confirmer into the pure-logic sanitizer below.
 func (api *massiveAssetFetcher) sanitizeWalkComposites(ctx context.Context, historicalMap map[string]*data.Asset) {
-	sanitizeWalkComposites(ctx, historicalMap, api.walkWindowsByFigi, figi.LookupCompositesByFIGI)
+	sanitizeWalkComposites(ctx, historicalMap, api.walkWindowsByFigi, api.walkWindowsByCIK, api.walkWindowsByName, figi.LookupCompositesByFIGI)
 }
 
 // sanitizeWalkComposites scrubs dirty composite_figis the historical
@@ -1452,7 +1691,7 @@ func (api *massiveAssetFetcher) sanitizeWalkComposites(ctx context.Context, hist
 // labels primary_exchange as XNAS; without this step every such day
 // becomes a duplicate row under the same ticker.
 //
-// Two passes:
+// Three passes:
 //
 //  1. OpenFIGI cross-check. Every distinct composite observed in the
 //     walk is resolved against OpenFIGI by ID_BB_GLOBAL. Any composite
@@ -1465,12 +1704,26 @@ func (api *massiveAssetFetcher) sanitizeWalkComposites(ctx context.Context, hist
 //     one with the longest walk-window span; non-empty CIK and
 //     lexicographic order are deterministic tiebreakers.
 //
-// Both passes also remove the dropped IDs from walkWindowsByFigi so
+//  3. Trailing-tail consolidation. When a ticker has a BBG-FIGI entry
+//     and a separate FIGI-less entry (keyed by cik or by name) whose
+//     walk window starts where the FIGI entry's ends and whose name
+//     matches the FIGI entry's (case-insensitive equality after
+//     trimming Massive's display suffixes), the FIGI-less entry is
+//     the same lifecycle continuing after Massive dropped the FIGI on
+//     their record. Fold the tail's lastSeen into the FIGI entry and
+//     drop the tail. Without this step, Medley Capital Corporation's
+//     2020-07-28 → 2021-01-01 observations (Massive drops the FIGI
+//     and changes the CIK on the same lifecycle) get published as a
+//     separate row from the rest of Medley's history.
+//
+// All passes remove the dropped IDs from the walk-window indexes so
 // downstream applyWalkDerivedDates does not key into ghost rows.
 func sanitizeWalkComposites(
 	ctx context.Context,
 	historicalMap map[string]*data.Asset,
 	walkWindowsByFigi map[string]walkWindow,
+	walkWindowsByCIK map[string]walkWindow,
+	walkWindowsByName map[string]walkWindow,
 	confirm compositeConfirmer,
 ) {
 	logger := zerolog.Ctx(ctx)
@@ -1572,13 +1825,240 @@ func sanitizeWalkComposites(
 		}
 	}
 
-	if droppedNonUS > 0 || droppedDup > 0 {
+	// Step 3: trailing-tail consolidation. When Massive's reference
+	// catalog drops the FIGI on a record mid-lifecycle (and often
+	// re-attaches a different CIK on the same record at the same
+	// time), the walk picks the post-drop observations up under a
+	// FIGI-less key and they look like a separate entity. Find pairs
+	// where one entry has a BBG composite_figi and another entry for
+	// the same ticker has no composite_figi, the FIGI-less entry's
+	// walk window starts no more than trailingTailGapDays after the
+	// FIGI'd entry's window ends, and the two names normalize to the
+	// same value. Treat the FIGI-less entry as the FIGI'd entry's
+	// continuation: fold its lastSeen into the FIGI'd walk window and
+	// drop the FIGI-less entry.
+	droppedTail := consolidateTrailingTails(logger, historicalMap, walkWindowsByFigi, walkWindowsByCIK, walkWindowsByName)
+
+	if droppedNonUS > 0 || droppedDup > 0 || droppedTail > 0 {
 		logger.Info().
 			Int("DroppedNonUS", droppedNonUS).
 			Int("DroppedDuplicates", droppedDup).
+			Int("DroppedTrailingTails", droppedTail).
 			Int("Remaining", len(historicalMap)).
 			Msg("sanitized walk composites")
 	}
+}
+
+// trailingTailGapDays is the maximum number of calendar days between a
+// FIGI'd entry's walk lastSeen and a FIGI-less entry's walk firstSeen
+// for the consolidation pass to treat them as the same lifecycle.
+// Massive's drop tends to happen on a single bad day (the
+// post-drop observations resume the next business day, usually 1-3
+// calendar days later); 30 days gives a comfortable margin without
+// risking accidental merges of unrelated lifecycles.
+const trailingTailGapDays = 30
+
+// consolidateTrailingTails performs Step 3 of sanitizeWalkComposites
+// (see that function for the rationale). Returns the number of
+// FIGI-less entries dropped. Pure logic — no network IO.
+func consolidateTrailingTails(
+	logger *zerolog.Logger,
+	historicalMap map[string]*data.Asset,
+	walkWindowsByFigi map[string]walkWindow,
+	walkWindowsByCIK map[string]walkWindow,
+	walkWindowsByName map[string]walkWindow,
+) int {
+	// Group ticker -> list of historicalMap IDs.
+	byTicker := make(map[string][]string, len(historicalMap))
+	for id, asset := range historicalMap {
+		byTicker[asset.Ticker] = append(byTicker[asset.Ticker], id)
+	}
+
+	dropped := 0
+
+	for _, ids := range byTicker {
+		if len(ids) < 2 {
+			continue
+		}
+
+		var (
+			figiIDs     []string
+			figilessIDs []string
+		)
+
+		for _, id := range ids {
+			if historicalMap[id].CompositeFigi != "" {
+				figiIDs = append(figiIDs, id)
+			} else {
+				figilessIDs = append(figilessIDs, id)
+			}
+		}
+
+		if len(figiIDs) == 0 || len(figilessIDs) == 0 {
+			continue
+		}
+
+		for _, tailID := range figilessIDs {
+			tail := historicalMap[tailID]
+
+			tailWindow, tailWindowFound := findWalkWindowFor(tail, walkWindowsByCIK, walkWindowsByName)
+			if !tailWindowFound {
+				continue
+			}
+
+			for _, headID := range figiIDs {
+				head := historicalMap[headID]
+
+				if !sameLifecycleName(head.Name, tail.Name) {
+					continue
+				}
+
+				headWindow, ok := walkWindowsByFigi[headID]
+				if !ok {
+					continue
+				}
+
+				if tailWindow.firstSeen.Before(headWindow.lastSeen) {
+					// Overlap, not strictly trailing — still
+					// the same lifecycle, accept.
+				} else {
+					gap := tailWindow.firstSeen.Sub(headWindow.lastSeen)
+					if gap > time.Duration(trailingTailGapDays)*24*time.Hour {
+						continue
+					}
+				}
+
+				// Fold tail's lastSeen into the head's walk
+				// window so downstream lookups via the FIGI
+				// see the full extended lifecycle.
+				if tailWindow.lastSeen.After(headWindow.lastSeen) {
+					headWindow.lastSeen = tailWindow.lastSeen
+					walkWindowsByFigi[headID] = headWindow
+				}
+
+				logger.Info().
+					Str("Ticker", tail.Ticker).
+					Str("DroppedID", tailID).
+					Str("DroppedCIK", tail.CIK).
+					Str("CanonicalID", headID).
+					Str("CanonicalCompositeFigi", head.CompositeFigi).
+					Str("CanonicalCIK", head.CIK).
+					Time("ExtendedLastSeen", headWindow.lastSeen).
+					Msg("consolidated trailing FIGI-less entry into FIGI'd lifecycle")
+
+				delete(historicalMap, tailID)
+
+				if tail.CIK != "" {
+					delete(walkWindowsByCIK, tail.Ticker+":"+tail.CIK)
+				}
+
+				if tail.Name != "" {
+					delete(walkWindowsByName, tail.Ticker+":name:"+tail.Name)
+				}
+
+				dropped++
+
+				break
+			}
+		}
+	}
+
+	return dropped
+}
+
+// findWalkWindowFor returns the walk window for a FIGI-less asset by
+// trying the CIK index first and then the name index. Mirrors
+// lookupWalkWindowWithKey but limited to the no-FIGI case the
+// consolidator handles.
+func findWalkWindowFor(asset *data.Asset, byCIK, byName map[string]walkWindow) (walkWindow, bool) {
+	if asset.CIK != "" {
+		if w, ok := byCIK[asset.Ticker+":"+asset.CIK]; ok {
+			return w, true
+		}
+	}
+
+	if asset.Name != "" {
+		if w, ok := byName[asset.Ticker+":name:"+asset.Name]; ok {
+			return w, true
+		}
+	}
+
+	return walkWindow{}, false
+}
+
+// sameLifecycleName reports whether two Massive display names refer to
+// the same issuer. Massive uses a small set of decorative suffixes
+// ("COM STK", "ADS", "(NEW)", etc.) and capitalization varies between
+// records; the comparison strips those before doing a case-
+// insensitive equality test. Empty names never match.
+func sameLifecycleName(a, b string) bool {
+	na := normalizeIssuerName(a)
+	nb := normalizeIssuerName(b)
+
+	if na == "" || nb == "" {
+		return false
+	}
+
+	return na == nb
+}
+
+// normalizeIssuerName strips the trailing decorative tokens Massive
+// adds to issuer names (e.g., "MEDLEY CAP CORP COM STK (DE)" vs
+// "MEDLEY CAPITAL CORPORATION") so two display names that refer to
+// the same issuer compare equal. Lowercases, drops punctuation, and
+// drops well-known suffix tokens. Returns "" for an empty input.
+func normalizeIssuerName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+
+	// Replace punctuation that varies between Massive records.
+	for _, sep := range []string{".", ",", "-", "/", "(", ")", "&"} {
+		s = strings.ReplaceAll(s, sep, " ")
+	}
+
+	tokens := strings.Fields(s)
+	dropped := map[string]struct{}{
+		"the":          {},
+		"inc":          {},
+		"incorporated": {},
+		"corp":         {},
+		"corporation":  {},
+		"co":           {},
+		"company":      {},
+		"ltd":          {},
+		"limited":      {},
+		"llc":          {},
+		"plc":          {},
+		"sa":           {},
+		"nv":           {},
+		"ag":           {},
+		"com":          {},
+		"stk":          {},
+		"new":          {},
+		"de":           {},
+		"ny":           {},
+		"holdings":     {},
+		"holding":      {},
+		"group":        {},
+		"trust":        {},
+		"fund":         {},
+		"reit":         {},
+		"ads":          {},
+		"adr":          {},
+	}
+
+	kept := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if _, drop := dropped[t]; drop {
+			continue
+		}
+
+		kept = append(kept, t)
+	}
+
+	return strings.Join(kept, " ")
 }
 
 // compositeBeats returns true when candidate should replace current

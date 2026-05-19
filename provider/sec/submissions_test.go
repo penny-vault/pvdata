@@ -89,4 +89,3 @@ var _ = Describe("EarliestFilingDateForForm", func() {
 		Expect(sub.EarliestFilingDateForForm("N-2")).To(Equal("2008-02-22"))
 	})
 })
-

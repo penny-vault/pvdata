@@ -52,6 +52,7 @@ func newFetcherWithArchive(archive *EODArchive) *massiveAssetFetcher {
 	api := &massiveAssetFetcher{
 		walkWindowsByFigi: make(map[string]walkWindow),
 		walkWindowsByCIK:  make(map[string]walkWindow),
+		walkWindowsByName: make(map[string]walkWindow),
 	}
 	api.eodArchiveOnce.Do(func() {})
 	api.eodArchive = archive

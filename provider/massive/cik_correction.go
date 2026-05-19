@@ -153,6 +153,14 @@ func (api *massiveAssetFetcher) earliestTradingEvidence(asset *data.Asset) time.
 		}
 	}
 
+	if asset.Name != "" && api.walkWindowsByName != nil {
+		if win, ok := api.walkWindowsByName[asset.Ticker+":name:"+asset.Name]; ok && !win.firstSeen.IsZero() {
+			if earliest.IsZero() || win.firstSeen.Before(earliest) {
+				earliest = win.firstSeen
+			}
+		}
+	}
+
 	if archive := api.eodArchiveForRun(); archive != nil {
 		ranges := archive.Ranges(asset.Ticker)
 		if len(ranges) > 0 {

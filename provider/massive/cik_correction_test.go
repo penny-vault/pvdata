@@ -100,6 +100,23 @@ var _ = Describe("earliestTradingEvidence", func() {
 		Expect(api.earliestTradingEvidence(asset).IsZero()).To(BeTrue())
 	})
 
+	It("looks up walk by ticker:name when CIK and CompositeFigi are both empty", func() {
+		api.walkWindowsByName["MCC:name:MESTEK INC"] = walkWindow{
+			firstSeen: time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC),
+			lastSeen:  time.Date(2006, 8, 30, 0, 0, 0, 0, time.UTC),
+		}
+
+		api.eodArchive = nil
+
+		asset := &data.Asset{
+			Ticker:   "MCC",
+			Name:     "MESTEK INC",
+			ValidFor: time.Date(2005, 6, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		Expect(api.earliestTradingEvidence(asset)).To(Equal(time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC)))
+	})
+
 	It("snaps a ValidFor past every archive range to the most recent lifecycle", func() {
 		// ValidFor 2026-12-31 sits past the most recent range's end
 		// (2022-09-07). Should snap to that lifecycle's start.

@@ -66,6 +66,9 @@ func secRegistrationFormPrefix(t data.AssetType) string {
 // still rejects the lifecycle of an asset whose first bar sits at the
 // start of our coverage.
 func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *data.Asset) DateCandidates {
+	logger := zerolog.Ctx(ctx)
+	traced := traceAsset(ctx, asset.Ticker)
+
 	c := DateCandidates{
 		AssetType: asset.AssetType,
 		Active:    asset.Active,
@@ -79,11 +82,42 @@ func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *
 		c.MassiveReferenceDelistingDate = t
 	}
 
-	if win, ok := api.lookupWalkWindow(asset); ok {
+	if traced {
+		logger.Info().
+			Str("Stage", "buildDateCandidates-entry").
+			Str("Ticker", asset.Ticker).
+			Str("CompositeFigi", asset.CompositeFigi).
+			Str("CIK", asset.CIK).
+			Str("AssetType", string(asset.AssetType)).
+			Bool("Active", asset.Active).
+			Time("ValidFor", asset.ValidFor).
+			Str("InputListingDate", asset.ListingDate).
+			Str("InputDelistingDate", asset.DelistingDate).
+			Str("Name", asset.Name).
+			Msg("trace: buildDateCandidates input")
+	}
+
+	walkKey, win, walkOK := api.lookupWalkWindowWithKey(asset)
+	if walkOK {
 		c.MassiveReferenceWalkFirstSeen = win.firstSeen
 		c.MassiveReferenceWalkLastSeen = win.lastSeen
 		c.MassiveReferenceWalkStart = api.walkStart
 		c.MassiveReferenceWalkEnd = api.walkEnd
+	}
+
+	if traced {
+		ev := logger.Info().
+			Str("Stage", "buildDateCandidates-walk").
+			Str("Ticker", asset.Ticker).
+			Bool("WalkWindowFound", walkOK).
+			Str("WalkKey", walkKey).
+			Time("WalkStart", api.walkStart).
+			Time("WalkEnd", api.walkEnd)
+		if walkOK {
+			ev = ev.Time("WalkFirstSeen", win.firstSeen).Time("WalkLastSeen", win.lastSeen)
+		}
+
+		ev.Msg("trace: buildDateCandidates walk-window lookup")
 	}
 
 	if archive := api.eodArchiveForRun(); archive != nil {
@@ -92,14 +126,21 @@ func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *
 		c.MassiveEODArchiveCoverageEnd = coverageEnd
 
 		ranges := archive.Ranges(asset.Ticker)
+
+		var (
+			lifecycle      dateRange
+			lifecycleFound bool
+			snappedToLast  bool
+		)
+
 		if len(ranges) > 0 {
 			assetDate := asset.ValidFor
 			if assetDate.IsZero() {
 				assetDate = time.Now()
 			}
 
-			lifecycle, found := lifecycleContaining(ranges, assetDate)
-			if !found && assetDate.After(ranges[len(ranges)-1].End) {
+			lifecycle, lifecycleFound = lifecycleContaining(ranges, assetDate)
+			if !lifecycleFound && assetDate.After(ranges[len(ranges)-1].End) {
 				// Active assets typically arrive with a ValidFor set
 				// to today (or zero, which we default to now above).
 				// The archive's latest bar usually lags by a few days,
@@ -108,25 +149,58 @@ func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *
 				// most recent lifecycle, since the asset is by
 				// definition still part of that lifecycle.
 				lifecycle = ranges[len(ranges)-1]
-				found = true
+				lifecycleFound = true
+				snappedToLast = true
 			}
 
-			if found {
+			if lifecycleFound {
 				c.MassiveEODArchiveFirstBar = lifecycle.Start
 				c.MassiveEODArchiveLastBar = lifecycle.End
 			} else {
-				zerolog.Ctx(ctx).Warn().
+				logger.Warn().
 					Str("Ticker", asset.Ticker).
 					Time("ValidFor", asset.ValidFor).
 					Int("ArchiveRangeCount", len(ranges)).
+					Str("Ranges", formatDateRanges(ranges)).
 					Msg("massive: asset date does not fall inside any EOD archive lifecycle range; skipping per-lifecycle EOD candidates")
 			}
 		}
+
+		if traced {
+			ev := logger.Info().
+				Str("Stage", "buildDateCandidates-eod").
+				Str("Ticker", asset.Ticker).
+				Time("CoverageStart", coverageStart).
+				Time("CoverageEnd", coverageEnd).
+				Int("ArchiveRangeCount", len(ranges)).
+				Str("Ranges", formatDateRanges(ranges)).
+				Time("ValidFor", asset.ValidFor).
+				Bool("LifecycleFound", lifecycleFound).
+				Bool("SnappedToLast", snappedToLast)
+			if lifecycleFound {
+				ev = ev.Time("LifecycleStart", lifecycle.Start).Time("LifecycleEnd", lifecycle.End)
+			}
+
+			ev.Msg("trace: buildDateCandidates EOD archive lookup")
+		}
+	} else if traced {
+		logger.Info().
+			Str("Stage", "buildDateCandidates-eod").
+			Str("Ticker", asset.Ticker).
+			Msg("trace: buildDateCandidates EOD archive unavailable")
 	}
+
+	secAttempted := false
+	secErrText := ""
 
 	if asset.CIK != "" {
 		if cikInt, err := strconv.Atoi(asset.CIK); err == nil && cikInt > 0 {
-			if sub, err := sec.FetchSubmissions(ctx, cikInt); err == nil && sub != nil {
+			secAttempted = true
+
+			sub, err := sec.FetchSubmissions(ctx, cikInt)
+			if err != nil {
+				secErrText = err.Error()
+			} else if sub != nil {
 				prefix := secRegistrationFormPrefix(asset.AssetType)
 				c.SECFormPrefix = prefix
 
@@ -154,6 +228,30 @@ func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *
 				}
 			}
 		}
+	}
+
+	if traced {
+		logger.Info().
+			Str("Stage", "buildDateCandidates-sec").
+			Str("Ticker", asset.Ticker).
+			Str("CIK", asset.CIK).
+			Bool("SECAttempted", secAttempted).
+			Str("SECError", secErrText).
+			Str("FormPrefix", c.SECFormPrefix).
+			Time("EarliestFilingMatchingForm", c.SECEarliestFilingMatchingForm).
+			Msg("trace: buildDateCandidates SEC submissions lookup")
+
+		logger.Info().
+			Str("Stage", "buildDateCandidates-exit").
+			Str("Ticker", asset.Ticker).
+			Time("MassiveReferenceListingDate", c.MassiveReferenceListingDate).
+			Time("MassiveReferenceDelistingDate", c.MassiveReferenceDelistingDate).
+			Time("MassiveReferenceWalkFirstSeen", c.MassiveReferenceWalkFirstSeen).
+			Time("MassiveReferenceWalkLastSeen", c.MassiveReferenceWalkLastSeen).
+			Time("MassiveEODArchiveFirstBar", c.MassiveEODArchiveFirstBar).
+			Time("MassiveEODArchiveLastBar", c.MassiveEODArchiveLastBar).
+			Time("SECEarliestFilingMatchingForm", c.SECEarliestFilingMatchingForm).
+			Msg("trace: buildDateCandidates result")
 	}
 
 	return c
@@ -239,22 +337,59 @@ func (api *massiveAssetFetcher) findEODSubscription() (*library.Subscription, er
 	return nil, nil
 }
 
-// lookupWalkWindow returns the walk window for asset, trying the FIGI
-// index first and falling back to the CIK index.
-func (api *massiveAssetFetcher) lookupWalkWindow(asset *data.Asset) (walkWindow, bool) {
-	if asset.CompositeFigi != "" && api.walkWindowsByFigi != nil {
-		if win, ok := api.walkWindowsByFigi[asset.Ticker+":"+asset.CompositeFigi]; ok {
-			return win, true
+// lookupWalkWindowWithKey returns the walk window for asset, trying
+// the FIGI index first, then the CIK index, then the name index. The
+// name index is the fallback for records Massive returned with no
+// FIGI and no CIK during the walk (untyped records for old delisted
+// tickers — see massive_stock_tickers comment on walkWindowsByName).
+// Returns the lookup key that produced the hit (or, on miss, a
+// "tried=" diagnostic showing the keys that were attempted in order)
+// so callers emitting per-ticker trace logs can show which index
+// entry was consulted.
+func (api *massiveAssetFetcher) lookupWalkWindowWithKey(asset *data.Asset) (string, walkWindow, bool) {
+	figiKey := ""
+	if asset.CompositeFigi != "" {
+		figiKey = asset.Ticker + ":" + asset.CompositeFigi
+	}
+
+	if figiKey != "" && api.walkWindowsByFigi != nil {
+		if win, ok := api.walkWindowsByFigi[figiKey]; ok {
+			return "figi=" + figiKey, win, true
 		}
 	}
 
-	if asset.CIK != "" && api.walkWindowsByCIK != nil {
-		if win, ok := api.walkWindowsByCIK[asset.Ticker+":"+asset.CIK]; ok {
-			return win, true
+	cikKey := ""
+	if asset.CIK != "" {
+		cikKey = asset.Ticker + ":" + asset.CIK
+	}
+
+	if cikKey != "" && api.walkWindowsByCIK != nil {
+		if win, ok := api.walkWindowsByCIK[cikKey]; ok {
+			return "cik=" + cikKey, win, true
 		}
 	}
 
-	return walkWindow{}, false
+	nameKey := ""
+	if asset.Name != "" {
+		nameKey = asset.Ticker + ":name:" + asset.Name
+	}
+
+	if nameKey != "" && api.walkWindowsByName != nil {
+		if win, ok := api.walkWindowsByName[nameKey]; ok {
+			return "name=" + nameKey, win, true
+		}
+	}
+
+	missKey := figiKey
+	if missKey == "" {
+		missKey = cikKey
+	}
+
+	if missKey == "" {
+		missKey = nameKey
+	}
+
+	return "tried=" + missKey, walkWindow{}, false
 }
 
 // isLookbackRun reports whether the walk span is wide enough to count
@@ -310,6 +445,43 @@ func (api *massiveAssetFetcher) assignDatesForGroup(ctx context.Context, assets 
 
 	logger := zerolog.Ctx(ctx)
 
+	groupTraced := false
+
+	for _, a := range assets {
+		if traceAsset(ctx, a.Ticker) {
+			groupTraced = true
+			break
+		}
+	}
+
+	if groupTraced {
+		ticker := ""
+		if len(assets) > 0 {
+			ticker = assets[0].Ticker
+		}
+
+		logger.Info().
+			Str("Stage", "assignDatesForGroup-entry").
+			Str("Ticker", ticker).
+			Int("AssetCount", len(assets)).
+			Msg("trace: assignDatesForGroup starting")
+
+		for i, a := range assets {
+			logger.Info().
+				Str("Stage", "assignDatesForGroup-input").
+				Str("Ticker", a.Ticker).
+				Int("Index", i).
+				Str("CompositeFigi", a.CompositeFigi).
+				Str("CIK", a.CIK).
+				Bool("Active", a.Active).
+				Time("ValidFor", a.ValidFor).
+				Str("InputListingDate", a.ListingDate).
+				Str("InputDelistingDate", a.DelistingDate).
+				Str("Name", a.Name).
+				Msg("trace: assignDatesForGroup input asset")
+		}
+	}
+
 	candidates := make([]DateCandidates, len(assets))
 	for i, asset := range assets {
 		candidates[i] = api.buildDateCandidates(ctx, asset)
@@ -345,6 +517,20 @@ func (api *massiveAssetFetcher) assignDatesForGroup(ctx context.Context, assets 
 
 		if !r.DelistingDate.IsZero() && assets[i].Active && r.DelistingDate.Before(now) {
 			assets[i].Active = false
+		}
+
+		if groupTraced {
+			logger.Info().
+				Str("Stage", "assignDatesForGroup-output").
+				Str("Ticker", assets[i].Ticker).
+				Int("Index", i).
+				Str("CompositeFigi", assets[i].CompositeFigi).
+				Time("ChosenListing", r.ListingDate).
+				Str("ListingSource", r.ListingSource).
+				Time("ChosenDelisting", r.DelistingDate).
+				Str("DelistingSource", r.DelistingSource).
+				Bool("ActiveAfter", assets[i].Active).
+				Msg("trace: assignDatesForGroup output asset")
 		}
 
 		// listed must never be empty. AssignDatesForTicker is supposed

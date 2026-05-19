@@ -56,9 +56,9 @@ var _ = Describe("AssignDatesForTicker", func() {
 	Context("single asset with one usable source", func() {
 		It("returns the Massive reference listing date when only that source has a value", func() {
 			candidates := []DateCandidates{{
-				AssetType:                   data.CommonStock,
-				Active:                      false,
-				MassiveReferenceListingDate: d("2010-03-15"),
+				AssetType:                     data.CommonStock,
+				Active:                        false,
+				MassiveReferenceListingDate:   d("2010-03-15"),
 				MassiveReferenceDelistingDate: d("2018-12-01"),
 			}}
 
@@ -106,16 +106,16 @@ var _ = Describe("AssignDatesForTicker", func() {
 	Context("priority order across sources for one asset", func() {
 		It("prefers Massive reference listing over EOD, walk, and SEC when all are usable", func() {
 			candidates := []DateCandidates{{
-				AssetType:                       data.CommonStock,
-				Active:                          true,
-				MassiveReferenceListingDate:     d("2015-06-01"),
-				MassiveEODArchiveFirstBar:       d("2015-06-15"),
-				MassiveEODArchiveCoverageStart:  d("2010-01-01"),
-				MassiveEODArchiveCoverageEnd:    d("2026-05-01"),
-				MassiveReferenceWalkFirstSeen:   d("2015-06-20"),
-				MassiveReferenceWalkStart:       d("2014-01-01"),
-				MassiveReferenceWalkEnd:         d("2026-05-01"),
-				SECEarliestFilingMatchingForm:   d("2015-03-30"),
+				AssetType:                      data.CommonStock,
+				Active:                         true,
+				MassiveReferenceListingDate:    d("2015-06-01"),
+				MassiveEODArchiveFirstBar:      d("2015-06-15"),
+				MassiveEODArchiveCoverageStart: d("2010-01-01"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-01"),
+				MassiveReferenceWalkFirstSeen:  d("2015-06-20"),
+				MassiveReferenceWalkStart:      d("2014-01-01"),
+				MassiveReferenceWalkEnd:        d("2026-05-01"),
+				SECEarliestFilingMatchingForm:  d("2015-03-30"),
 			}}
 
 			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
@@ -376,6 +376,56 @@ var _ = Describe("AssignDatesForTicker", func() {
 			Expect(got[1].ListingDate).To(Equal(d("2016-06-29")))
 			Expect(got[1].ListingDate.After(got[0].DelistingDate)).To(BeTrue())
 		})
+
+		It("preserves the later asset's delisting when its SEC earliest filing is older than the earlier asset's because the CIK is misattributed", func() {
+			// Brickell-style: the later asset's CIK belongs to an
+			// unrelated older entity (e.g. Massive tags Brickell
+			// Biotech's BBI row with Arch Capital's CIK 0000819050,
+			// which has 1994 filings). The earlier asset (Blockbuster)
+			// has a more recent SEC earliest filing (1999). The OLD
+			// sort by earliestKnownListing folded SEC's misattributed
+			// date in and put Brickell ahead of Blockbuster, then
+			// reconcileBoundary chopped Brickell's correct 2022
+			// delisting back to one trading day before Blockbuster's
+			// 1999 listing, after which enforceRules cleared it for
+			// violating delisting > listing. The fix sorts by the
+			// chosen listing instead, so Blockbuster precedes Brickell
+			// and Brickell's 2022 delisting survives.
+			blockbuster := DateCandidates{
+				AssetType:                      data.CommonStock,
+				Active:                         false,
+				MassiveEODArchiveFirstBar:      d("2003-09-10"),
+				MassiveEODArchiveLastBar:       d("2010-07-06"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-08"),
+				SECEarliestFilingMatchingForm:  d("1999-05-06"),
+			}
+
+			brickell := DateCandidates{
+				AssetType:                      data.CommonStock,
+				Active:                         false,
+				MassiveEODArchiveFirstBar:      d("2019-09-03"),
+				MassiveEODArchiveLastBar:       d("2022-09-07"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-08"),
+				SECEarliestFilingMatchingForm:  d("1994-02-11"),
+			}
+
+			got := AssignDatesForTicker(silentLogger(), []DateCandidates{brickell, blockbuster}, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(2))
+
+			// Brickell (input index 0) keeps its 2019-09-03 listing
+			// and 2022-09-08 delisting (EOD last bar + 1 calendar
+			// day).
+			Expect(got[0].ListingDate).To(Equal(d("2019-09-03")))
+			Expect(got[0].DelistingDate).To(Equal(d("2022-09-08")))
+
+			// Blockbuster (input index 1) keeps its SEC-derived
+			// listing and EOD-derived delisting.
+			Expect(got[1].ListingDate).To(Equal(d("1999-05-06")))
+			Expect(got[1].DelistingDate).To(Equal(d("2010-07-07")))
+		})
 	})
 
 	Context("hard constraints", func() {
@@ -432,6 +482,70 @@ var _ = Describe("AssignDatesForTicker", func() {
 			got := AssignDatesForTicker(silentLogger(), nil, calendarPreviousDay)
 			Expect(got).To(BeNil())
 		})
+	})
+})
+
+var _ = Describe("windowsOverlap", func() {
+	Context("when both windows have both endpoints set", func() {
+		It("reports overlap when ranges share any point in time", func() {
+			a := &AssignedDates{ListingDate: d("2010-01-01"), DelistingDate: d("2015-01-01")}
+			b := &AssignedDates{ListingDate: d("2014-01-01"), DelistingDate: d("2020-01-01")}
+			Expect(windowsOverlap(a, b)).To(BeTrue())
+		})
+
+		It("reports non-overlap when the earlier window ends before the later begins", func() {
+			a := &AssignedDates{ListingDate: d("2010-01-01"), DelistingDate: d("2012-01-01")}
+			b := &AssignedDates{ListingDate: d("2014-01-01"), DelistingDate: d("2020-01-01")}
+			Expect(windowsOverlap(a, b)).To(BeFalse())
+		})
+	})
+
+	Context("when one or both windows have zero endpoints", func() {
+		It("treats a zero delisting as forward-open and detects overlap with a later window", func() {
+			open := &AssignedDates{ListingDate: d("2010-01-01")}
+			later := &AssignedDates{ListingDate: d("2015-01-01"), DelistingDate: d("2020-01-01")}
+			Expect(windowsOverlap(open, later)).To(BeTrue())
+		})
+
+		It("treats a zero listing as backward-open and detects overlap with an earlier window", func() {
+			earlier := &AssignedDates{ListingDate: d("2010-01-01"), DelistingDate: d("2015-01-01")}
+			open := &AssignedDates{DelistingDate: d("2020-01-01")}
+			Expect(windowsOverlap(earlier, open)).To(BeTrue())
+		})
+
+		It("treats both-zero as fully open and overlapping with every sibling", func() {
+			open := &AssignedDates{}
+			sibling := &AssignedDates{ListingDate: d("2010-01-01"), DelistingDate: d("2015-01-01")}
+			Expect(windowsOverlap(open, sibling)).To(BeTrue())
+			Expect(windowsOverlap(sibling, open)).To(BeTrue())
+		})
+	})
+})
+
+var _ = Describe("AssignDatesForTicker overlap rule", func() {
+	It("flags a fully-open sibling row as overlapping with a dated sibling", func() {
+		dated := DateCandidates{
+			Active:                        false,
+			MassiveReferenceListingDate:   d("2011-01-20"),
+			MassiveReferenceDelistingDate: d("2021-01-01"),
+		}
+		fullyOpen := DateCandidates{
+			Active: true,
+			// No date evidence anywhere — the kind of row that
+			// previously slipped past the overlap check because
+			// every endpoint was zero.
+			AssetType: data.CommonStock,
+		}
+
+		got := AssignDatesForTicker(silentLogger(), []DateCandidates{dated, fullyOpen}, calendarPreviousDay)
+
+		Expect(got).To(HaveLen(2))
+		// The dated row keeps its dates; the fully-open row is
+		// detected but the algorithm does not invent values for it.
+		Expect(got[0].ListingDate).To(Equal(d("2011-01-20")))
+		Expect(got[0].DelistingDate).To(Equal(d("2021-01-01")))
+		Expect(got[1].ListingDate.IsZero()).To(BeTrue())
+		Expect(got[1].DelistingDate.IsZero()).To(BeTrue())
 	})
 })
 

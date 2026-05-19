@@ -139,24 +139,6 @@ func AssignDatesForTicker(
 		indexed[i] = indexedCandidate{index: i, candidates: c}
 	}
 
-	// Sort by earliest-known-listing-date so predecessor precedes
-	// successor. Ties keep the caller's original order via the index.
-	sort.SliceStable(indexed, func(i, j int) bool {
-		ei := earliestKnownListing(indexed[i].candidates)
-		ej := earliestKnownListing(indexed[j].candidates)
-
-		switch {
-		case ei.IsZero() && ej.IsZero():
-			return indexed[i].index < indexed[j].index
-		case ei.IsZero():
-			return false
-		case ej.IsZero():
-			return true
-		}
-
-		return ei.Before(ej)
-	})
-
 	// Per-asset listing and delisting choice, before cross-asset
 	// reconciliation. Each asset uses its own candidates with the
 	// priority order applied.
@@ -175,6 +157,22 @@ func AssignDatesForTicker(
 	// chooseDatesForAsset with their MassiveReferenceListingDate
 	// suppressed, falling through to the next priority candidate.
 	rejectOverlappingMassiveListings(logger, indexed, assignments)
+
+	// Sort by chosen listing date so predecessor precedes successor
+	// for reconcileBoundary's adjacent-pair walk. Using the chosen
+	// listing (the output of chooseDatesForAsset, post-rejection) is
+	// the right signal: it is the algorithm's best estimate of when
+	// the asset actually listed, with all the priority-order and
+	// gate logic already applied. Sorting by earliestKnownListing
+	// (which folded in SEC's earliest filing for the CIK) produced
+	// wrong orderings when Massive misattributed a CIK to an
+	// unrelated older entity — Brickell Biotech's BBI row carries
+	// CIK 0000819050, which belongs to Arch Capital historically,
+	// so SEC returned a 1994 filing that placed Brickell ahead of
+	// Blockbuster (2010 delisting) in the sort and caused
+	// reconcileBoundary to chop Brickell's correct 2022 delisting.
+	// Ties keep the caller's original order via the index.
+	sortIndexedByAssignedListing(indexed, assignments)
 
 	// Cross-asset reconciliation between adjacent (predecessor,
 	// successor) pairs. Walks the sorted slice and resolves boundary
@@ -224,30 +222,41 @@ func indexOf(indexed []indexedCandidate, originalIndex int) int {
 	return -1
 }
 
-// earliestKnownListing returns the earliest non-zero listing-side
-// candidate value for an asset across all sources. Used as the sort
-// key when ordering predecessor before successor.
-func earliestKnownListing(c DateCandidates) time.Time {
-	candidates := []time.Time{
-		c.MassiveReferenceListingDate,
-		c.MassiveReferenceWalkFirstSeen,
-		c.MassiveEODArchiveFirstBar,
-		c.SECEarliestFilingMatchingForm,
+// sortIndexedByAssignedListing reorders indexed and assignments in
+// lockstep so that earlier chosen listing dates come first. A zero
+// listing sorts last; ties preserve the existing relative order. The
+// two slices must have the same length.
+func sortIndexedByAssignedListing(indexed []indexedCandidate, assignments []AssignedDates) {
+	type pair struct {
+		ic indexedCandidate
+		a  AssignedDates
 	}
 
-	var earliest time.Time
-
-	for _, t := range candidates {
-		if t.IsZero() {
-			continue
-		}
-
-		if earliest.IsZero() || t.Before(earliest) {
-			earliest = t
-		}
+	pairs := make([]pair, len(indexed))
+	for i := range indexed {
+		pairs[i] = pair{ic: indexed[i], a: assignments[i]}
 	}
 
-	return earliest
+	sort.SliceStable(pairs, func(i, j int) bool {
+		li := pairs[i].a.ListingDate
+		lj := pairs[j].a.ListingDate
+
+		switch {
+		case li.IsZero() && lj.IsZero():
+			return pairs[i].ic.index < pairs[j].ic.index
+		case li.IsZero():
+			return false
+		case lj.IsZero():
+			return true
+		}
+
+		return li.Before(lj)
+	})
+
+	for i := range pairs {
+		indexed[i] = pairs[i].ic
+		assignments[i] = pairs[i].a
+	}
 }
 
 // chooseDatesForAsset picks the listing and delisting dates for one
@@ -668,26 +677,80 @@ func enforceRules(logger *zerolog.Logger, assignments []AssignedDates, indexed [
 	}
 
 	// Rule 1: no overlapping windows among assets sharing the ticker.
-	// indexed[] is sorted by earliest-known listing, so checking
-	// adjacent pairs is sufficient.
+	// indexed[] is sorted by earliest-known listing, so checking each
+	// pair against every later pair catches every violation.
+	//
+	// A zero (NULL) endpoint is treated as the open boundary in the
+	// direction it would extend: a zero listing means the window
+	// extends backwards from the delisting (or all the way back if
+	// delisting is also zero); a zero delisting means the window
+	// extends forwards from the listing (or all the way forwards if
+	// listing is also zero). Two windows overlap when, after this
+	// open-boundary expansion, they share any point in time. A row
+	// whose listing and delisting are both zero overlaps every
+	// sibling by definition — we have no information to place it.
+	//
+	// The previous check `continue`d whenever either endpoint was
+	// zero, which let two same-ticker rows with NULL boundaries
+	// coexist undetected. The fix logs every violation; it does not
+	// attempt to "repair" the data by clearing dates, because
+	// clearing introduces more NULLs (the very thing the invariant
+	// is supposed to prevent) and the root cause is upstream (two
+	// rows that should not coexist, or missing date evidence).
 	for i := 0; i+1 < len(indexed); i++ {
-		later := &assignments[i+1]
 		earlier := &assignments[i]
 
-		if earlier.DelistingDate.IsZero() || later.ListingDate.IsZero() {
-			continue
-		}
+		for j := i + 1; j < len(indexed); j++ {
+			later := &assignments[j]
 
-		if !earlier.DelistingDate.Before(later.ListingDate) {
+			if !windowsOverlap(earlier, later) {
+				continue
+			}
+
 			logger.Warn().
 				Str("EarlierField", fmt.Sprintf("asset_index_%d", indexed[i].index)).
+				Time("EarlierListing", earlier.ListingDate).
 				Time("EarlierDelisting", earlier.DelistingDate).
-				Str("LaterField", fmt.Sprintf("asset_index_%d", indexed[i+1].index)).
+				Str("LaterField", fmt.Sprintf("asset_index_%d", indexed[j].index)).
 				Time("LaterListing", later.ListingDate).
-				Msg("massive: rule violation: same-ticker asset windows overlap; clearing earlier delisting")
-
-			earlier.DelistingDate = time.Time{}
-			earlier.DelistingSource = ""
+				Time("LaterDelisting", later.DelistingDate).
+				Msg("massive: rule violation: same-ticker asset windows overlap")
 		}
 	}
+}
+
+// windowsOverlap reports whether two assignments' (listing, delisting]
+// windows share any point in time, treating a zero endpoint as the
+// open boundary in the direction it would extend. See enforceRules'
+// Rule 1 comment for the precise semantics.
+func windowsOverlap(a, b *AssignedDates) bool {
+	aStart, aEnd := windowBounds(a)
+	bStart, bEnd := windowBounds(b)
+
+	if aEnd.Before(bStart) {
+		return false
+	}
+
+	if bEnd.Before(aStart) {
+		return false
+	}
+
+	return true
+}
+
+// windowBounds returns (start, end) for an assignment with the
+// open-boundary expansion described above. A zero listing maps to the
+// earliest representable time; a zero delisting maps to the latest.
+func windowBounds(a *AssignedDates) (time.Time, time.Time) {
+	start := a.ListingDate
+	if start.IsZero() {
+		start = time.Time{}.Add(time.Nanosecond)
+	}
+
+	end := a.DelistingDate
+	if end.IsZero() {
+		end = time.Unix(1<<62, 0)
+	}
+
+	return start, end
 }

@@ -133,3 +133,52 @@ var _ = Describe("buildDateCandidates EOD lifecycle selection", func() {
 		Expect(c.MassiveEODArchiveLastBar).To(Equal(time.Date(2022, 9, 7, 0, 0, 0, 0, time.UTC)))
 	})
 })
+
+var _ = Describe("lookupWalkWindowWithKey name-fallback", func() {
+	var api *massiveAssetFetcher
+
+	BeforeEach(func() {
+		api = newFetcherWithArchive(buildBBIArchive())
+	})
+
+	It("returns the window keyed by ticker:name when both FIGI and CIK are absent", func() {
+		api.walkWindowsByName["MCC:name:MESTEK INC"] = walkWindow{
+			firstSeen: time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC),
+			lastSeen:  time.Date(2006, 8, 30, 0, 0, 0, 0, time.UTC),
+		}
+
+		asset := &data.Asset{Ticker: "MCC", Name: "MESTEK INC"}
+
+		key, win, ok := api.lookupWalkWindowWithKey(asset)
+		Expect(ok).To(BeTrue())
+		Expect(key).To(Equal("name=MCC:name:MESTEK INC"))
+		Expect(win.firstSeen).To(Equal(time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC)))
+		Expect(win.lastSeen).To(Equal(time.Date(2006, 8, 30, 0, 0, 0, 0, time.UTC)))
+	})
+
+	It("prefers a FIGI hit over a name hit when both are present", func() {
+		api.walkWindowsByFigi["AAPL:BBG000B9XRY4"] = walkWindow{
+			firstSeen: time.Date(2010, 1, 4, 0, 0, 0, 0, time.UTC),
+			lastSeen:  time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
+		}
+		api.walkWindowsByName["AAPL:name:Apple Inc."] = walkWindow{
+			firstSeen: time.Date(2005, 6, 1, 0, 0, 0, 0, time.UTC),
+			lastSeen:  time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		asset := &data.Asset{Ticker: "AAPL", CompositeFigi: "BBG000B9XRY4", Name: "Apple Inc."}
+
+		key, win, ok := api.lookupWalkWindowWithKey(asset)
+		Expect(ok).To(BeTrue())
+		Expect(key).To(Equal("figi=AAPL:BBG000B9XRY4"))
+		Expect(win.firstSeen).To(Equal(time.Date(2010, 1, 4, 0, 0, 0, 0, time.UTC)))
+	})
+
+	It("returns a diagnostic miss key when no index has the asset", func() {
+		asset := &data.Asset{Ticker: "ZZZZZ", Name: "Nowhere Co"}
+
+		key, _, ok := api.lookupWalkWindowWithKey(asset)
+		Expect(ok).To(BeFalse())
+		Expect(key).To(Equal("tried=ZZZZZ:name:Nowhere Co"))
+	})
+})

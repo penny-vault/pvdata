@@ -70,7 +70,6 @@ var _ = Describe("updateWalkWindow", func() {
 	})
 })
 
-
 var _ = Describe("sanitizeWalkComposites", func() {
 	var (
 		ctx     context.Context
@@ -125,7 +124,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG00DJ2WYN1": "EO",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("ATVI:BBG000CVWGS6"))
@@ -140,7 +139,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 
 		stub := confirmer(nil)
 
-		sanitizeWalkComposites(ctx, assets, windows, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("BBI:BBG_BLOCKBUSTER"))
@@ -157,7 +156,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG_SHORTUS": "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("FOO:BBG_LONGUS"))
@@ -175,7 +174,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG_NOCIK":   "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("FOO:BBG_WITHCIK"))
@@ -187,11 +186,126 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG000B9XRY4": "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("AAPL:BBG000B9XRY4"))
 		Expect(windows).To(HaveKey("AAPL:BBG000B9XRY4"))
+	})
+
+	It("consolidates a trailing CIK-only entry into the FIGI'd entry for the same lifecycle", func() {
+		// Real-world Medley pattern: Massive returns the FIGI for most
+		// of the lifecycle (CIK=0001490349, FIGI=BBG00K6RT2X7), then
+		// drops the FIGI on the last few months and switches to a
+		// wrong CIK (0001009215). The walk creates two historicalMap
+		// entries; consolidation should fold the FIGI-less tail into
+		// the FIGI'd entry.
+		assets["MCC:BBG00K6RT2X7"] = &data.Asset{
+			Ticker:        "MCC",
+			CompositeFigi: "BBG00K6RT2X7",
+			CIK:           "0001490349",
+			Name:          "MEDLEY CAPITAL CORPORATION",
+		}
+		windows["MCC:BBG00K6RT2X7"] = walkWindow{
+			firstSeen: mustParseDate("2011-01-20"),
+			lastSeen:  mustParseDate("2020-07-24"),
+		}
+
+		assets["MCC:cik:0001009215"] = &data.Asset{
+			Ticker: "MCC",
+			CIK:    "0001009215",
+			Name:   "MEDLEY CAPITAL CORPORATION",
+		}
+		windowsByCIK := map[string]walkWindow{
+			"MCC:0001009215": {
+				firstSeen: mustParseDate("2020-07-28"),
+				lastSeen:  mustParseDate("2021-01-01"),
+			},
+		}
+
+		stub := confirmer(map[string]string{
+			"BBG00K6RT2X7": "US",
+		})
+
+		sanitizeWalkComposites(ctx, assets, windows, windowsByCIK, map[string]walkWindow{}, stub)
+
+		Expect(assets).To(HaveLen(1))
+		Expect(assets).To(HaveKey("MCC:BBG00K6RT2X7"))
+		Expect(windows["MCC:BBG00K6RT2X7"].lastSeen).To(Equal(mustParseDate("2021-01-01")))
+		Expect(windowsByCIK).NotTo(HaveKey("MCC:0001009215"))
+	})
+
+	It("does not consolidate when the FIGI-less entry's window is too far past the FIGI'd lastSeen", func() {
+		// Same ticker, same name, but the gap is years (true ticker
+		// reuse, not a Massive data hiccup). Leave both entries.
+		assets["BBI:BBG_BLOCK"] = &data.Asset{
+			Ticker:        "BBI",
+			CompositeFigi: "BBG_BLOCK",
+			CIK:           "0001085734",
+			Name:          "Blockbuster Inc.",
+		}
+		windows["BBI:BBG_BLOCK"] = walkWindow{
+			firstSeen: mustParseDate("2003-09-10"),
+			lastSeen:  mustParseDate("2010-04-15"),
+		}
+
+		assets["BBI:cik:0000819050"] = &data.Asset{
+			Ticker: "BBI",
+			CIK:    "0000819050",
+			Name:   "Brickell Biotech Inc.",
+		}
+		windowsByCIK := map[string]walkWindow{
+			"BBI:0000819050": {
+				firstSeen: mustParseDate("2019-09-24"),
+				lastSeen:  mustParseDate("2022-09-07"),
+			},
+		}
+
+		stub := confirmer(map[string]string{
+			"BBG_BLOCK": "US",
+		})
+
+		sanitizeWalkComposites(ctx, assets, windows, windowsByCIK, map[string]walkWindow{}, stub)
+
+		Expect(assets).To(HaveLen(2))
+		Expect(assets).To(HaveKey("BBI:BBG_BLOCK"))
+		Expect(assets).To(HaveKey("BBI:cik:0000819050"))
+	})
+})
+
+var _ = Describe("normalizeIssuerName", func() {
+	It("strips decorative suffixes and lowercases", func() {
+		Expect(normalizeIssuerName("MEDLEY CAP CORP COM STK (DE)")).To(Equal("medley cap"))
+		Expect(normalizeIssuerName("MEDLEY CAPITAL CORPORATION")).To(Equal("medley capital"))
+		// Two different display strings for the same issuer normalize
+		// the same core token order; equality is still the caller's
+		// concern (see sameLifecycleName).
+	})
+
+	It("returns empty for empty or whitespace-only input", func() {
+		Expect(normalizeIssuerName("")).To(Equal(""))
+		Expect(normalizeIssuerName("   ")).To(Equal(""))
+	})
+
+	It("strips Inc / Corp / Ltd / Holdings / etc. uniformly", func() {
+		Expect(normalizeIssuerName("Apple Inc.")).To(Equal("apple"))
+		Expect(normalizeIssuerName("APPLE INCORPORATED")).To(Equal("apple"))
+		Expect(normalizeIssuerName("FOO HOLDINGS LTD")).To(Equal("foo"))
+	})
+})
+
+var _ = Describe("sameLifecycleName", func() {
+	It("returns true when normalized names match", func() {
+		Expect(sameLifecycleName("MEDLEY CAPITAL CORPORATION", "Medley Capital Corp.")).To(BeTrue())
+	})
+
+	It("returns false when either input is empty", func() {
+		Expect(sameLifecycleName("", "Medley Capital")).To(BeFalse())
+		Expect(sameLifecycleName("Medley Capital", "")).To(BeFalse())
+	})
+
+	It("returns false when normalized names differ", func() {
+		Expect(sameLifecycleName("Mestek Inc.", "Medley Capital")).To(BeFalse())
 	})
 })
 
@@ -276,6 +390,7 @@ var _ = Describe("cleanedListDate", func() {
 		return &massiveAssetFetcher{
 			walkWindowsByFigi: map[string]walkWindow{},
 			walkWindowsByCIK:  map[string]walkWindow{},
+			walkWindowsByName: map[string]walkWindow{},
 		}
 	}
 
