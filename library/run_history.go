@@ -440,12 +440,11 @@ func (myLibrary *Library) RunHistoryLog(ctx context.Context, runID string) (stri
 	return *runLog, nil
 }
 
-// RunHistoryLogPage holds a paged slice of captured log lines.
-//
-// Lines are returned in chronological order (oldest first). StartLine is
-// the 1-indexed line number of Lines[0] within the full log; pass it back
-// as `before` to fetch the page immediately preceding this one. Total is
-// the total number of lines across the entire captured log.
+// RunHistoryLogPage holds a paged slice of captured log lines in
+// chronological order (oldest first). StartLine is the 1-indexed line
+// number of Lines[0] within the full log; pass it back as `before` to
+// fetch the page immediately preceding this one. Total is the total
+// number of lines across the entire captured log.
 type RunHistoryLogPage struct {
 	Lines     []string `json:"lines"`
 	Total     int      `json:"total"`
@@ -453,12 +452,10 @@ type RunHistoryLogPage struct {
 }
 
 // RunHistoryLogPageQuery requests a slice of a captured log addressed by
-// run_history UUID.
-//
-// Before is the upper-bound cursor (exclusive) on line numbers, in the
-// 1-indexed line space of the full log. A non-positive value asks for the
-// tail — the last `Limit` lines. Limit is clamped to [1, 5000]; zero
-// becomes the default 1000.
+// run_history UUID. Before is the upper-bound cursor (exclusive) on line
+// numbers, in the 1-indexed line space of the full log; a non-positive
+// value asks for the tail — the last `Limit` lines. Limit is clamped to
+// [1, 5000]; zero becomes the default 1000.
 type RunHistoryLogPageQuery struct {
 	RunID  string
 	Before int
@@ -521,10 +518,8 @@ func FinalizeLogPage(rows []LogPageRow) RunHistoryLogPage {
 // RunHistoryLogPageFor returns a tail-first slice of the captured log for
 // a run, plus the total line count. The page is computed in Postgres so
 // only the requested lines cross the wire — large logs are not pulled into
-// memory in full.
-//
-// A missing run_history row, NULL log, or empty log all return an empty
-// page with Total=0.
+// memory in full. A missing run_history row, NULL log, or empty log all
+// return an empty page with Total=0.
 func (myLibrary *Library) RunHistoryLogPageFor(ctx context.Context, q RunHistoryLogPageQuery) (RunHistoryLogPage, error) {
 	limit, before := NormalizeLogPageBounds(q.Limit, q.Before)
 

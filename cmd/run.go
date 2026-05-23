@@ -37,13 +37,8 @@ provided then each subscription will execute sequentially.`,
 		// --lookback and --start-date both scope a run by setting the
 		// same provider lookback context value, so they're mutually
 		// exclusive. --start-date is converted to the equivalent
-		// lookback (end - parsed date), which after the providers'
-		// per-day truncation yields the same start boundary.
-		//
-		// --end-date constrains the walk's right edge. Defaults to now
-		// when unset. Combined with --start-date it bounds a targeted
-		// historical window (e.g. 2009-01-01 → 2010-12-31 to backfill
-		// just Blockbuster's BBI tenancy).
+		// lookback (end - parsed date). --end-date constrains the walk's
+		// right edge and defaults to now when unset.
 		lookbackStr := viper.GetString("lookback")
 		startDateStr := viper.GetString("start-date")
 		endDateStr := viper.GetString("end-date")

@@ -38,14 +38,6 @@ func charToValue(c byte) int {
 
 // computeCheckDigit computes the FIGI check digit using the modified Luhn
 // algorithm over the first 11 characters of a FIGI.
-//
-// Algorithm:
-//  1. Map each character to its numeric value (0-9 for digits, A=10..Z=35).
-//  2. For 0-indexed positions, multiply values at ODD positions by 2;
-//     values at EVEN positions are multiplied by 1.
-//  3. Convert each product to its decimal digit representation and sum all
-//     individual digits.
-//  4. Check digit = (10 - (sum % 10)) % 10.
 func computeCheckDigit(first11 string) int {
 	sum := 0
 
@@ -93,16 +85,10 @@ func ValidateFIGICheckDigit(figi string) bool {
 }
 
 // GenerateSyntheticFIGI generates a deterministic FIGI-format identifier
-// for a given ticker and name. The identifier uses the "PV" issuer prefix
-// to distinguish it from real OpenFIGI-assigned identifiers.
-//
-// Format: PVG{8 alphanumeric chars}{check digit}
-//
-// The 8 body characters are derived from a SHA-256 hash of "ticker|name"
-// mapped onto the valid FIGI alphabet.
-//
-// Prefer GenerateSyntheticFIGIFromCIK when a SEC CIK is available; this
-// fallback is for entities without a CIK.
+// (PVG{8 alphanumeric chars}{check digit}) for a given ticker and name,
+// using the "PV" issuer prefix to distinguish it from real OpenFIGI-assigned
+// identifiers. Prefer GenerateSyntheticFIGIFromCIK when a SEC CIK is
+// available; this fallback is for entities without a CIK.
 func GenerateSyntheticFIGI(ticker, name string) string {
 	hash := sha256.Sum256([]byte(ticker + "|" + name))
 
@@ -130,18 +116,11 @@ func GenerateSyntheticFIGI(ticker, name string) string {
 }
 
 // GenerateSyntheticFIGIFromCIK generates a deterministic FIGI-format
-// identifier for an entity keyed by its SEC CIK and ticker. The (cik,
-// ticker) tuple disambiguates both share classes filed under the same
-// CIK (different tickers → different FIGIs) and tickers reused across
-// entities (different CIKs → different FIGIs, e.g. BBI = Blockbuster
-// 2010 vs Brickell Biotech 2022).
-//
-// Format: PVG{8 alphanumeric chars}{check digit}
-//
-// The seed input is namespaced with a "cik:" prefix so it cannot
-// collide with GenerateSyntheticFIGI's "ticker|name" seed — ticker
-// symbols are uppercase alphanumeric, so the lowercase "cik:" prefix
-// is not a reachable input to the older function.
+// identifier (PVG{8 alphanumeric chars}{check digit}) for an entity keyed
+// by its SEC CIK and ticker. The (cik, ticker) tuple disambiguates both
+// share classes filed under the same CIK and tickers reused across
+// entities. The seed input is namespaced with a "cik:" prefix so it
+// cannot collide with GenerateSyntheticFIGI's "ticker|name" seed.
 func GenerateSyntheticFIGIFromCIK(cik, ticker string) string {
 	hash := sha256.Sum256([]byte("cik:" + cik + "|" + ticker))
 

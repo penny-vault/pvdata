@@ -331,13 +331,10 @@ func PublishedViewReferencesTable(ctx context.Context, q Querier, tableName stri
 // RebuildAllPublishedViews loads every persisted published view and
 // re-applies its CREATE OR REPLACE VIEW statement. Intended to run once at
 // pvdata serve startup so that code-level changes to view-SQL generation
-// (e.g. enabling dedup on assets) take effect on first boot without
-// requiring users to touch each publication. CREATE OR REPLACE VIEW is
-// idempotent, so safe to run on every startup.
-//
-// Errors on individual views are logged and accumulated; the function
-// returns a non-nil error only if at least one view failed, but does not
-// abort the loop early.
+// take effect on first boot without requiring users to touch each
+// publication. Errors on individual views are logged and accumulated;
+// the function returns a non-nil error only if at least one view failed,
+// but does not abort the loop early.
 func (myLibrary *Library) RebuildAllPublishedViews(ctx context.Context) (rebuilt, total int, err error) {
 	views, err := LoadPublishedViews(ctx, myLibrary.Pool)
 	if err != nil {

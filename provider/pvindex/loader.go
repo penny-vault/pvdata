@@ -152,7 +152,6 @@ func loadMarketCapAsOf(ctx context.Context, pool *pgxpool.Pool, figis []string, 
 // loadBroadMarketCaps returns the market caps of all CS stocks on
 // whitelisted exchanges that have a positive market_cap on the given date.
 // Used as the percentile baseline for the size and early-entry filters.
-//
 // The query intentionally does NOT filter by `a.active`: presence of a
 // metrics row on `asOf` already proves the name was tradable then, and
 // gating on the current `active` flag would shrink the historical

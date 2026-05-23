@@ -57,18 +57,11 @@ var (
 	byTicker            map[string]*classification
 )
 
-// EnrichClassification fills empty descriptive fields on each asset
+// EnrichClassification fills empty Sector/Industry fields on each asset
 // from the most recent Zacks parquet snapshot in B2. Looks up by
 // composite_figi (preferred) then ticker. Silent no-op when B2 is
 // not configured or the snapshot cannot be loaded — Zacks-sourced
 // fields are nice-to-have, not required.
-//
-// Fields populated (only when previously empty):
-//   - asset.Sector
-//   - asset.Industry
-//
-// Zacks only covers currently-rated tickers, so this enrichment does
-// not help predecessor or long-delisted asset records.
 func EnrichClassification(ctx context.Context, assets ...*data.Asset) {
 	logger := zerolog.Ctx(ctx)
 

@@ -24,21 +24,13 @@ import (
 
 // MigrateAllSubscriptions applies pending DataType migrations across
 // every subscription in a single coordinated transaction. Published
-// views that span multiple subscription tables are dropped once at
-// the start, all per-table migrations run, then views are rebuilt
-// once at the end.
-//
-// This avoids the "each UNION query must have the same number of
-// columns" failure that happens when subscriptions are migrated one
-// at a time: a per-sub TX brings its own table to schema version N
-// and tries to rebuild the shared view, but peer tables in other
-// subs are still at version N-1, so the rebuilt UNION has mismatched
-// column lists.
-//
-// Returns the number of subscriptions whose schema_version actually
-// advanced and the total number of subscriptions checked. The
-// transaction is atomic: if any migration fails, the whole batch
-// rolls back and no schema_version is bumped.
+// views that span multiple subscription tables are dropped once at the
+// start, all per-table migrations run, then views are rebuilt once at
+// the end — this avoids the UNION column-mismatch failure that happens
+// when per-sub TXes try to rebuild a shared view while peer tables are
+// at different schema versions. Returns the number of subscriptions
+// whose schema_version actually advanced and the total checked; the
+// transaction is atomic.
 func (myLibrary *Library) MigrateAllSubscriptions(ctx context.Context) (migrated, total int, err error) {
 	subs, err := myLibrary.Subscriptions(ctx)
 	if err != nil {

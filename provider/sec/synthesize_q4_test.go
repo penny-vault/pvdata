@@ -313,24 +313,7 @@ var _ = Describe("SynthesizeQ4", func() {
 	})
 
 	Describe("Per-share flow fields use YTD cumulative for Q4 synthesis", func() {
-		// AAPL FY2024 per-share values from SEC XBRL (period ending Sep 28, 2024):
-		//
-		// EarningsPerShareBasic:
-		//   Q1 single: 2.19   Q2 single: 1.53   Q3 single: 1.40   Annual: 6.11
-		//   Q3 YTD cumulative: 5.13
-		//   Note: Q1+Q2+Q3 = 5.12 (not 5.13) due to per-quarter rounding.
-		//   Correct Q4 = 6.11 - 5.13 = 0.98 (using cumulative)
-		//   Wrong   Q4 = 6.11 - 5.12 = 0.99 (summing individual quarters)
-		//
-		// EarningsPerShareDiluted:
-		//   Q1 single: 2.18   Q2 single: 1.53   Q3 single: 1.40   Annual: 6.08
-		//   Q3 YTD cumulative: 5.11
-		//   Q4 = 6.08 - 5.11 = 0.97 (cumulative == sum here, so no rounding issue)
-		//
-		// CommonStockDividendsPerShareDeclared:
-		//   Q1 single: 0.24   Q2 single: 0.24   Q3 single: 0.25   Annual: 0.98
-		//   Q3 YTD cumulative: 0.73
-		//   Q4 = 0.98 - 0.73 = 0.25 (cumulative == sum here)
+		// AAPL FY2024 per-share values from SEC XBRL (period ending Sep 28, 2024).
 
 		aaplAnnualPeriod := Period{
 			PeriodEnd:   time.Date(2024, 9, 28, 0, 0, 0, 0, time.UTC),
@@ -475,21 +458,6 @@ var _ = Describe("SynthesizeQ4", func() {
 
 var _ = Describe("emitFundamentals Q4 synthesis", func() {
 	// Model a company with FY ending September (like Apple).
-	//
-	// Periods:
-	//   10-Q Q1: Oct-Dec 2023  (period end Dec 30 2023)
-	//   10-Q Q2: Jan-Mar 2024  (period end Mar 30 2024)
-	//   10-Q Q3: Apr-Jun 2024  (period end Jun 29 2024)
-	//   10-K FY: Oct 2023-Sep 2024 (period end Sep 28 2024, annual total)
-	//   10-Q Q1 next FY: Oct-Dec 2024 (period end Dec 28 2024)
-	//
-	// Revenues (flow):
-	//   Q1=110000, Q2=95000, Q3=90000, FY=400000 => Q4=105000
-	//   Q1 next FY=115000
-	//
-	// NetIncomeCommonStock (flow, mapped via NetIncomeLossAvailableToCommonStockholdersBasic):
-	//   Q1=30000, Q2=25000, Q3=22000, FY=100000 => Q4=23000
-	//   Q1 next FY=32000
 
 	d := func(y, m, day int) time.Time {
 		return time.Date(y, time.Month(m), day, 0, 0, 0, 0, time.UTC)
@@ -636,29 +604,6 @@ var _ = Describe("emitFundamentals Q4 synthesis", func() {
 	It("synthesizes Q4 per-share fields using YTD cumulative and overrides TTM at fiscal year-end", func() {
 		// Extended CompanyFacts with per-share fields including both
 		// single-quarter and YTD cumulative facts, mirroring real AAPL XBRL data.
-		//
-		// EarningsPerShareBasic:
-		//   Q1=2.19, Q2=1.53, Q3=1.40, Annual=6.11
-		//   Q2 YTD=3.72, Q3 YTD=5.13 (5.13 != 2.19+1.53+1.40=5.12)
-		//   => Q4 = 6.11 - 5.13 = 0.98
-		//
-		// EarningsPerShareDiluted:
-		//   Q1=2.18, Q2=1.53, Q3=1.40, Annual=6.08
-		//   Q2 YTD=3.71, Q3 YTD=5.11
-		//   => Q4 = 6.08 - 5.11 = 0.97
-		//
-		// CommonStockDividendsPerShareDeclared:
-		//   Q1=0.24, Q2=0.24, Q3=0.25, Annual=0.98
-		//   Q2 YTD=0.48, Q3 YTD=0.73
-		//   => Q4 = 0.98 - 0.73 = 0.25
-		//
-		// TTM at fiscal year-end (Sep 30 2024):
-		//   Sum of quarterly EPS: 2.19+1.53+1.40+0.98 = 6.10
-		//   Annual EPS: 6.11 (overrides the TTM sum)
-		//
-		// TTM crossing fiscal year (Dec 31 2024, using Q1-next-FY):
-		//   EPS = Q1next(2.41) + Q4(0.98) + Q3(1.40) + Q2(1.53) = 6.32
-		//   (No annual override, so sum is used as-is)
 
 		cf := &CompanyFacts{
 			CIK:        12345,

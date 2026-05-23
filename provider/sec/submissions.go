@@ -32,11 +32,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// SubmissionsResponse mirrors the subset of the
-// data.sec.gov/submissions/CIK*.json payload we use for asset
-// enrichment. Filings.recent and overflow file lists are intentionally
-// omitted; companyfacts.go already handles the filings list when it
-// needs them.
+// SubmissionsResponse mirrors the subset of data.sec.gov/submissions/CIK*.json
+// used for asset enrichment.
 type SubmissionsResponse struct {
 	CIK                             string             `json:"cik"`
 	EntityType                      string             `json:"entityType"`
@@ -59,29 +56,23 @@ type SubmissionsResponse struct {
 	Filings                         FilingsBlock       `json:"filings"`
 }
 
-// FilingsBlock is the top of the filings tree in the SEC submissions
-// payload. We use its `files[].filingFrom` overflow metadata to find
-// the earliest filing date without having to fetch every overflow
-// file — a single overflow entry's filingFrom IS that file's earliest
-// filing, so the global earliest is the min across all overflow
-// `filingFrom` values combined with the min of `recent.filingDate`.
+// FilingsBlock is the top of the filings tree in the submissions payload.
+// `files[].filingFrom` lets us find the earliest filing date without
+// fetching each overflow file.
 type FilingsBlock struct {
 	Recent FilingsRecent `json:"recent"`
 	Files  []FilingsFile `json:"files"`
 }
 
-// FilingsRecent holds the most recent batch of filings (typically up
-// to ~1000). Arrays are parallel and ordered newest-first, so the
-// last element of FilingDate is the earliest filing in this batch.
+// FilingsRecent holds the most recent batch of filings (typically up to
+// ~1000). Arrays are parallel and ordered newest-first.
 type FilingsRecent struct {
 	FilingDate []string `json:"filingDate"`
 	Form       []string `json:"form"`
 }
 
-// FilingsFile is a pointer to an overflow file holding older filings
-// for entities with a long filing history. filingFrom / filingTo
-// bracket the date range of filings inside the file so we don't have
-// to read its contents just to know the earliest date.
+// FilingsFile is an overflow file pointer holding older filings. filingFrom
+// / filingTo bracket the date range inside the file.
 type FilingsFile struct {
 	Name        string `json:"name"`
 	FilingFrom  string `json:"filingFrom"`
@@ -89,11 +80,8 @@ type FilingsFile struct {
 	FilingCount int    `json:"filingCount"`
 }
 
-// EarliestFilingDate returns the earliest filing date the SEC has for
-// this entity, formatted as YYYY-MM-DD. Returns "" when no filings
-// are available. Walks both the `recent` batch and the overflow
-// `files` metadata so the result is correct for entities with many
-// thousands of filings (Brown-Forman, GE, etc.).
+// EarliestFilingDate returns the earliest filing date (YYYY-MM-DD) across
+// both the `recent` batch and the overflow `files` metadata, or "".
 func (s *SubmissionsResponse) EarliestFilingDate() string {
 	if s == nil {
 		return ""
@@ -119,24 +107,12 @@ func (s *SubmissionsResponse) EarliestFilingDate() string {
 	return earliest
 }
 
-// EarliestFilingDateForForm returns the earliest filing date in the
-// recent-filings batch whose form starts with the supplied prefix
-// (case-insensitive). Returns "" when no matching form is found.
-//
-// Used to recover fund launch dates: an ETF/MF's first N-1A is filed
-// when the fund registers, and a CEF's first N-2 plays the analogous
-// role. These dates are a better approximation of the fund's actual
-// trading start than the issuer's earliest filing of any kind, which
-// for a multi-fund sponsor (Invesco, BlackRock, ProShares) can predate
-// any individual fund's launch by decades.
-//
-// Only the `recent` batch is scanned. SEC's overflow files don't carry
-// per-filing form information without fetching each overflow JSON, and
-// the recent batch covers the entire filing history of every fund we
-// observed in practice (an active fund accumulates fewer than 1000
-// filings over its life). A fund whose registration filings have
-// rolled off `recent` is rare enough that the cost of paging is not
-// justified for the data-quality gain.
+// EarliestFilingDateForForm returns the earliest filing date in the recent
+// batch whose form starts with prefix (case-insensitive), or "". Used to
+// recover fund launch dates (N-1A for ETF/MF, N-2 for CEF) so multi-fund
+// sponsors don't get assigned the parent issuer's earliest filing. Only the
+// `recent` batch is scanned because overflow files don't carry per-filing
+// form metadata.
 func (s *SubmissionsResponse) EarliestFilingDateForForm(prefix string) string {
 	if s == nil || prefix == "" {
 		return ""
@@ -174,10 +150,8 @@ func (s *SubmissionsResponse) EarliestFilingDateForForm(prefix string) string {
 }
 
 // Address is one of the mailing/business addresses returned in the
-// submissions payload. We surface city + stateOrCountry on the asset's
-// HeadquartersLocation when available. The `isForeignLocation` field
-// in SEC's response is an integer (0/1) or null, not a bool — we just
-// skip it since the city/stateOrCountry pair is enough for our use.
+// submissions payload. `isForeignLocation` is omitted because SEC returns
+// it as an integer or null, not a bool.
 type Address struct {
 	Street1        string `json:"street1"`
 	Street2        string `json:"street2"`
@@ -186,17 +160,16 @@ type Address struct {
 	ZIPCode        string `json:"zipCode"`
 }
 
-// FormerName captures one entry from the historical name list. Dates
-// are ISO timestamps when SEC returned them.
+// FormerName captures one entry from the historical name list. Dates are
+// ISO timestamps when SEC returned them.
 type FormerName struct {
 	Name string `json:"name"`
 	From string `json:"from"`
 	To   string `json:"to"`
 }
 
-// submissionsRateLimit is the cap on SEC EDGAR requests per second.
-// SEC's published policy is 10 req/s with a valid User-Agent header;
-// we stay one under that for headroom across concurrent callers.
+// submissionsRateLimit stays one under SEC's published 10 req/s policy for
+// headroom across concurrent callers.
 const submissionsRateLimit = 9
 
 var (
@@ -207,24 +180,15 @@ var (
 	submissionsCacheMu sync.RWMutex
 	submissionsCache   = map[int]*SubmissionsResponse{}
 
-	// submissionsSingleflight deduplicates concurrent FetchSubmissions
-	// calls for the same CIK so a thundering herd of workers that all
-	// miss the cache only generates one network request. Without this
-	// the cache is correct but useless under high concurrency: N workers
-	// that all hit FetchSubmissions(CIK=X) while the cache is empty all
-	// independently fetch X, then race to write the same result.
+	// submissionsSingleflight dedupes concurrent FetchSubmissions calls.
 	submissionsSingleflight singleflight.Group
 )
 
-// defaultSECUserAgent is the User-Agent header sent to data.sec.gov
-// when no `sec.userAgent` is configured. SEC requires a valid header
-// per their fair-access policy; the default identifies the project and
-// provides a contact address.
+// defaultSECUserAgent is sent when `sec.userAgent` is unset. SEC's fair-access
+// policy requires a valid User-Agent.
 const defaultSECUserAgent = "pvdata/1.0 sec@pennyvault.com"
 
-// secUserAgent returns the configured User-Agent string, falling back
-// to defaultSECUserAgent when unset. Reads `sec.userAgent` from viper
-// which also honours the `PV_SEC_USERAGENT` environment variable.
+// secUserAgent returns the configured User-Agent or defaultSECUserAgent.
 func secUserAgent() string {
 	if ua := viper.GetString("sec.userAgent"); ua != "" {
 		return ua
@@ -233,9 +197,8 @@ func secUserAgent() string {
 	return defaultSECUserAgent
 }
 
-// submissionsHTTPClient returns the lazily-initialized resty client
-// used for /submissions requests. Always returns a usable client
-// because secUserAgent() falls back to defaultSECUserAgent.
+// submissionsHTTPClient returns the lazily-initialized resty client used for
+// /submissions requests.
 func submissionsHTTPClient() *resty.Client {
 	submissionsClientOnce.Do(func() {
 		submissionsClient = NewSECClient(secUserAgent(), submissionsLimiter)
@@ -244,11 +207,8 @@ func submissionsHTTPClient() *resty.Client {
 	return submissionsClient
 }
 
-// FetchSubmissions returns the parsed /submissions/CIK*.json payload
-// for the given CIK. Responses are cached process-wide; the same CIK
-// queried twice in a run hits the network once. Returns
-// ErrSECNotConfigured when no User-Agent is set; nil + nil error when
-// the CIK is unknown to SEC (404).
+// FetchSubmissions returns the parsed /submissions/CIK*.json payload, cached
+// process-wide. Returns (nil, nil) when the CIK is unknown (404).
 func FetchSubmissions(ctx context.Context, cik int) (*SubmissionsResponse, error) {
 	if cik <= 0 {
 		return nil, nil
@@ -264,14 +224,11 @@ func FetchSubmissions(ctx context.Context, cik int) (*SubmissionsResponse, error
 		return cached, nil
 	}
 
-	// singleflight key dedupes by CIK so only one goroutine performs
-	// the network fetch even when 128 walk workers all miss the cache
-	// for the same CIK on the same tick.
 	key := strconv.Itoa(cik)
 
 	res, err, _ := submissionsSingleflight.Do(key, func() (any, error) {
-		// Re-check the cache inside the singleflight closure in case
-		// another caller landed the result while we were queueing.
+		// Re-check cache inside the singleflight in case another caller
+		// landed the result while we were queueing.
 		submissionsCacheMu.RLock()
 
 		cached, ok := submissionsCache[cik]
@@ -329,27 +286,11 @@ func FetchSubmissions(ctx context.Context, cik int) (*SubmissionsResponse, error
 	return sub, nil
 }
 
-// EnrichSubmissions fills empty descriptive fields on each asset from
-// the SEC submissions endpoint. Only operates on assets with a
-// non-empty CIK. Uses the configured `sec.userAgent` (or the project
-// default when unset) for the SEC fair-access User-Agent header.
-//
-// Fields populated when previously empty:
-//   - asset.Name                  <- SubmissionsResponse.Name
-//   - asset.SIC                   <- parsed SubmissionsResponse.SIC
-//   - asset.Description           <- SubmissionsResponse.Description
-//   - asset.CorporateUrl          <- SubmissionsResponse.Website
-//   - asset.HeadquartersLocation  <- formatted from Addresses["business"]
-//
-// asset.ListingDate is a backstop fill (only when Massive supplied
-// no value) using an asset-type-aware SEC signal: N-1A for ETF/MF,
-// N-2 for CEF, EarliestFilingDate for single-ticker non-fund CIKs.
-// Shared-CIK non-funds and ETN get no SEC fill. See
-// applyListingDateFromSEC for details.
-//
-// formerNames are not persisted yet (no column / sidecar table); they
-// are logged so an operator can confirm coverage. A follow-up patch
-// can route them into predecessor-detection or a new schema column.
+// EnrichSubmissions fills empty descriptive fields (Name, SIC, Description,
+// CorporateUrl, HeadquartersLocation, OtherIdentifiers["lei"]) on each asset
+// from the SEC submissions endpoint. Only operates on assets with a CIK and
+// only fills previously-empty fields. formerNames are not persisted yet but
+// are logged at debug.
 func EnrichSubmissions(ctx context.Context, assets ...*data.Asset) {
 	logger := zerolog.Ctx(ctx)
 
@@ -379,12 +320,10 @@ func EnrichSubmissions(ctx context.Context, assets ...*data.Asset) {
 		}
 
 		// Detect misattribution: Massive sometimes returns a same-ticker
-		// successor's CIK (e.g. ACF -> CIK 1405287 "Stream Global
-		// Services", but the historical AmeriCredit Corp had CIK 804269).
-		// Signal: SEC's earliest filing for the supplied CIK postdates
-		// the asset's ListingDate (the walk firstSeen) by a meaningful
-		// margin. When that happens, search SEC by the asset's Name and
-		// swap to the historical CIK if a confident match comes back.
+		// successor's CIK (ACF -> CIK 1405287 "Stream Global Services" when
+		// the historical AmeriCredit had CIK 804269). Signal: SEC's earliest
+		// filing for the supplied CIK postdates the asset's ListingDate by a
+		// meaningful margin.
 		if corrected, correctedSub := correctMisattributedCIK(ctx, asset, sub, logger); correctedSub != nil {
 			asset.CIK = corrected
 			sub = correctedSub
@@ -394,19 +333,13 @@ func EnrichSubmissions(ctx context.Context, assets ...*data.Asset) {
 	}
 }
 
-// misattributionGraceDays is how many days SEC's earliest filing date
-// can postdate the asset's ListingDate before we flag the CIK as
-// misattributed. A modest tolerance avoids false positives for issuers
-// whose first 10-K landed a few quarters after the IPO. One full year
-// is comfortably outside any plausible filing lag.
+// misattributionGraceDays caps the plausible lag between IPO and first SEC
+// filing; beyond one year we treat the CIK as belonging to a different entity.
 const misattributionGraceDays = 365
 
 // correctMisattributedCIK detects when sub's CIK appears to belong to a
-// different entity than the historical asset and, if so, searches SEC
-// by asset.Name for the correct CIK. Returns ("", nil) when the
-// existing CIK looks correct; otherwise returns the corrected CIK and
-// its freshly-fetched SubmissionsResponse so the caller can swap both
-// atomically. Logs at Info on swap so the operator sees CIK changes.
+// different entity than the historical asset and, if so, searches SEC by
+// asset.Name for the correct CIK. Returns ("", nil) when no swap is needed.
 func correctMisattributedCIK(ctx context.Context, asset *data.Asset, sub *SubmissionsResponse, logger *zerolog.Logger) (string, *SubmissionsResponse) {
 	if asset.ListingDate == "" || sub == nil {
 		return "", nil
@@ -469,13 +402,10 @@ func correctMisattributedCIK(ctx context.Context, asset *data.Asset, sub *Submis
 	return correctedCIK, correctedSub
 }
 
-// historicalNameAt returns the entity name the issuer was using during
-// the supplied window, preferring a formerName whose validity range
-// covers the window over the current sub.Name. Empty window is treated
-// as "active now", returning sub.Name. Used by fillFromSubmissions to
-// avoid overwriting a historical asset's name with the entity's
-// post-rename name (e.g. ACF was "AmeriCredit Corp" 1994-2010 even
-// though CIK 0000804269 is now "General Motors Financial Company").
+// historicalNameAt returns the entity name the issuer used during the supplied
+// window, preferring a formerName whose validity range overlaps the window
+// over the current sub.Name. SEC keeps one CIK across renames so the
+// current-state name would be wrong for a delisted historical ticker.
 func historicalNameAt(sub *SubmissionsResponse, listingDate, delistingDate string) string {
 	if sub == nil {
 		return ""
@@ -492,9 +422,7 @@ func historicalNameAt(sub *SubmissionsResponse, listingDate, delistingDate strin
 		from := dateOnly(fn.From)
 		to := dateOnly(fn.To)
 
-		// A formerName overlaps the asset's life when its [from, to]
-		// window intersects the asset's [listing, delisting] window.
-		// Open-ended fields (empty from/to) are treated as ±infinity.
+		// Open-ended from/to are treated as ±infinity.
 		if windowEnd != "" && from != "" && from > windowEnd {
 			continue
 		}
@@ -513,8 +441,7 @@ func historicalNameAt(sub *SubmissionsResponse, listingDate, delistingDate strin
 	return sub.Name
 }
 
-// dateOnly strips the time portion of an ISO timestamp ("2010-10-06T00:00:00.000Z" -> "2010-10-06").
-// Empty input returns empty.
+// dateOnly returns the YYYY-MM-DD prefix of an ISO timestamp.
 func dateOnly(ts string) string {
 	s := strings.TrimSpace(ts)
 	if len(s) < 10 {
@@ -524,16 +451,11 @@ func dateOnly(ts string) string {
 	return s[:10]
 }
 
-// fillFromSubmissions applies the response to the asset. Only empty
-// fields are filled; previously-resolved data is not overwritten. SIC
-// parsing skips silently on a malformed string.
+// fillFromSubmissions applies sub to asset, only filling empty fields.
 func fillFromSubmissions(asset *data.Asset, sub *SubmissionsResponse, logger *zerolog.Logger) {
-	// Prefer a formerName whose validity range overlaps the asset's
-	// life window over the current sub.Name. SEC keeps one CIK across
-	// renames (e.g. CIK 0000804269 was "AMERICREDIT CORP" 1994-2010,
-	// then renamed "General Motors Financial Company"), so the
-	// current-state name would be wrong for a historical ticker like
-	// ACF that delisted before the rename.
+	// Prefer a formerName covering the asset's life window over sub.Name:
+	// SEC keeps one CIK across renames, so a delisted historical ticker
+	// would otherwise inherit the entity's post-rename name.
 	if asset.Name == "" {
 		if name := historicalNameAt(sub, asset.ListingDate, asset.DelistingDate); name != "" {
 			asset.Name = name

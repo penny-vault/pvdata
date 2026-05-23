@@ -95,17 +95,13 @@ func filterAssetMaster(assets []*data.Asset) []*data.Asset {
 	return out
 }
 
-// assetAliveOn returns true when the asset was tradable on date d.
-//
-// Tradable means: listed on or before d, and not yet delisted as of d.
-// The delisting day itself is excluded -- the row's `delisted` column
-// stores the last trade date, but pvindex's prior-day window means
-// post-delisting evaluations have no usable EOD anyway.
-//
-// Empty or unparseable listed/delisted strings are treated permissively
-// (alive), matching the precedent in provider/eodhd/intraday.go's
-// assetsActiveInWindow helper. Some legacy rows have empty `listed`,
-// which would otherwise exclude every historical date.
+// assetAliveOn returns true when the asset was tradable on date d:
+// listed on or before d, and not yet delisted as of d. The delisting
+// day itself is excluded because pvindex's prior-day window means
+// post-delisting evaluations have no usable EOD. Empty or unparseable
+// listed/delisted strings are treated permissively (alive) to match
+// assetsActiveInWindow in provider/eodhd/intraday.go and to avoid
+// excluding legacy rows with empty `listed`.
 func assetAliveOn(a *data.Asset, d time.Time) bool {
 	if a == nil {
 		return false

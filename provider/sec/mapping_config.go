@@ -1494,14 +1494,6 @@ var FieldMappings = []FieldMapping{
 	// Companies like Apple report a combined SellingGeneralAndAdministrativeExpense;
 	// companies like Microsoft report the two components separately. Sharadar
 	// always reports the combined total.
-	//
-	// OtherSellingGeneralAndAdministrativeExpense is tried first for filers
-	// (MCD) that split SG&A into a broader bucket plus an income-statement
-	// "Other SG&A" line — Sharadar reports the line-item value (OtherSGA),
-	// not the broader bucket. Filers that don't file OtherSGA fall through.
-	// KO files a small OtherSGA carve-out (~58M/quarter) alongside the main
-	// SGA line (3.6B/quarter); a post-resolution override in mapping.go
-	// (overrideSGAForSmallOtherSGA) swaps to SGA for that pattern.
 	{
 		FieldName: "SellingGeneralAndAdministrativeExpense", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
@@ -1558,14 +1550,7 @@ var FieldMappings = []FieldMapping{
 	// _interestIncomeExpenseNetFallback: CALM-style filers that report only
 	// InterestIncomeExpenseNet (positive = net expense, negative = net income)
 	// and never file InterestExpense/InterestExpenseNonoperating. Sharadar
-	// treats the signed net value as interest_expense for such filers (a
-	// cash-rich filer with interest income > expense shows negative
-	// interest_expense, which subtracts from EBIT correctly since the net
-	// income already includes that interest income).
-	//
-	// Gated to avoid interfering with filers that have dedicated InterestExpense
-	// facts: ExcludeIfQuarterly on InterestExpense/InterestExpenseNonoperating
-	// so only filers lacking both tags use this net fallback.
+	// treats the signed net value as interest_expense for such filers.
 	{
 		FieldName: "_interestIncomeExpenseNetFallback", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		ExcludeIfQuarterly: []string{
@@ -1625,27 +1610,6 @@ var FieldMappings = []FieldMapping{
 		// directly into EBIT = NetIncome + IncomeTaxExpense + InterestExpense.
 		// For cash-rich companies with interest income > expense, using the
 		// net value would incorrectly subtract from EBIT.
-		//
-		// ExcludeIfQuarterly on Deposits: banks (JPM) file the generic
-		// InterestExpense tag for some quarters but not others, and for banks
-		// this is operational interest (cost of deposits) — NOT financing
-		// expense. Including it in EBIT breaks Q4 synthesis (annual has 0
-		// but one quarter has 24B). Gating on Deposits (a bank-specific
-		// liability) excludes real banks while allowing insurance
-		// conglomerates like BRK/B that also lack AssetsCurrent.
-		//
-		// RequireIfQuarterly on OperatingIncomeLoss / CostsAndExpenses:
-		// pharma-style filers (LLY) present an income statement without an
-		// operating-income subtotal AND without a CostsAndExpenses aggregate.
-		// Sharadar reports interestexp = 0 for such filers (interest is wholly
-		// nonoperating). Gating here prevents stray InterestExpense facts (e.g.
-		// LLY filed it once for Q1 2024) from leaking into ART/MRT windows.
-		//
-		// FallbackTags resolve directly when the company files InterestExpense
-		// or InterestExpenseDebt. Otherwise the formula adds the Nonoperating
-		// sub-field, which is itself gated on OperatingIncomeLoss so that
-		// pharma-style filers without an operating-income line (LLY) don't
-		// pull a phantom interest_expense that Sharadar treats as 0.
 		ExcludeIfQuarterly: []string{"Deposits"},
 		RequireIfQuarterly: []string{"OperatingIncomeLoss", "CostsAndExpenses"},
 		FallbackTags: []string{
@@ -1918,13 +1882,6 @@ var FieldMappings = []FieldMapping{
 	// DepreciationDepletionAndAmortization); otherwise sum components.
 	// MSFT reports Depreciation, AmortizationOfIntangibleAssets, and
 	// FinanceLeaseRightOfUseAssetAmortization separately.
-	//
-	// DepreciationAndAmortization is tried first because some filers (MCD)
-	// file DepreciationDepletionAndAmortization as a partial sub-measure
-	// while DepreciationAndAmortization holds the full cash-flow-statement
-	// total. Filers that only file DepreciationDepletionAndAmortization
-	// (AAPL, AMZN, NVDA, LLY, BRK/B) still resolve correctly via the
-	// fallthrough because DepreciationAndAmortization is absent for them.
 	{
 		FieldName: "DepreciationAmortizationAndAccretion", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		FallbackTags: []string{
@@ -2283,14 +2240,8 @@ var FieldMappings = []FieldMapping{
 	},
 	// Gross short-term debt tags for filers that report issuance and
 	// repayment as separate lines (XOM) instead of bundling them into a net
-	// commercial-paper or short-term-debt tag (AAPL, MSFT, JPM, etc.).
-	//
-	// Gate on the absence of any net short-term-debt tag. When the filer
-	// reports a net tag, it's already counted via _netShortTermDebt and
-	// adding the gross legs here would double-count. AAPL files
-	// RepaymentsOfShortTermDebtMaturingInMoreThanThreeMonths and the net
-	// ProceedsFromRepaymentsOfCommercialPaper at the same time; the gate
-	// keeps AAPL's NCFDEBT path on the net tag unchanged.
+	// commercial-paper or short-term-debt tag. Gated on the absence of any
+	// net short-term-debt tag to avoid double-counting.
 	{
 		FieldName: "_proceedsShortTermDebtGross", Type: MappingDirect, StatementType: StmtFlow, ValueType: "int64",
 		ExcludeIfQuarterly: []string{
@@ -2664,13 +2615,9 @@ var FieldMappings = []FieldMapping{
 	// ==================== DERIVED FIELDS ====================
 	// These must come AFTER their dependencies in the list.
 
-	// EBIT = NetIncome + IncomeTaxExpense + InterestExpense
+	// EBIT = NetIncome + IncomeTaxExpense + InterestExpense.
 	// InterestExpense is optional because some companies stop reporting it
 	// (e.g. Apple dropped InterestExpense after FY2023). When absent, EBIT = EBT.
-	//
-	// Note: the previous FallbackTag (IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest)
-	// was EBT (pre-tax income), not EBIT. Using it as a fallback caused EBIT
-	// to exclude InterestExpense even when it was available.
 	{
 		FieldName: "EBIT", Type: MappingDerived, StatementType: StmtFlow, ValueType: "int64",
 		Op:               OpAdd,

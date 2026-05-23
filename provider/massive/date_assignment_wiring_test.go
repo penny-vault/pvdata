@@ -132,6 +132,116 @@ var _ = Describe("buildDateCandidates EOD lifecycle selection", func() {
 		Expect(c.MassiveEODArchiveFirstBar).To(Equal(time.Date(2019, 9, 3, 0, 0, 0, 0, time.UTC)))
 		Expect(c.MassiveEODArchiveLastBar).To(Equal(time.Date(2022, 9, 7, 0, 0, 0, 0, time.UTC)))
 	})
+
+	It("uses walk firstSeen to pick the lifecycle when ValidFor would point at the wrong one", func() {
+		// JATT-shaped scenario: the same ticker has been held by two
+		// unrelated entities separated by a multi-year gap. The
+		// predecessor's row arrives with ValidFor defaulted to today
+		// (which would snap to the new SPAC's lifecycle), but its
+		// walk firstSeen sits in the predecessor's lifecycle and is
+		// the right signal of when it actually traded.
+		api.walkWindowsByCIK["JATT:0001855644"] = walkWindow{
+			firstSeen: time.Date(2021, 9, 3, 0, 0, 0, 0, time.UTC),
+			lastSeen:  time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC),
+		}
+
+		archive := &EODArchive{
+			tickers: map[string][]dateRange{
+				"JATT": {
+					{
+						Start: time.Date(2021, 9, 3, 0, 0, 0, 0, time.UTC),
+						End:   time.Date(2023, 3, 20, 0, 0, 0, 0, time.UTC),
+					},
+					{
+						Start: time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC),
+						End:   time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+			coverageStart: time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC),
+			coverageEnd:   time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC),
+		}
+		api.eodArchive = archive
+
+		asset := &data.Asset{
+			Ticker:   "JATT",
+			CIK:      "0001855644",
+			ValidFor: time.Date(2026, 5, 19, 0, 0, 0, 0, time.UTC),
+		}
+
+		c := api.buildDateCandidates(ctx, asset)
+
+		Expect(c.MassiveEODArchiveFirstBar).To(Equal(time.Date(2021, 9, 3, 0, 0, 0, 0, time.UTC)))
+		Expect(c.MassiveEODArchiveLastBar).To(Equal(time.Date(2023, 3, 20, 0, 0, 0, 0, time.UTC)))
+	})
+})
+
+var _ = Describe("successorIsContinuous", func() {
+	var (
+		ctx context.Context
+		api *massiveAssetFetcher
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("returns false when the predecessor lifecycle ended more than the gap threshold before the supposed-successor's listing", func() {
+		// JATT-shaped: predecessor (Zura era) lifecycle ended
+		// 2023-03-20 when the SPAC renamed and moved to ticker ZURA;
+		// the new JATT II SPAC took the ticker three years later on
+		// 2026-04-17. The gap is far beyond a real predecessor /
+		// successor transition.
+		api = newFetcherWithArchive(&EODArchive{
+			tickers: map[string][]dateRange{
+				"JATT": {
+					{
+						Start: time.Date(2021, 9, 3, 0, 0, 0, 0, time.UTC),
+						End:   time.Date(2023, 3, 20, 0, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+		})
+
+		successorList := time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC)
+
+		Expect(api.successorIsContinuous(ctx, "JATT", successorList)).To(BeFalse())
+	})
+
+	It("returns true when the predecessor lifecycle ended within the gap threshold of the supposed-successor's listing", func() {
+		// Alcoa-style: the predecessor lifecycle ended one trading
+		// day before the successor started. The successor is real.
+		api = newFetcherWithArchive(&EODArchive{
+			tickers: map[string][]dateRange{
+				"AA": {
+					{
+						Start: time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC),
+						End:   time.Date(2016, 10, 17, 0, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+		})
+
+		successorList := time.Date(2016, 10, 18, 0, 0, 0, 0, time.UTC)
+
+		Expect(api.successorIsContinuous(ctx, "AA", successorList)).To(BeTrue())
+	})
+
+	It("returns true when no EOD archive is available so the caller falls back to the prior behavior", func() {
+		api = &massiveAssetFetcher{}
+
+		successorList := time.Date(2016, 10, 18, 0, 0, 0, 0, time.UTC)
+
+		Expect(api.successorIsContinuous(ctx, "AA", successorList)).To(BeTrue())
+	})
+
+	It("returns true when the ticker has no ranges in the archive (abstain rather than affirmatively reject)", func() {
+		api = newFetcherWithArchive(buildBBIArchive())
+
+		successorList := time.Date(2016, 10, 18, 0, 0, 0, 0, time.UTC)
+
+		Expect(api.successorIsContinuous(ctx, "UNKNOWN", successorList)).To(BeTrue())
+	})
 })
 
 var _ = Describe("lookupWalkWindowWithKey name-fallback", func() {

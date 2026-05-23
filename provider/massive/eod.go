@@ -112,14 +112,11 @@ func downloadMassiveEOD(ctx context.Context, sub *library.Subscription, out chan
 
 	// Asset universe always reads from the published "assets" view -
 	// it is the canonical union across every asset-producing
-	// subscription. Reading from a per-subscription table would miss
-	// tickers owned by other providers (and breaks for subscriptions
-	// like EOD that don't even own AssetKey themselves).
-	//
-	// AllAssets (not ActiveAssets) is used so historical bars for
-	// since-delisted tickers still resolve. The AssetHistory index
-	// gates each row against the asset's listed/delisted dates, so
-	// today's `active=false` does not drop yesterday's data.
+	// subscription, and AllAssets (not ActiveAssets) is used so
+	// historical bars for since-delisted tickers still resolve. The
+	// AssetHistory index gates each row against the asset's listed
+	// and delisted dates, so today's active=false does not drop
+	// yesterday's data.
 	dbAssets, err := data.AllAssets(ctx, conn)
 
 	conn.Release()

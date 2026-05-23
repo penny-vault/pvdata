@@ -20,15 +20,10 @@ import (
 	"time"
 )
 
-// synthesizeInput holds the resolved field maps for a single de-cumulated quarter,
-// along with its period end date. arEmit is the as-reported view and mrEmit is the
-// most-recently-reported view.
-//
-// arCumPerShare / mrCumPerShare hold YTD cumulative values for per-share flow
-// fields (EPS, EPSDiluted, DividendsPerBasicCommonShare). These may be nil for
-// Q1 quarters where the cumulative equals the single-quarter value. SynthesizeQ4
-// uses the last preceding quarter's cumulative to avoid rounding error when
-// subtracting per-share values.
+// synthesizeInput holds the resolved field maps for a single de-cumulated
+// quarter. arCumPerShare/mrCumPerShare hold YTD cumulative per-share flow
+// values; SynthesizeQ4 uses the last preceding quarter's cumulative to avoid
+// rounding error when subtracting per-share values.
 type synthesizeInput struct {
 	periodEnd     time.Time
 	arEmit        map[string]float64
@@ -41,22 +36,10 @@ type synthesizeInput struct {
 // that a quarter may fall and still be considered part of the same fiscal year.
 const maxQ4QuarterSpanDays = 400
 
-// SynthesizeQ4 derives single-quarter Q4 field maps from a 10-K annual filing by
-// subtracting the three preceding fiscal-year quarters from the annual total.
-//
-// annualAR and annualMR are the resolved field maps for the 10-K period in the
-// as-reported and most-recently-reported views respectively. annualPeriod is the
-// 10-K Period metadata. quarters is an ordered slice (ascending by periodEnd) of
-// de-cumulated quarter inputs.
-//
-// The function walks backwards through quarters to find exactly 3 quarters whose
-// periodEnd is strictly before the 10-K period end and within maxQ4QuarterSpanDays
-// of it. If fewer than 3 such quarters exist, both return values are nil.
-//
-// For each field:
-//   - StmtFlow: Q4 = annual value - sum(Q1+Q2+Q3 de-cumulated values)
-//   - StmtPointInTime: Q4 = annual value directly
-//   - StmtMetric with MappingDerived: recomputed from Q4 values via computeDerived
+// SynthesizeQ4 derives single-quarter Q4 field maps from a 10-K by subtracting
+// the three preceding fiscal-year quarters from the annual total. Returns
+// (nil, nil) when fewer than 3 quarters fall in the maxQ4QuarterSpanDays
+// window before the 10-K period end.
 func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, quarters []synthesizeInput) (map[string]float64, map[string]float64) {
 	// Walk backwards through quarters to collect the 3 immediately preceding ones.
 	var preceding []synthesizeInput
@@ -89,13 +72,9 @@ func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, qu
 		func(q synthesizeInput, _ string) map[string]float64 { return q.arCumPerShare },
 	)
 
-	// MR Q4 synthesis: when the 10-K annual for a field was NOT restated
-	// (annualAR == annualMR), use the AR preceding quarters. Sharadar's
-	// MR_Q4 = MR_annual - AR_Q1-Q3 in this case — the 10-K only has access
-	// to the original Q1-Q3 values at the time it's filed, so synthesizing
-	// Q4 from later-restated Q1-Q3 comparatives would produce the wrong Q4.
-	// When the 10-K itself was restated (annualMR != annualAR), the restated
-	// annual includes restatement effects and using MR preceding is correct.
+	// MR Q4: when the 10-K annual was NOT restated (annualAR == annualMR),
+	// use AR preceding quarters — the 10-K only saw original Q1-Q3 values,
+	// so synthesizing from later-restated comparatives would be wrong.
 	mrResult := synthesizeFromPreceding(annualMR, annualPeriod.PeriodEnd, preceding,
 		func(q synthesizeInput, field string) map[string]float64 {
 			if arVal, hasAR := annualAR[field]; hasAR {
@@ -121,11 +100,8 @@ func SynthesizeQ4(annualAR, annualMR map[string]float64, annualPeriod Period, qu
 }
 
 // synthesizeFromPreceding builds a Q4 field map from an annual field map and
-// the 3 preceding de-cumulated quarters. emitFn selects either the AR or MR
-// emit map from each quarter, per-field — see the MR Q4 logic in
-// SynthesizeQ4 for why the selection can vary across fields (AR when the 10-K
-// annual was not restated for that field, MR otherwise). cumPSFn follows the
-// same per-field convention for the YTD cumulative per-share map.
+// 3 preceding de-cumulated quarters. emitFn/cumPSFn select AR vs MR per-field;
+// see SynthesizeQ4 for the AR-vs-MR rule.
 func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Time, preceding []synthesizeInput, emitFn func(synthesizeInput, string) map[string]float64, cumPSFn func(synthesizeInput, string) map[string]float64) map[string]float64 {
 	result := make(map[string]float64, len(annual))
 
@@ -134,14 +110,11 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 		case m.StatementType == StmtFlow:
 			annualVal, hasAnnual := annual[m.FieldName]
 			if !hasAnnual {
-				// Some filers report a concept only on 10-Q comparatives,
-				// never on the 10-K annual (WMT tags
-				// ProceedsFromDivestitureOfBusinesses on Q2/Q3 10-Qs but
-				// not on the 10-K). If any preceding quarter carried a
-				// value, synthesize Q4 as 0 - sum so the 4-quarter total
-				// equals the implied zero annual. Derived fields that
-				// reference this operand need the Q4 value to offset the
-				// prior-quarter cross-flow.
+				// Some filers report a concept only on 10-Q comparatives
+				// and never on the 10-K (WMT tags
+				// ProceedsFromDivestitureOfBusinesses on Q2/Q3 10-Qs only).
+				// If any preceding quarter has a value, treat the annual as
+				// 0 so derived fields can offset the prior-quarter cross-flow.
 				hasQuarterlyVal := false
 
 				for _, q := range preceding {
@@ -160,19 +133,11 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 				annualVal = 0
 			}
 
-			// Prefer the last preceding quarter's YTD cumulative value for the
-			// subtraction. The company-reported cumulative accounts for any
-			// restatements across quarters and avoids rounding error from
-			// summing individually rounded per-share values. For int64 flow
-			// fields (e.g. NetIncome), the cumulative also captures small
-			// adjustments (JPM: Q3 cumulative 43,199M vs Q1+Q2+Q3 sum 43,197M;
-			// MCD: Q3 YTD FX effect 47M vs Q1+Q2+Q3 sum 46M from canceling
-			// partial-quarter rounding).
-			//
-			// ResolveCumulativePerShareForFiling only populates cumPS entries
-			// when the winning fact spans more than one quarter, so any value
-			// present here is guaranteed to be a multi-quarter YTD rather than
-			// a single-quarter fact masquerading as "longest".
+			// Prefer the last preceding quarter's YTD cumulative for the
+			// subtraction: it captures restatements across quarters and
+			// avoids rounding error from summing per-share values.
+			// ResolveCumulativePerShareForFiling only populates cumPS when
+			// the winning fact spans more than one quarter.
 			lastQ := preceding[0] // most recent quarter before the 10-K
 			if cumPS := cumPSFn(lastQ, m.FieldName); cumPS != nil {
 				if cumVal, ok := cumPS[m.FieldName]; ok {
@@ -182,16 +147,10 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 				}
 			}
 
-			// Sum preceding quarters, treating missing values as 0. Some flow
-			// fields are only filed in quarters where the underlying activity
-			// happened (e.g. LLY's OtherPaymentsToAcquireBusinesses is filed
-			// for Q2/Q3 cumulatives but not Q1 because no acquisitions were
-			// closed in Q1). The annual filing still has the full-year total,
-			// so Q4 = annual - sum(preceding present) yields the correct
-			// remainder. When no preceding quarter reported the field at all
-			// (e.g. CALM files ShareBasedCompensation only on its 10-K), the
-			// full annual value is attributed to Q4 — Sharadar treats this
-			// as Q1–Q3 = 0 with the lumpy annual landing in Q4.
+			// Sum preceding quarters, treating missing values as 0. Some
+			// flow fields are only filed in quarters where the activity
+			// happened; the annual still has the full-year total so
+			// Q4 = annual - sum(present) is correct.
 			sum := 0.0
 
 			for _, q := range preceding {
@@ -209,11 +168,9 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			}
 
 		case m.StatementType == StmtPeriodAverage:
-			// Period-average fields (e.g. weighted average shares) are time-
-			// weighted averages. When the Q3 YTD cumulative average is
-			// available, use it with day-weighted math to avoid rounding
-			// error from summing individually rounded quarterly integers:
-			//   Q4 = (annual * annualDays - ytdAvg * ytdDays) / q4Days
+			// Period-average fields are time-weighted. When the Q3 YTD
+			// average is available, use day-weighted math to avoid rounding
+			// error: Q4 = (annual * annualDays - ytdAvg * ytdDays) / q4Days.
 			annualVal, hasAnnual := annual[m.FieldName]
 			if !hasAnnual {
 				continue
@@ -226,9 +183,8 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 					q4Days := annualPeriodEnd.Sub(lastQ.periodEnd).Hours() / 24
 					d3 := preceding[0].periodEnd.Sub(preceding[1].periodEnd).Hours() / 24
 					d2 := preceding[1].periodEnd.Sub(preceding[2].periodEnd).Hours() / 24
-					// Estimate total fiscal year days from the known quarter gaps.
-					// Q1 length isn't directly available, so approximate it as the
-					// average of Q2, Q3, Q4.
+					// Q1 length isn't directly available; approximate the
+					// fiscal year as 4 x average(Q2, Q3, Q4).
 					annualDays := math.Round(4.0 * (d2 + d3 + q4Days) / 3.0)
 					ytdDays := annualDays - q4Days
 
@@ -262,23 +218,15 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			}
 
 		case m.StatementType == StmtMetric && m.Type == MappingDerived:
-			// Recompute from Q4 values after all flow and point-in-time fields
-			// have been populated; handled in a second pass below.
+			// Handled in the third pass below.
 		}
 	}
 
 	// Second pass: recompute derived StmtFlow fields from Q4 operands when
-	// the operand recomputation agrees with the annual-sum value to within
-	// rounding drift. The initial annualVal - sum path subtracts individually
-	// rounded quarterly values (Q4 CapitalExpenditure = -2653 - (-1937) = -716
-	// for MCD) and loses precision compared to operand-level cumulative
-	// subtraction (_capexGross Q4 = 2775 - 1968 = 807; _proceedsPPESale Q4 =
-	// 122 - 32 = 90; CapitalExpenditure = -807 + 90 = -717, matching Sharadar).
-	//
-	// A 0.5% relative tolerance keeps this to rounding drift only. Larger
-	// disagreements (e.g. an annual value resolved via a tag the formula
-	// doesn't capture, or operands that are optional and not filed every
-	// quarter) fall back to the annual-sum answer.
+	// they agree with the annual-sum value to within rounding drift. The
+	// annual-sum path subtracts individually rounded quarterly values and
+	// loses precision; operand-level cumulative subtraction is tighter. A
+	// 0.5% relative tolerance keeps the override to rounding drift only.
 	for _, m := range FieldMappings {
 		if m.Type != MappingDerived || m.StatementType != StmtFlow {
 			continue
@@ -288,9 +236,8 @@ func synthesizeFromPreceding(annual map[string]float64, annualPeriodEnd time.Tim
 			continue
 		}
 
-		// Restrict to additive formulas. Division/multiplication (EPS, per-share
-		// metrics) are intentionally left to the annual-sum path so Q4 operand
-		// rounding doesn't amplify through a ratio.
+		// Restrict to additive formulas; division/multiplication is left to
+		// the annual-sum path to avoid amplifying operand rounding.
 		switch m.Op {
 		case OpAdd, OpSubtract, OpLinearCombination:
 		default:

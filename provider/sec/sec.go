@@ -112,12 +112,8 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	limiter := rate.NewLimiter(rate.Limit(reqPerSec), 1)
 	client := NewSECClient(userAgent, limiter)
 
-	// Load CIK -> asset map from database (primary lookup path).
-	// dbTickerMap indexes every asset by ticker so we can resolve tickers
-	// that share a CIK (e.g. JPM, AMJ, AMJB, VYLD all map to CIK 19617).
-	// siblingFigiMap maps each FIGI of a dual-class filer (e.g. BRK.A/BRK.B)
-	// to the other class's FIGI; consumed by EnrichMarketData to fetch the
-	// sibling-class price for the market-ratio share_factor formula.
+	// Load CIK->asset map plus a ticker index (for CIK-shared aliases) and a
+	// sibling-FIGI map for dual-class market-ratio share_factor lookups.
 	dbCIKMap, dbTickerMap, siblingFigiMap, err := LoadCIKMapFromDB(ctx, sub.Library.Pool)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading CIK map from database")
@@ -127,13 +123,10 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		return
 	}
 
-	// Fetch SEC's company_tickers.json as a fallback for CIKs not in the
-	// database. This file is fetched fresh on each run so we always pick up
-	// SEC's latest mappings (the file changes daily).
+	// Fall back to SEC's company_tickers.json for CIKs not in the DB.
 	secTickers, err := FetchCompanyTickers(ctx, client)
 	if err != nil {
-		// Don't fail the whole run if the fallback fetch fails -- the DB map
-		// may still cover the universe we care about. Log and proceed.
+		// The DB map may still cover the universe we care about; proceed.
 		log.Warn().Err(err).Msg("error fetching SEC company_tickers.json; proceeding with DB CIK map only")
 
 		secTickers = nil
@@ -155,11 +148,9 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 			continue
 		}
 
-		// CIK not in DB: add an entry with the SEC ticker but no FIGI.
-		// SaveDB drops fundamentals with empty CompositeFigi, so these
-		// observations will not be persisted -- emitFundamentals tracks
-		// the count and reports it in the run summary so users know
-		// there's a coverage gap.
+		// CIK not in DB: add with the SEC ticker but no FIGI. SaveDB drops
+		// fundamentals with empty CompositeFigi, so these are skipped and
+		// counted as a coverage gap.
 		cikMap[cik] = AssetInfo{
 			Ticker:        entry.Ticker,
 			CompositeFigi: "",
@@ -175,11 +166,9 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 		Int("from_sec", fromSEC).
 		Msg("built combined CIK map")
 
-	// Apply ticker/FIGI filter if set. Multiple tickers can share a single
-	// CIK, so the CIK map may store a different ticker than the one
-	// requested. We fall back to dbTickerMap which indexes every DB asset
-	// by ticker, ensuring e.g. --ticker JPM resolves even when the CIK map
-	// entry for CIK 19617 holds VYLD.
+	// Apply ticker/FIGI filter. CIKs with multiple tickers are reached via
+	// dbTickerMap so e.g. --ticker JPM resolves even when the CIK-map slot
+	// holds an aliased ticker.
 	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
 	if tickerFilter != "" || figiFilter != "" {
 		filtered := make(map[int]AssetInfo)
@@ -192,8 +181,7 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 			}
 		}
 
-		// Ticker not found via CIK map scan — try the ticker index which
-		// covers all DB assets regardless of CIK collisions.
+		// Try the ticker index when the CIK-map scan came up empty.
 		if len(filtered) == 0 && tickerFilter != "" {
 			if asset, ok := dbTickerMap[strings.ToUpper(tickerFilter)]; ok {
 				if sibling, ok := siblingFigiMap[asset.CompositeFigi]; ok {
@@ -214,9 +202,7 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 				}
 			}
 
-			// Also include tickers from the full DB index so the fuzzy
-			// suggestions cover all known tickers, not just CIK-map
-			// survivors.
+			// Include all DB tickers in the fuzzy-suggestion candidates.
 			if tickerFilter != "" {
 				for t := range dbTickerMap {
 					candidates = append(candidates, t)
@@ -257,9 +243,8 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 
 	skippedMissingFIGI := 0
 
-	// Determine the cutoff date for which periods to emit. If --lookback is
-	// set it takes precedence; otherwise fall back to the subscription's
-	// last observation date (zero means full backfill).
+	// --lookback overrides the subscription's last observation date; zero
+	// means full backfill.
 	since := sub.LastObsDate
 	if lookback := provider.LookbackFromContext(ctx, 0); lookback > 0 {
 		since = time.Now().Add(-lookback)
@@ -285,10 +270,8 @@ func fetchFundamentals(ctx context.Context, sub *library.Subscription, out chan<
 	}
 }
 
-// individualFetchThreshold is the maximum number of CIKs for which we fetch
-// individual companyfacts JSON files instead of downloading the full ~2GB
-// companyfacts.zip. Individual fetches are much faster for small runs (e.g.
-// single-ticker development) but don't scale for full backfills.
+// individualFetchThreshold is the CIK count above which we download the full
+// companyfacts.zip instead of fetching per-CIK JSON.
 const individualFetchThreshold = 20
 
 func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations, skippedMissingFIGI *int) error {
@@ -402,11 +385,8 @@ func runBackfill(ctx context.Context, client *resty.Client, cikMap map[int]Asset
 	return nil
 }
 
-// logCoverageDistribution logs percentile statistics of per-company
-// latest-period coverage over the full backfill. This helps surface XBRL
-// mapping gaps: a low p50 signals a systemic mapping problem, while a large
-// gap between p50 and p99 typically reflects companies reporting only a
-// subset of the expected tags (e.g. funds or shell companies).
+// logCoverageDistribution logs percentile stats of per-company latest-period
+// coverage to surface XBRL mapping gaps.
 func logCoverageDistribution(samples []int) {
 	if len(samples) == 0 {
 		return
@@ -552,20 +532,9 @@ pageLoop:
 }
 
 // coverageWarnThresholdPct is the minimum percentage of FieldMappings that
-// should resolve for a company's most recent period before emitFundamentals
-// logs a warning. Most healthy filers resolve well above this line; dropping
-// below it usually indicates a company with non-standard XBRL tags that are
-// missing from our fallback list.
+// should resolve for a company's latest period before logging a warning.
 const coverageWarnThresholdPct = 50
 
-// emitFundamentals processes a CompanyFacts into data.Fundamental observations
-// for all 6 dimensions and sends them to the output channel.
-//
-// The since parameter limits emission to periods filed on or after that time.
-// Pass time.Time{} (zero value) to emit every period without filtering.
-// MRFiledDate is used for the comparison so that restatements filed after
-// since are re-emitted even if the period itself is older.
-//
 // copyFieldMap returns a shallow copy of a resolved field map.
 func copyFieldMap(m map[string]float64) map[string]float64 {
 	cp := make(map[string]float64, len(m))
@@ -576,10 +545,8 @@ func copyFieldMap(m map[string]float64) map[string]float64 {
 	return cp
 }
 
-// Returns the number of fields resolved for the company's most recent period
-// and the count of non-TTM periods emitted (ARQ + ARY). The caller uses these
-// to track coverage statistics across the run. latestPeriodCoverage is zero if
-// no periods were identified.
+// emitFundamentals returns the latest-period field count and the count of
+// non-TTM periods emitted. latestPeriodCoverage is zero when no periods exist.
 func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscription, since time.Time, out chan<- *data.Observation, numObservations *int) (latestPeriodCoverage, periodsEmitted int) {
 	periods := IdentifyPeriods(cf)
 
@@ -588,10 +555,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// the true latest-period coverage for the company.
 	var latestPeriodEnd time.Time
 
-	// Collect quarterly periods for de-cumulation and TTM computation. All
-	// quarters are kept (even those filtered by since) so TTM windows and
-	// de-cumulation chains remain complete; the since check is reapplied when
-	// emitting.
+	// All quarters are collected (even since-filtered ones) so TTM windows
+	// and de-cumulation chains remain complete; the since check is reapplied
+	// at emit time.
 	type quarterData struct {
 		period        Period
 		arFields      map[string]float64 // original resolved values (may be YTD for cash flow)
@@ -608,33 +574,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 	var buffered []*data.Observation
 
-	// Identify fields whose underlying XBRL concepts the company has stopped
-	// reporting. A concept is stale if it appeared in older filings but not in
-	// the latest 10-K. Stale fields are stripped from MR field maps so the MR
-	// view reflects the company's current reporting practice.
+	// Stale fields are concepts present in older filings but absent from the
+	// latest 10-K; strip them from MR so MR reflects current reporting.
 	staleMRFields := identifyStaleMRFields(cf)
 
 	for _, p := range periods {
 		// AR: resolve using only facts available at the earliest filing date
 		arFields := ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.ARFiledDate)
 
-		// MR: resolve using all facts including restatements. When AR and MR
-		// filing dates are the same (no restatements -- the common case), the
-		// resolved field maps are identical, so reuse the AR map. The maps are
-		// treated as read-only after this point so sharing the reference is
-		// safe.
+		// MR uses all facts including restatements. When AR and MR filing
+		// dates match (no restatements), the maps are identical and shared.
 		var mrFields map[string]float64
 		if p.ARFiledDate.Equal(p.MRFiledDate) {
 			mrFields = arFields
 		} else {
 			mrFields = ResolveFieldsForFiling(cf, p.PeriodEnd, p.FormType, p.MRFiledDate)
 
-			// Fill gaps in AR data from MR. Later filings sometimes add
-			// comparative values for XBRL concepts that were not present in
-			// the original filing (e.g. MSFT started reporting short-term
-			// debt proceeds separately in FY2025 and included FY2024
-			// comparatives). Sharadar's AR dimension includes such
-			// back-filled values, so we merge them to match.
+			// Back-fill AR from MR: later filings sometimes add comparative
+			// values for new XBRL concepts; Sharadar's AR includes them.
 			filled := false
 
 			for k, v := range mrFields {
@@ -644,11 +601,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				}
 			}
 
-			// Recompute derived fields if any gaps were filled. Only
-			// recompute fields that don't have FallbackTags, since those
-			// with FallbackTags may have been resolved from a tag that is
-			// more accurate than the formula (e.g. D&A resolved from a
-			// combined tag rather than individual components).
+			// Recompute derived fields when gaps were filled. Skip fields
+			// with FallbackTags so a tag-resolved value isn't overwritten by
+			// a less accurate formula.
 			if filled {
 				for _, m := range FieldMappings {
 					if m.Type != MappingDerived || len(m.FallbackTags) > 0 {
@@ -679,9 +634,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			})
 		}
 
-		// Track the chronologically latest period's coverage. Done before the
-		// since filter so the reported coverage reflects the true most recent
-		// period, not just the newest period emitted this run.
+		// Latest-period coverage is tracked before the since filter so it
+		// reflects the true most recent period.
 		if p.PeriodEnd.After(latestPeriodEnd) {
 			latestPeriodEnd = p.PeriodEnd
 			latestPeriodCoverage = len(arFields)
@@ -689,13 +643,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		if p.FormType == "10-K" {
 			// Pull StmtPointInTime values that only appear on later 10-Q
-			// comparatives (LLY tags TaxesPayableCurrent at end=2024-12-31
-			// only on Q1/Q2/Q3 2025 10-Q comparative balance sheets, never
-			// on the original 10-K). Merge into mrFields so the synthesized
-			// Q4 quarter's MR view picks up the comparative balance. Filter
-			// to the latest filing date across ALL form types so that 10-Q
-			// comparatives filed after the 10-K are visible (the period's
-			// MRFiledDate is restricted to 10-K filings).
+			// comparatives (LLY tags TaxesPayableCurrent only on subsequent
+			// 10-Q comparative balance sheets). Use the latest filing date
+			// across all form types so 10-Q comparatives filed after the
+			// 10-K are visible.
 			latestFiledForPeriod := p.MRFiledDate
 
 			for _, facts := range cf.Facts {
@@ -723,8 +674,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 					continue
 				}
 
-				// Detach from arFields before mutating (mrFields may share the
-				// arFields map when no restatements were observed in the 10-K).
+				// Detach from arFields before mutating (mrFields may share it).
 				if !derivedRecompute {
 					mrFieldsCopy := copyFieldMap(mrFields)
 					mrFields = mrFieldsCopy
@@ -767,15 +717,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 	}
 
-	// De-cumulate YTD cash flow values for quarterly periods. SEC 10-Q filings
-	// report cash flow items as year-to-date cumulative values only. For Q1 the
-	// YTD equals the quarterly value; for Q2/Q3 we subtract the prior quarter's
-	// YTD to isolate the single-quarter amount.
-	//
-	// Consecutive quarters within the same fiscal year are identified by a gap
-	// of <= 120 days between period ends. A larger gap (e.g. Q3 -> Q1 across a
-	// 10-K boundary) means the current quarter is a new fiscal year's Q1 and
-	// its YTD value is already the quarterly value.
+	// Consecutive quarters within the same fiscal year are identified by a
+	// gap of <= 120 days; larger gaps mark a new fiscal year's Q1 (whose YTD
+	// equals the quarterly value).
 	const maxQuarterGapDays = 120
 
 	for i := range quarters {
@@ -786,8 +730,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			gapDays := q.period.PeriodEnd.Sub(prev.period.PeriodEnd).Hours() / 24
 
 			if gapDays <= maxQuarterGapDays {
-				// Consecutive quarter in same fiscal year: de-cumulate using
-				// the prior quarter's ORIGINAL (pre-de-cumulation) YTD values.
+				// De-cumulate against the prior quarter's ORIGINAL YTD values.
 				q.arEmit = DecumulateYTD(cf, q.arFields, prev.arFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType, q.period.ARFiledDate)
 				q.mrEmit = DecumulateYTD(cf, q.mrFields, prev.mrFields, prev.period.PeriodEnd, q.period.PeriodEnd, q.period.FormType, q.period.MRFiledDate)
 
@@ -797,18 +740,16 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		// Q1 or no prior quarter: no de-cumulation needed. Copy the maps
-		// so that later MR-only overrides (e.g. SharesBasic) don't leak
-		// into the AR emit maps when AR and MR share the same reference.
+		// Q1 or no prior quarter: copy the maps so later MR-only overrides
+		// don't leak into AR when the references are shared.
 		q.arEmit = copyFieldMap(q.arFields)
 		q.mrEmit = copyFieldMap(q.mrFields)
 
 		applyMRComparativeFilter(cf, q.mrEmit, q.period.PeriodEnd)
 	}
 
-	// Synthesize Q4 entries from 10-K annual data and preceding quarters.
-	// Each synthesized Q4 is inserted into the sorted quarters slice so it
-	// participates in TTM computation and is emitted as ARQ/MRQ.
+	// Synthesize Q4 entries from each 10-K annual + preceding quarters and
+	// insert into the sorted quarters slice for TTM and ARQ/MRQ emission.
 	for _, a := range annuals {
 		// Rebuild inputs each iteration so previously synthesized Q4s are
 		// available as preceding quarters for later annuals.
@@ -828,10 +769,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			continue
 		}
 
-		// Check if a quarter already exists at this period end. If it does
-		// but lacks revenue data (e.g. a phantom quarter from comparative
-		// balance sheet data in a subsequent 10-Q), replace it with the
-		// synthesized Q4 which has complete flow data.
+		// If an existing quarter at this period end lacks revenue (phantom
+		// quarter from comparative balance-sheet data), replace it.
 		existingIdx := -1
 
 		for idx, q := range quarters {
@@ -893,15 +832,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		quarters[idx] = q4
 	}
 
-	// CAT-style industrial-financial filers: Sharadar reports the annual
-	// weighted-average share count as the Q4 synth ARQ/MRQ value instead of
-	// the day-weighted quarterly value. The filer's XBRL contains only the
-	// FY weighted-average (no Q4-standalone tag), and Sharadar's ARQ for
-	// the 10-K period pins to that annual value rather than synthesizing a
-	// Q4-specific weighted average. Other filers continue to use the day-
-	// weighted synth. Recompute per-share metrics after overriding so the
-	// cascade (book_value_per_share, sales_per_share, free_cash_flow_per_share,
-	// tangible_assets_book_value_per_share) lands on the pinned wavg.
+	// CAT-style filers report only an FY weighted-average; Sharadar pins
+	// the Q4 ARQ/MRQ to that annual value instead of synthesizing a
+	// Q4-specific weighted average. Per-share metrics are recomputed
+	// against the pinned wavg.
 	if isIndustrialFinancialFiler(cf) {
 		for i := range quarters {
 			for _, a := range annuals {
@@ -939,37 +873,24 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 	}
 
-	// Override DPS with cash-paid methodology for all quarters (including
-	// synthesized Q4). This must happen after de-cumulation and Q4 synthesis
-	// so _absDividendsPaid is the correct single-quarter cash amount.
+	// Override DPS with cash-paid methodology. Must run after de-cumulation
+	// and Q4 synthesis so _absDividendsPaid is single-quarter.
 	for i := range quarters {
 		OverrideDPSFromCash(cf, quarters[i].arEmit, false, quarters[i].period.PeriodEnd, false)
 		OverrideDPSFromCash(cf, quarters[i].mrEmit, true, quarters[i].period.PeriodEnd, false)
 	}
 
-	// Override SharesBasic in mrEmit for MR dimensions. Sharadar's MR
-	// semantics use the EntityCommonStockSharesOutstanding from the most
-	// recently filed 10-K/10-Q as of the period end date (the latest known
-	// cover-page shares), NOT from the filing that reports the period's own
-	// data. Apply the override before annual averaging and emission so MRQ,
-	// MRT, and MRY all see the corrected value.
+	// MR SharesBasic uses the latest cover-page shares as of the period end,
+	// not the filing reporting the period's own data. Applied before annual
+	// averaging so MRQ/MRT/MRY all see the corrected value.
 	for i := range quarters {
 		if val, ok := resolveSharesBasicForMR(cf, quarters[i].period.PeriodEnd); ok {
 			quarters[i].mrEmit["SharesBasic"] = val
 		}
 	}
 
-	// Override SharesBasic in arEmit for AR dimensions. The standard
-	// ResolveDirect matches EntityCommonStockSharesOutstanding by normalized
-	// date, which fails for companies whose DEI end dates are in a different
-	// quarter than the fiscal period end (e.g., NVDA's January FY has DEI
-	// dates in February that normalize to the next quarter). Use the same
-	// filing-date resolution with the AR filing date to pick the DEI fact
-	// from the actual filing.
-	//
-	// For synthesized Q4 quarters (whose period end matches an annual), use
-	// the annual-AR resolver so CAT-style filers (10-K cover page discloses
-	// only the fiscal-Q2 shares) get the mid-year value.
+	// AR SharesBasic uses filing-date resolution against the AR filing date.
+	// Synthesized Q4 quarters use the annual-AR resolver.
 	annualPeriodEnds := make(map[time.Time]bool, len(annuals))
 	for _, a := range annuals {
 		annualPeriodEnds[a.period.PeriodEnd] = true
@@ -994,19 +915,14 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		}
 	}
 
-	// Strip stale fields from MR quarterly emit maps and recompute derived
-	// fields. This must happen before TTM computation so that trailing sums
-	// use the corrected MR values.
+	// Strip stale fields from MR emit maps before TTM so trailing sums
+	// use the corrected values.
 	for i := range quarters {
 		stripStaleAndRecompute(quarters[i].mrEmit, staleMRFields, cf)
 	}
 
-	// Apply bank-specific post-processing (TotalDebt/InvestedCapital/NCFDebt
-	// overrides, SGA recompute, etc.) to quarter emit maps before annual
-	// balance-sheet averages are computed. Without this, the 4-quarter
-	// averages in ComputeMultiQAverages see the mapping-level values that
-	// precede the bank overrides, yielding a stale InvestedCapitalAverage
-	// for ARY/MRY on bank filers.
+	// Apply bank post-processing before annual averaging so
+	// InvestedCapitalAverage for ARY/MRY reflects the bank overrides.
 	for i := range quarters {
 		overrideNCFDebtResidual(cf, quarters[i].arEmit, quarters[i].period.PeriodEnd, quarters[i].period.FormType)
 		overrideNCFDebtResidual(cf, quarters[i].mrEmit, quarters[i].period.PeriodEnd, quarters[i].period.FormType)
@@ -1057,15 +973,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	// and derived ratios (ROA, ROE, ROIC) are intentionally NOT computed for
 	// quarterly dimensions (ARQ/MRQ). See #56 for rationale.
 
-	// findConstituentQuarters returns the quarterly entries whose PeriodEnd
-	// falls within ~365 days before annualEnd (inclusive). This gives us the
-	// 4 fiscal-year quarters for 4-quarter balance sheet averaging.
-	//
-	// The 370-day window can pick up the prior year's synthesized Q4 (which
-	// shares the same period end as the prior annual). If that happens the
-	// slice is capped to the 4 most recent quarters so the average matches
-	// Sharadar's 4-point methodology (current FY quarters only, excluding
-	// the prior year-end snapshot).
+	// findConstituentQuarters returns up to the 4 most recent quarters within
+	// ~365 days of annualEnd, matching Sharadar's 4-point average methodology.
 	findConstituentQuarters := func(qs []quarterData, annualEnd time.Time) []quarterData {
 		const maxDays = 370
 
@@ -1093,30 +1002,21 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 	for i := range annuals {
 		a := &annuals[i]
 
-		// Annual data is full-year; no de-cumulation needed. Copy into
-		// arEmit/mrEmit so that merging period averages does not mutate
-		// the original arFields (which may be read as prev in the next
-		// iteration).
+		// Copy to arEmit/mrEmit so merging period averages doesn't mutate
+		// arFields (read as prev in the next iteration).
 		a.arEmit = copyFieldMap(a.arFields)
 		a.mrEmit = copyFieldMap(a.mrFields)
 
-		// Override DPS with cash-paid methodology for annual data. The annual
-		// period ends on the fiscal year-end date (Q4); LLY-style filers
-		// disclose the FY declared total only on the 10-K (no 10-Q fact at
-		// that date), so AR keeps the declared value while MR uses cash-paid.
+		// AR keeps the declared FY value; MR uses cash-paid.
 		OverrideDPSFromCash(cf, a.arEmit, false, a.period.PeriodEnd, true)
 		OverrideDPSFromCash(cf, a.mrEmit, true, a.period.PeriodEnd, true)
 
-		// Strip stale fields from MR annual and recompute derived fields.
-		// This matches Sharadar's MR semantics: if a company stops reporting
-		// a concept (e.g. InterestExpense), derived fields like EBIT should
-		// be recomputed without it.
+		// Recompute derived fields in MR without stale concepts (Sharadar
+		// drops dependents like EBIT when its operands stop being reported).
 		stripStaleAndRecompute(a.mrEmit, staleMRFields, cf)
 
-		// Find the 4 constituent quarters for this fiscal year to compute
-		// 4-quarter balance sheet averages (matching Sharadar methodology).
-		// Fall back to 2-point (prior annual + current annual) averaging when
-		// quarterly data is not available (e.g. companies with only 10-K filings).
+		// 4-quarter balance-sheet averages; fall back to 2-point (prior +
+		// current annual) when quarterly data is unavailable (10-K-only filers).
 		annualQs := findConstituentQuarters(quarters, a.period.PeriodEnd)
 		if len(annualQs) > 0 {
 			arMaps := make([]map[string]float64, len(annualQs))
@@ -1157,30 +1057,23 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			continue
 		}
 
-		// ARY — override SharesBasic for AR semantics (see quarterly override above).
-		// Use the annual-specific resolver: Sharadar's ARQ shares_basic for 10-K
-		// periods matches the cover-page disclosure, which for some filers (CAT)
-		// only appears as mid-fiscal-year (Q2) prose.
+		// ARY uses the annual-AR shares resolver (cover-page disclosure;
+		// for some filers like CAT only appears as Q2 prose).
 		if val, ok := resolveSharesBasicForAnnualAR(cf, a.period.ARFiledDate, a.period.PeriodEnd); ok {
 			a.arEmit["SharesBasic"] = val
 		}
 
-		// Strip tax withholding from annual emit maps: Sharadar only
-		// includes it in quarterly NCFCOMMON for bundled-presentation
-		// filers like NVDA, not in the annual aggregation. Restaurant
-		// filers (TXRH) report tax withholding as a distinct cash-flow
-		// line item, and Sharadar's annual NCFCOMMON equals the sum of
-		// quarterly stubs including that line — gated via PreOpeningCosts
-		// to preserve the strip for NVDA-style filers.
+		// Strip tax withholding from annual emit for NVDA-style bundled
+		// filers (Sharadar only includes it in quarterly NCFCOMMON for
+		// those). Restaurant filers (TXRH) keep it; gated on PreOpeningCosts.
 		if !conceptFiledQuarterly(cf, []string{"PreOpeningCosts"}) {
 			annualTWHStale := map[string]bool{"_taxWithholdingShareComp": true}
 			stripStaleAndRecompute(a.arEmit, annualTWHStale, cf)
 			stripStaleAndRecompute(a.mrEmit, annualTWHStale, cf)
 		}
 
-		// Apply bank overrides to annual emit maps. Only for banks —
-		// the bundlesFinancing (NVDA) path modifies NCFCOMMON via tax
-		// withholding strip, making the annual residual incorrect.
+		// Bank-only annual overrides; the NVDA bundlesFinancing path would
+		// produce an incorrect residual.
 		if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
 			overrideNCFDebtResidual(cf, a.arEmit, a.period.PeriodEnd, a.period.FormType)
 			overrideNCFDebtResidual(cf, a.mrEmit, a.period.PeriodEnd, a.period.FormType)
@@ -1229,9 +1122,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			a.mrEmit["SharesBasic"] = val
 		}
 
-		// For banks, replace MRY DPS with the sum of cash-paid quarterly DPS.
-		// The annual mrEmit has the declared DPS from the 10-K; MRY should
-		// match the MRT trailing sum of cash-paid (prior quarter declared) values.
+		// For banks, MRY DPS is the sum of cash-paid quarterly DPS so it
+		// matches the MRT trailing sum.
 		if !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && conceptFiledQuarterly(cf, []string{"Deposits"}) {
 			cashDPSSum := 0.0
 			cashDPSCount := 0
@@ -1282,13 +1174,10 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 
 		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
 
-		// For banks, use the prior quarter's declared DPS as the cash-paid
-		// DPS for MR dimensions only. Try arFields, then arEmit for
-		// synthesized Q4 quarters. Only affects MR dimensions — AR keeps
-		// the declared value. Skipped when the filer reports
-		// PreferredStockDividendsIncomeStatementImpact (GS pattern): those
-		// filers have Sharadar using the declared per-share value directly
-		// rather than the cash-paid prior-quarter shift.
+		// For banks, MR cash-paid DPS uses the prior quarter's declared
+		// value. AR keeps the declared value. Skipped for GS-style filers
+		// (PreferredStockDividendsIncomeStatementImpact), which use
+		// declared DPS directly.
 		if i > 0 && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && !hasPreferredISImpact {
 			prev := &quarters[i-1]
 			prevDPS, found := prev.arFields["DividendsPerBasicCommonShare"]
@@ -1301,9 +1190,7 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				prevDPS, found = prev.mrEmit["DividendsPerBasicCommonShare"]
 			}
 
-			// For Q1 of each year: the prior Q4 is synthesized and may not
-			// have DPS in any map. Fall back to Q3 (i-2) which is a regular
-			// 10-Q quarter with DPS available.
+			// Q1's prior Q4 is synthesized and may lack DPS; fall back to Q3.
 			if !found && i > 1 {
 				grandPrev := &quarters[i-2]
 
@@ -1388,15 +1275,13 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		periodsEmitted++
 	}
 
-	// Compute TTM for each quarter that has 4 preceding quarters.
-	// Uses de-cumulated (single-quarter) values so the TTM sum is correct.
+	// Compute TTM from de-cumulated single-quarter values.
 	for i := 3; i < len(quarters); i++ {
 		q := quarters[i]
 		calendarDate := NormalizeEventDate(q.period.PeriodEnd, q.period.FormType)
 
-		// Verify the 4 quarters span roughly 12 months. If a 10-Q is missing
-		// from the sequence (or fiscal-year boundaries shifted), the span will
-		// be too short or too long and the resulting TTM would be misleading.
+		// Skip TTM when the 4-quarter span isn't roughly 12 months (missing
+		// 10-Q or fiscal-year boundary shift).
 		spanStart := quarters[i-3].period.PeriodEnd
 		spanEnd := q.period.PeriodEnd
 		spanDays := int(spanEnd.Sub(spanStart).Hours() / 24)
@@ -1412,9 +1297,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			continue
 		}
 
-		// Skip TTM windows where none of the 4 constituent quarters were
-		// filed/restated on or after since. If any constituent quarter was
-		// touched after since the TTM might have changed, so we re-emit.
+		// Skip TTM when none of the 4 constituent quarters were filed or
+		// restated on or after since.
 		if !since.IsZero() {
 			anyRecent := false
 
@@ -1430,11 +1314,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		// The TTM "lastUpdated" is the most recent filing date among the
-		// constituent quarters: any restatement to any quarter in the
-		// window invalidates the prior TTM, so the latest filing date is
-		// the freshness marker the data quality checks should compare
-		// against.
+		// TTM lastUpdated is the most recent constituent-quarter filing date:
+		// any restatement in the window invalidates the prior TTM.
 		latestARFiled := quarters[i-3].period.ARFiledDate
 		latestMRFiled := quarters[i-3].period.MRFiledDate
 
@@ -1448,11 +1329,9 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		// When the TTM window coincides with a fiscal year (the latest
-		// quarter is a synthesized Q4 at the 10-K period end), period-average
-		// fields like WeightedAverageShares should use the annual filing's
-		// value rather than the Q4-specific synthesis. The annual value is the
-		// true full-year weighted average, matching Sharadar's trailing output.
+		// When the TTM window matches a fiscal year, period-average fields
+		// (WeightedAverageShares) take the annual filing's true full-year
+		// value rather than the Q4 synthesis.
 		var matchingAR, matchingMR map[string]float64
 
 		for idx := range annuals {
@@ -1464,12 +1343,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		// For banks, the annual MR DPS should use cash-paid (sum of
-		// prior-quarter declared rates), not the declared total from
-		// the 10-K. Without this, overridePeriodAvg would replace the
-		// correctly-summed TTM cash-paid DPS with the declared annual.
-		// Use Deposits as the bank sentinel (more specific than absence of
-		// AssetsCurrent, which test fixtures may lack).
+		// For banks, drop the declared annual DPS so overridePeriodAvg
+		// doesn't replace the TTM cash-paid sum with it.
 		if matchingMR != nil && !conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) && conceptFiledQuarterly(cf, []string{"Deposits"}) {
 			delete(matchingMR, "DividendsPerBasicCommonShare")
 		}
@@ -1484,10 +1359,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				case m.StatementType == StmtPeriodAverage:
 					// Use the annual filing's true full-year weighted average.
 				case m.StatementType == StmtFlow && m.ValueType == "float64":
-					// Per-share flow fields (EPS, EPSDiluted, DividendsPerBasicCommonShare):
-					// use the annual filing's value directly. Summing 4 individually
-					// rounded quarterly per-share values may differ from the company-
-					// reported annual value by up to $0.01.
+					// Per-share flow values: use annual directly to avoid the
+					// $0.01 drift from summing rounded quarterly values.
 				default:
 					continue
 				}
@@ -1497,9 +1370,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 				}
 			}
 
-			// Recompute derived metric fields since the period-average
-			// fields they depend on (e.g. WeightedAverageShares used by
-			// SalesPerShare, BookValuePerShare, etc.) have changed.
+			// Recompute derived metric fields since their period-average
+			// dependencies just changed.
 			for _, m := range FieldMappings {
 				if m.Type != MappingDerived || m.StatementType != StmtMetric {
 					continue
@@ -1517,10 +1389,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			arQSlice[j] = quarters[i-3+j].arEmit
 		}
 
-		// bankFixTTMNCI replaces the TTM NCI sum with the annual value when
-		// the TTM coincides with a fiscal year. Quarterly NCI values may
-		// not sum to the annual due to the cumulative vs single-quarter
-		// discrepancy in NetIncome (2M for JPM).
+		// bankFixTTMNCI replaces TTM NCI with the annual value when they
+		// would drift due to cumulative vs single-quarter NetIncome paths.
 		bankFixTTMNCI := func(ttm, annualFields map[string]float64) {
 			if annualFields == nil || conceptFiledQuarterly(cf, []string{"AssetsCurrent"}) {
 				return
@@ -1531,25 +1401,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 			}
 		}
 
-		// overrideFlowsAtFiscalYearEnd replaces TTM flow fields with the
-		// annual filing's value when the trailing 12-month window exactly
-		// coincides with the fiscal year. For MRT this matters whenever a
-		// later filing restated comparative quarterlies (e.g. BRK's Q1 2025
-		// 10-Q restated Q1 2024 SGA by +768M): the sum of restated MRQ
-		// values no longer matches the annual total from the 10-K, but
-		// Sharadar's MRT at the annual date_key equals MRY. Using the
-		// annual value directly avoids the mismatch. For ART this is
-		// algebraically a no-op (sum of original quarters equals annual)
-		// and guards against cumulative rounding drift.
-		//
-		// Derived flow fields (D&A, GrossProfit, OperatingExpenses, EBITDA,
-		// etc.) are copied from annualFields directly — we do NOT recompute
-		// them via their formulas because some formulas depend on helper
-		// operands (_depreciation, _amortizationOfIntangibles, ...) that
-		// may not be populated in annualFields for filers that only report
-		// a single aggregate D&A concept. Ratio fields (gross_margin,
-		// ebitda_margin, etc.) ARE recomputed since they depend on the
-		// overridden flow totals.
+		// overrideFlowsAtFiscalYearEnd swaps TTM flow fields for the annual
+		// values when the TTM window coincides with the fiscal year.
 		overrideFlowsAtFiscalYearEnd := func(ttm, annualFields map[string]float64) {
 			if annualFields == nil {
 				return
@@ -1646,11 +1499,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		EnrichMarketData(fundamentals, priceLookupFn, opts...)
 	}
 
-	// Clean up stale records for this ticker before sending new observations.
-	// Prior runs may have used different dateKey conventions (e.g., filing
-	// date vs period end), leaving orphan rows that create spurious diffs.
-	// Collect the set of valid (dimension, event_date) pairs from the current
-	// run and delete any existing records not in this set.
+	// Delete prior records not in the current (dimension, event_date) set
+	// to clean up orphans from earlier dateKey conventions.
 	if asset.CompositeFigi != "" && len(buffered) > 0 {
 		cleanupCtx := context.Background()
 
@@ -1712,11 +1562,8 @@ func emitFundamentals(cf *CompanyFacts, asset AssetInfo, sub *library.Subscripti
 		out <- obs
 	}
 
-	// Log per-company coverage. We use Debug for healthy companies (most of
-	// the universe) to avoid flooding logs during a 10,000+ company backfill,
-	// and escalate to Warn when coverage is concerning so mapping gaps are
-	// surfaced. Companies with no periods identified are skipped: there's
-	// nothing to compare against and the upstream parser already logs them.
+	// Coverage logging: Debug for healthy companies, Warn below the threshold
+	// to surface mapping gaps without flooding logs during a full backfill.
 	if len(periods) > 0 {
 		totalMappings := len(FieldMappings)
 		coveragePct := 0

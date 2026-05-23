@@ -64,22 +64,18 @@ type feedCategory struct {
 	Label string `xml:"label,attr"`
 }
 
-// titleRegex extracts the company name from an EDGAR feed entry title.
-// EDGAR titles take the form: "10-K - Company Name (0001234567) (Filer)".
+// EDGAR titles look like: "10-K - Company Name (0001234567) (Filer)".
 var titleRegex = regexp.MustCompile(`^[^-]+-\s*(.+?)\s*\(\d+\)\s*\(.*\)\s*$`)
 
-// summaryAccnRegex extracts the accession number from a feed summary block.
-// Summaries look like: "<b>Filed:</b> 2026-04-06 <b>AccNo:</b> 0001493152-26-015327 <b>Size:</b> 16 MB".
+// EDGAR summary blobs look like: "...AccNo:</b> 0001493152-26-015327...".
 var summaryAccnRegex = regexp.MustCompile(`AccNo:?\s*</?b>?\s*([0-9]{10}-[0-9]{2}-[0-9]{6})`)
 
 // accnNumberRegex matches a bare EDGAR accession number (NNNNNNNNNN-NN-NNNNNN).
 var accnNumberRegex = regexp.MustCompile(`^[0-9]{10}-[0-9]{2}-[0-9]{6}$`)
 
-// ParseFilingFeed parses an EDGAR ATOM feed and returns filing entries filtered
-// to only 10-K and 10-Q form types. Amendments (10-K/A, 10-Q/A) are excluded.
-//
-// EDGAR ATOM feeds may declare a non-UTF-8 character encoding (commonly
-// ISO-8859-1). A charset-aware decoder is used to transparently handle these.
+// ParseFilingFeed parses an EDGAR ATOM feed and returns 10-K and 10-Q filings
+// (amendments excluded). Uses a charset-aware decoder since EDGAR feeds may
+// declare a non-UTF-8 encoding (commonly ISO-8859-1).
 func ParseFilingFeed(xmlData []byte) ([]FilingEntry, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(xmlData))
 	decoder.CharsetReader = charset.NewReaderLabel
@@ -125,9 +121,7 @@ func ParseFilingFeed(xmlData []byte) ([]FilingEntry, error) {
 	return filings, nil
 }
 
-// extractCIKFromLink extracts a CIK number from an EDGAR URL path.
-// EDGAR URLs contain the CIK as a path component, e.g.:
-// https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/0000320193-24-000123-index.htm
+// extractCIKFromLink extracts the CIK from an EDGAR URL path (.../data/<cik>/...).
 func extractCIKFromLink(href string) int {
 	parts := strings.Split(href, "/")
 	for i, p := range parts {
@@ -142,9 +136,8 @@ func extractCIKFromLink(href string) int {
 	return 0
 }
 
-// extractAccnFromLink extracts an accession number from an EDGAR index URL.
-// The accession number is the leading portion of the index file name, e.g.:
-// .../0000320193-24-000123-index.htm -> 0000320193-24-000123
+// extractAccnFromLink extracts an accession number from an EDGAR index URL
+// (.../<accn>-index.htm).
 func extractAccnFromLink(href string) string {
 	parts := strings.Split(href, "/")
 	if len(parts) == 0 {
@@ -172,9 +165,8 @@ func extractAccnFromSummary(summary string) string {
 	return ""
 }
 
-// extractCompanyName extracts the company name from an EDGAR feed entry title.
-// Titles take the form "10-K - Company Name (0001234567) (Filer)". When the
-// expected pattern is not present the trimmed title is returned as a fallback.
+// extractCompanyName extracts the company name from an EDGAR feed entry
+// title. Falls back to the trimmed title when the expected pattern is absent.
 func extractCompanyName(title string) string {
 	matches := titleRegex.FindStringSubmatch(title)
 	if len(matches) >= 2 {

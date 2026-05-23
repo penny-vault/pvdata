@@ -31,16 +31,22 @@ import (
 // Sandy in October 2012).
 const edgeBufferDays = 14
 
+// massiveListDateGapTolerance is how long Massive's reference list_date
+// is allowed to predate the ticker's own EOD first bar before the
+// algorithm rejects the Massive value. Sized so routine IPO-to-first-
+// bar lags and brief data outages do not trip the gate, but multi-year
+// gaps (the iShares Morningstar JK*/IM*-IL*-IS* rebrand returns
+// list_date 2004-06-28 on tickers that first traded 2021-03-22) do.
+const massiveListDateGapTolerance = 365 * 24 * time.Hour
+
 // DateCandidates collects the per-asset inputs the date-assignment
 // algorithm consumes when choosing a listing date and a delisting date
 // for one asset that belongs to a ticker. The struct is self-contained:
 // every value the algorithm needs is here, so the algorithm itself is
-// a pure function over a slice of these.
-//
-// All date fields are time.Time; an unset value is the zero time.Time
-// (use IsZero() to test). Source strings on the output match the field
-// names below in snake_case so the JSONB lineage column records the
-// source unambiguously.
+// a pure function over a slice of these. Unset date fields are the zero
+// time.Time (use IsZero() to test), and source strings on the output
+// match the field names below in snake_case so the JSONB lineage column
+// records the source unambiguously.
 type DateCandidates struct {
 	// Asset identity and lifecycle state.
 	AssetType data.AssetType
@@ -64,10 +70,20 @@ type DateCandidates struct {
 	// is the earliest bar attributed to this asset; LastBar is the
 	// latest. CoverageStart and CoverageEnd are the earliest and latest
 	// dates present anywhere in the archive across all assets.
-	MassiveEODArchiveFirstBar      time.Time
-	MassiveEODArchiveLastBar       time.Time
-	MassiveEODArchiveCoverageStart time.Time
-	MassiveEODArchiveCoverageEnd   time.Time
+	// PreviousLifecycleEnd is the end date of the EOD lifecycle that
+	// immediately precedes this asset's lifecycle for the ticker, or
+	// zero when this asset is in the earliest lifecycle. It bounds
+	// MassiveReferenceListingDate from below: a Massive list_date
+	// older than the previous lifecycle's end is from a different
+	// (earlier) context on the same ticker — Octave Specialty Group
+	// took ticker OSG in late 2025 but Massive reports list_date
+	// 1989-08-25, which predates the previous Overseas Shipholding
+	// lifecycle that ended 2024-07-09.
+	MassiveEODArchiveFirstBar             time.Time
+	MassiveEODArchiveLastBar              time.Time
+	MassiveEODArchiveCoverageStart        time.Time
+	MassiveEODArchiveCoverageEnd          time.Time
+	MassiveEODArchivePreviousLifecycleEnd time.Time
 
 	// SEC EDGAR signals. FormPrefix is the registration form used for
 	// this asset type ("N-1A" for ETF / MutualFund, "N-2" for CEF, ""
@@ -75,6 +91,16 @@ type DateCandidates struct {
 	// EarliestFilingMatchingForm is the resulting date.
 	SECFormPrefix                 string
 	SECEarliestFilingMatchingForm time.Time
+
+	// ValidFor is the as-of date at which the caller observed this
+	// asset record. It is the absolute lower-bound signal: the asset
+	// demonstrably existed under this ticker on this date, so the
+	// listing date must be on or before it. Used only as the final
+	// fallback when every higher-priority candidate is unavailable, so
+	// that listed never lands in the database as null. Typically equals
+	// asset.ValidFor: the historical observation date during a walk,
+	// or time.Now() during a daily run.
+	ValidFor time.Time
 }
 
 // AssignedDates is the algorithm's per-asset result: the chosen listing
@@ -109,20 +135,11 @@ type previousTradingDayFn func(t time.Time) time.Time
 // DateCandidates per asset that shares a ticker (one entry for the
 // common single-asset case, two or more for ticker reuse like Alcoa),
 // and returns one AssignedDates per input asset in the same order.
-//
 // The function enforces three immutable rules across the result:
-//
-//  1. No two assets sharing the ticker have overlapping (listing,
-//     delisting] windows.
-//  2. Each asset's delisting date is strictly after its listing date.
-//  3. Any asset whose Active flag is false must have a non-zero
-//     delisting date.
-//
-// Disagreements between source signals are resolved per the
-// per-asset priority order (Massive reference, EOD, walk, SEC) with
-// cross-checks between the first three. When the candidates point at
-// a likely data error the function logs at warn level so an operator
-// can audit; it does not silently invent a date in those cases.
+// (1) no two assets sharing the ticker have overlapping (listing,
+// delisting] windows; (2) each asset's delisting date is strictly
+// after its listing date; (3) any asset whose Active flag is false
+// must have a non-zero delisting date.
 func AssignDatesForTicker(
 	logger *zerolog.Logger,
 	candidates []DateCandidates,
@@ -262,12 +279,10 @@ func sortIndexedByAssignedListing(indexed []indexedCandidate, assignments []Assi
 // chooseDatesForAsset picks the listing and delisting dates for one
 // asset from its own candidates, before any cross-asset reconciliation.
 // Applies the priority order (Massive reference, EOD, walk, SEC) and
-// the hard constraints (not in the future, listing < delisting).
-//
-// Pre-filter: when Massive reference's own listing and delisting are
-// not strictly ordered, both are dropped as a unit. Either one of them
-// is wrong and we cannot tell which; the algorithm falls back to the
-// other sources rather than persist a known-bad value.
+// the hard constraints (not in the future, listing < delisting). As a
+// pre-filter, when Massive reference's own listing and delisting are
+// not strictly ordered, both are dropped as a unit because either one
+// of them is wrong and we cannot tell which.
 func chooseDatesForAsset(c DateCandidates) AssignedDates {
 	if !c.MassiveReferenceListingDate.IsZero() && !c.MassiveReferenceDelistingDate.IsZero() &&
 		!c.MassiveReferenceDelistingDate.After(c.MassiveReferenceListingDate) {
@@ -288,34 +303,35 @@ func chooseDatesForAsset(c DateCandidates) AssignedDates {
 
 // chooseListingDate returns the chosen listing date and its source
 // name. Candidates are tried in priority order; the first that is
-// usable and satisfies the constraints wins.
-//
-// EOD evidence acts in two ways. When the first bar sits comfortably
-// inside our archive coverage it is a candidate value (the asset
-// likely started trading at that bar). When the first bar sits at
-// the start of our coverage it is only a bound: we know the asset
-// was already trading by that date but cannot tell whether trading
-// started earlier. Either way, any candidate that would place the
-// listing date strictly after the first bar contradicts the bound
-// and is rejected.
-//
-// The function must never return a zero time: a null listed value in
-// the database breaks downstream queries that treat null as "always
-// active." When every high-confidence candidate fails its gates, the
-// algorithm falls back to the earliest piece of evidence we do have
-// of the asset trading — the EOD first bar at the coverage edge, or
-// the walk first-seen at the walk-start edge — even though those
-// values are imprecise. A best-guess listing date is always
-// preferable to no listing date at all.
-//
-// The relationship between the chosen listing and the chosen
-// delisting is enforced at the delisting step (chooseDelistingDate
-// rejects any candidate that is not strictly after the chosen
-// listing).
+// usable and satisfies the constraints wins. The function must never
+// return a zero time when at least one candidate (including the
+// observation's ValidFor) is set: a null listed value in the database
+// breaks downstream queries that treat null as "always active," so
+// when every high-confidence candidate fails its gates the algorithm
+// falls back to the earliest piece of evidence available and finally
+// to ValidFor.
 func chooseListingDate(c DateCandidates) (time.Time, string) {
 	now := time.Now()
 	upperBound := c.MassiveReferenceDelistingDate
 	eodFirstBarBound := c.MassiveEODArchiveFirstBar
+
+	// Reject Massive's list_date when a previous EOD lifecycle for
+	// the same ticker ends after it (OSG-style ticker reassignment).
+	massiveListingUsable := !c.MassiveReferenceListingDate.IsZero()
+	if massiveListingUsable && !c.MassiveEODArchivePreviousLifecycleEnd.IsZero() &&
+		c.MassiveReferenceListingDate.Before(c.MassiveEODArchivePreviousLifecycleEnd) {
+		massiveListingUsable = false
+	}
+
+	// Reject Massive's list_date when EOD coverage was live during a
+	// multi-year gap between it and the ticker's first bar (iShares
+	// Morningstar rebrand, OTC-to-listed transitions).
+	if massiveListingUsable && eodFirstBarUsableAsValue(c) {
+		gap := c.MassiveEODArchiveFirstBar.Sub(c.MassiveReferenceListingDate)
+		if gap > massiveListDateGapTolerance {
+			massiveListingUsable = false
+		}
+	}
 
 	tries := []struct {
 		value  time.Time
@@ -325,7 +341,7 @@ func chooseListingDate(c DateCandidates) (time.Time, string) {
 		{
 			c.MassiveReferenceListingDate,
 			"massive_reference_listing_date",
-			!c.MassiveReferenceListingDate.IsZero(),
+			massiveListingUsable,
 		},
 		{
 			c.MassiveEODArchiveFirstBar,
@@ -360,6 +376,22 @@ func chooseListingDate(c DateCandidates) (time.Time, string) {
 			"massive_reference_walk_first_seen_edge",
 			!c.MassiveReferenceWalkFirstSeen.IsZero(),
 		},
+		// Observation-date last-resort. When every other signal is
+		// missing (no Massive reference list_date, no EOD archive
+		// coverage, no walk window across any of the figi / CIK /
+		// name indexes, no SEC submissions), the only fact we still
+		// have is that the asset was alive on the date we observed
+		// it. Using that date as the listing means we may overstate
+		// it (the asset usually listed earlier), but the alternative
+		// is a null listed value that breaks downstream queries
+		// treating null as "always active". This fallback exists to
+		// honor the listed-never-null invariant when nothing else
+		// can.
+		{
+			c.ValidFor,
+			"valid_for",
+			!c.ValidFor.IsZero(),
+		},
 	}
 
 	for _, t := range tries {
@@ -391,13 +423,15 @@ func chooseListingDate(c DateCandidates) (time.Time, string) {
 // day. SEC has no analogue. Each candidate must be strictly after the
 // chosen listing date.
 //
-// EOD evidence acts the same way for delisting that it does for
-// listing, in mirror image. When the last bar sits comfortably
-// inside coverage it is a candidate value. When it sits at the end
-// of our coverage it is only a lower bound: the asset traded at
-// least until that date and may still be trading. Either way, any
-// candidate that would place the delisting strictly before the last
-// bar contradicts the bound and is rejected.
+// For inactive assets (c.Active=false) the algorithm extends the chain
+// with edge-bar fallbacks and a ValidFor last-resort, mirroring
+// chooseListingDate's structure. The invariant the rest of the system
+// relies on is: a row with active=false must carry a non-null delisted
+// timestamp, so when every high-confidence candidate fails its gates
+// we fall back to the latest piece of evidence available rather than
+// leaving the field empty. Active assets, by contrast, are expected to
+// have an open-ended (null) delisting and the fallback chain does not
+// run for them.
 func chooseDelistingDate(c DateCandidates, listing time.Time) (time.Time, string) {
 	eodLastBarBound := plusOneCalendarDay(c.MassiveEODArchiveLastBar)
 
@@ -421,6 +455,43 @@ func chooseDelistingDate(c DateCandidates, listing time.Time) (time.Time, string
 			"massive_reference_walk_last_seen",
 			walkLastSeenUsable(c),
 		},
+	}
+
+	if !c.Active {
+		// Edge-bar fallbacks for inactive assets. delisted must never
+		// be null when active=false, so when every higher-priority
+		// candidate is rejected (e.g. EOD last bar sits at coverage
+		// end or walk last seen sits at the walk window edge) use
+		// the latest evidence we do have of the asset trading. These
+		// edge-of-coverage values cannot tell us whether trading
+		// continued past our window, but they at least say "the
+		// asset was last seen by this date" — which is the best we
+		// can honestly do. No ValidFor / metadata last-resort: an
+		// observation-date stamp is metadata mtime, not a trading
+		// signal, so it cannot stand in for the date an asset
+		// stopped trading. If neither EOD nor walk evidence exists
+		// we genuinely do not know when the asset was delisted and
+		// the algorithm returns zero so the caller can decide.
+		tries = append(tries,
+			struct {
+				value  time.Time
+				source string
+				usable bool
+			}{
+				plusOneCalendarDay(c.MassiveEODArchiveLastBar),
+				"massive_eod_archive_last_bar_edge",
+				!c.MassiveEODArchiveLastBar.IsZero(),
+			},
+			struct {
+				value  time.Time
+				source string
+				usable bool
+			}{
+				plusOneCalendarDay(c.MassiveReferenceWalkLastSeen),
+				"massive_reference_walk_last_seen_edge",
+				!c.MassiveReferenceWalkLastSeen.IsZero(),
+			},
+		)
 	}
 
 	for _, t := range tries {
@@ -519,63 +590,86 @@ func plusOneCalendarDay(t time.Time) time.Time {
 // error rather than ordinary registration-vs-trade-date noise.
 const boundaryDisagreementDays = 30
 
-// rejectOverlappingMassiveListings clears MassiveReferenceListingDate
-// on every asset in a group whose Massive listing date is also
-// claimed by at least one sibling, then re-picks that asset's dates
-// from the next priority candidate. The signal — two same-ticker
-// assets carrying identical Massive listing dates — is unambiguous
-// evidence that Massive returned the ticker's first-allocation date
-// as a per-asset value (e.g. BBI returns 1993-03-16 for both
-// Blockbuster's 2003-2010 lifecycle and Brickell's 2019-2022
-// lifecycle). The fix lets each asset fall through to EOD's first
-// bar, the walk's first seen, or SEC's earliest filing, whichever
-// the priority chain reaches first.
-//
-// The asymmetric case (siblings with different Massive listing
-// dates whose windows still overlap once chosen) is intentionally
-// not handled here. That case is the Alcoa-style boundary problem
-// where the later asset's Massive listing is correct and the earlier
-// asset's delisting just needs to retreat; reconcileBoundary handles
-// it correctly downstream. Suppressing the later asset's Massive
-// listing in that scenario would discard a value that is actually
-// right.
+// rejectOverlappingMassiveListings keeps Massive's list_date on the
+// earliest lifecycle for the ticker and clears it on every later
+// lifecycle that shares the same value. Later lifecycles re-pick from
+// the next priority candidate (typically their own EOD first bar).
 func rejectOverlappingMassiveListings(logger *zerolog.Logger, indexed []indexedCandidate, assignments []AssignedDates) {
 	if len(indexed) < 2 {
 		return
 	}
 
-	massiveListings := make(map[time.Time]int, len(indexed))
+	// Group by Massive listing date.
+	byDate := make(map[time.Time][]int, len(indexed))
 
-	for _, ic := range indexed {
+	for i, ic := range indexed {
 		d := ic.candidates.MassiveReferenceListingDate
 		if d.IsZero() {
 			continue
 		}
 
-		massiveListings[d]++
+		byDate[d] = append(byDate[d], i)
 	}
 
-	for i := range indexed {
-		d := indexed[i].candidates.MassiveReferenceListingDate
-		if d.IsZero() {
+	for d, group := range byDate {
+		if len(group) < 2 {
 			continue
 		}
 
-		if massiveListings[d] < 2 {
-			continue
+		// Pick the earliest lifecycle by EOD first bar; that one
+		// keeps Massive's listing.
+		keep := group[0]
+		for _, i := range group[1:] {
+			if lifecycleStartBefore(indexed[i].candidates, indexed[keep].candidates) {
+				keep = i
+			}
 		}
 
-		logger.Info().
-			Time("RejectedMassiveListingDate", d).
-			Int("AssetIndex", indexed[i].index).
-			Int("SiblingsWithSameDate", massiveListings[d]).
-			Msg("massive: rejecting Massive reference listing date because the same value is claimed for multiple same-ticker assets; falling through to next priority candidate")
+		for _, i := range group {
+			if i == keep {
+				continue
+			}
 
-		updated := indexed[i].candidates
-		updated.MassiveReferenceListingDate = time.Time{}
-		indexed[i].candidates = updated
-		assignments[i] = chooseDatesForAsset(updated)
+			logger.Info().
+				Time("RejectedMassiveListingDate", d).
+				Int("AssetIndex", indexed[i].index).
+				Int("KeptOnAssetIndex", indexed[keep].index).
+				Msg("massive: clearing Massive listing on later-lifecycle sibling sharing the predecessor's value")
+
+			updated := indexed[i].candidates
+			updated.MassiveReferenceListingDate = time.Time{}
+			indexed[i].candidates = updated
+			assignments[i] = chooseDatesForAsset(updated)
+		}
 	}
+}
+
+// lifecycleStartBefore reports whether a's lifecycle starts strictly
+// before b's. Prefers EOD first bar; falls back to walk first-seen
+// when EOD is missing (e.g., archive not mounted).
+func lifecycleStartBefore(a, b DateCandidates) bool {
+	aStart := lifecycleStart(a)
+	bStart := lifecycleStart(b)
+
+	if aStart.IsZero() {
+		return !bStart.IsZero()
+	}
+
+	if bStart.IsZero() {
+		return false
+	}
+
+	return aStart.Before(bStart)
+}
+
+// lifecycleStart returns the earliest known start date for an asset's
+// lifecycle: EOD first bar if present, otherwise walk first-seen.
+func lifecycleStart(c DateCandidates) time.Time {
+	if !c.MassiveEODArchiveFirstBar.IsZero() {
+		return c.MassiveEODArchiveFirstBar
+	}
+
+	return c.MassiveReferenceWalkFirstSeen
 }
 
 // reconcileBoundary resolves the (predecessor, successor) boundary
@@ -583,19 +677,32 @@ func rejectOverlappingMassiveListings(logger *zerolog.Logger, indexed []indexedC
 // Massive reference listing date is the authoritative boundary when
 // available; the predecessor's delisting is forced to one trading day
 // before it so the two windows are adjacent and non-overlapping.
-//
-// When Massive's reference listing for the successor disagrees with
-// the EOD evidence by more than boundaryDisagreementDays, the function
-// logs a warning so an operator can investigate; the data-error path
-// described in the design (look up the right boundary from SEC and
-// the reference walk) is not yet automated.
 func reconcileBoundary(
 	logger *zerolog.Logger,
 	predecessor, successor *AssignedDates,
 	predecessorCandidates, successorCandidates DateCandidates,
 	previousTradingDay previousTradingDayFn,
 ) {
+	// Apply the same previous-lifecycle gate that chooseListingDate
+	// uses: a successor's MassiveReferenceListingDate that predates
+	// the previous EOD lifecycle's end is from a different (earlier)
+	// context on the same ticker and is not the successor's actual
+	// listing. Fall back to the successor's already-chosen ListingDate
+	// in that case so reconcileBoundary doesn't reinstate a value the
+	// per-asset choice already rejected. Track whether the boundary
+	// came from Massive's reference so the source label written back
+	// onto the successor only claims "massive_reference_listing_date"
+	// when that is actually true.
 	boundary := successorCandidates.MassiveReferenceListingDate
+	boundaryFromMassiveRef := !boundary.IsZero()
+
+	if boundaryFromMassiveRef &&
+		!successorCandidates.MassiveEODArchivePreviousLifecycleEnd.IsZero() &&
+		boundary.Before(successorCandidates.MassiveEODArchivePreviousLifecycleEnd) {
+		boundary = time.Time{}
+		boundaryFromMassiveRef = false
+	}
+
 	if boundary.IsZero() {
 		boundary = successor.ListingDate
 	}
@@ -637,7 +744,10 @@ func reconcileBoundary(
 	predecessor.DelistingDate = prev
 	predecessor.DelistingSource = "successor_boundary_minus_one_trading_day"
 	successor.ListingDate = boundary
-	successor.ListingSource = "massive_reference_listing_date"
+
+	if boundaryFromMassiveRef {
+		successor.ListingSource = "massive_reference_listing_date"
+	}
 }
 
 // eodFirstBarUsableForCrossCheck is the same usability rule as
@@ -689,14 +799,6 @@ func enforceRules(logger *zerolog.Logger, assignments []AssignedDates, indexed [
 	// open-boundary expansion, they share any point in time. A row
 	// whose listing and delisting are both zero overlaps every
 	// sibling by definition — we have no information to place it.
-	//
-	// The previous check `continue`d whenever either endpoint was
-	// zero, which let two same-ticker rows with NULL boundaries
-	// coexist undetected. The fix logs every violation; it does not
-	// attempt to "repair" the data by clearing dates, because
-	// clearing introduces more NULLs (the very thing the invariant
-	// is supposed to prevent) and the root cause is upstream (two
-	// rows that should not coexist, or missing date evidence).
 	for i := 0; i+1 < len(indexed); i++ {
 		earlier := &assignments[i]
 

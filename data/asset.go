@@ -31,14 +31,10 @@ import (
 
 // assetViewGenerator emits an explicit column list for the assets published
 // view. Required because a SELECT * UNION ALL across asset source tables
-// aligns columns positionally, and the search tsvector lands in different
-// physical positions depending on whether the table was created fresh at
-// schema v1 (search appended last) or migrated from v0 (search appended
-// before icon_url/logo_url, which are then added by the migration). Listing
-// columns by name makes physical order irrelevant.
-//
-// Column order here defines the resulting view's column order; keep it
-// stable so downstream consumers do not break.
+// aligns columns positionally and physical column order varies by table
+// creation history; listing columns by name makes physical order
+// irrelevant. Column order here defines the resulting view's column order;
+// keep it stable so downstream consumers do not break.
 type assetViewGenerator struct{}
 
 func (assetViewGenerator) SelectFrom(tableName string) string {
@@ -220,23 +216,11 @@ func AllAssets(ctx context.Context, dbConn *pgxpool.Conn, tables ...string) ([]*
 }
 
 // AssetIndex is a multi-identifier index over previously-persisted
-// assets. Carrying CIK, CompositeFigi, ShareClassFigi, Instrument /
-// Organization PermID, CUSIP and ISIN on each asset pays off here:
-// Lookup tries every available identifier in turn so a single
-// incoming asset can find a DB match through any of its known
-// fields.
-//
-// Lookup precedence (most specific first):
-//
-//  1. Security-level identifiers (each uniquely identifies one
-//     security globally, no ticker disambiguation needed):
-//     CompositeFigi → ShareClassFigi → InstrumentPermID →
-//     CUSIP[*] → ISIN[*].
-//  2. Entity-level identifiers, paired with ticker for share-class
-//     disambiguation: Ticker:CIK → Ticker:OrganizationPermID.
-//
+// assets. Lookup tries every available identifier in turn (most
+// specific first: CompositeFigi → ShareClassFigi → InstrumentPermID →
+// CUSIP → ISIN → Ticker:CIK → Ticker:OrganizationPermID) so a single
+// incoming asset can find a DB match through any of its known fields.
 // Ticker-alone lookups are deliberately not offered — ticker reuse
-// (e.g. BBI = Blockbuster in 2010, then Brickell Biotech in 2022)
 // makes them unsafe.
 type AssetIndex struct {
 	byCompositeFigi    map[string]*Asset
@@ -244,8 +228,15 @@ type AssetIndex struct {
 	byInstrumentPermID map[string]*Asset
 	byCUSIP            map[string]*Asset
 	byISIN             map[string]*Asset
-	byTickerCIK        map[string]*Asset
-	byTickerOrgPermID  map[string]*Asset
+
+	// byTickerCIK and byTickerOrgPermID are 1:many. Multiple
+	// lifecycles can share the same (ticker, CIK) pair — for
+	// example Delta Air Lines kept CIK 0000027904 across its 2005
+	// Chapter 11 bankruptcy and 2007 emergence. Lookup picks the
+	// candidate whose listed/delisted window contains the asset's
+	// ValidFor.
+	byTickerCIK       map[string][]*Asset
+	byTickerOrgPermID map[string][]*Asset
 
 	// byTicker carries every indexed asset under its ticker as a
 	// list (because ticker reuse can produce multiple entries). It
@@ -258,12 +249,10 @@ type AssetIndex struct {
 
 // BuildAssetIndex constructs an AssetIndex from a flat slice. Each
 // asset is written into every per-identifier map for which it has a
-// non-empty value. Rows without composite_figi are excluded so
-// callers can rely on match.CompositeFigi being usable.
-//
-// When two rows compete for the same key, the active row wins;
-// among equally-active rows, the most recently updated wins. The
-// tiebreak runs per key independently.
+// non-empty value. Rows without composite_figi are excluded so callers
+// can rely on match.CompositeFigi being usable. When two rows compete
+// for the same key, the active row wins; among equally-active rows,
+// the most recently updated wins.
 func BuildAssetIndex(assets []*Asset) AssetIndex {
 	idx := AssetIndex{
 		byCompositeFigi:    make(map[string]*Asset, len(assets)),
@@ -271,8 +260,8 @@ func BuildAssetIndex(assets []*Asset) AssetIndex {
 		byInstrumentPermID: make(map[string]*Asset),
 		byCUSIP:            make(map[string]*Asset),
 		byISIN:             make(map[string]*Asset),
-		byTickerCIK:        make(map[string]*Asset),
-		byTickerOrgPermID:  make(map[string]*Asset),
+		byTickerCIK:        make(map[string][]*Asset),
+		byTickerOrgPermID:  make(map[string][]*Asset),
 		byTicker:           make(map[string][]*Asset, len(assets)),
 	}
 
@@ -308,11 +297,13 @@ func BuildAssetIndex(assets []*Asset) AssetIndex {
 		}
 
 		if a.CIK != "" {
-			assetIndexUpsert(idx.byTickerCIK, a.Ticker+":"+a.CIK, a)
+			key := a.Ticker + ":" + a.CIK
+			idx.byTickerCIK[key] = append(idx.byTickerCIK[key], a)
 		}
 
 		if a.OrganizationPermID != "" {
-			assetIndexUpsert(idx.byTickerOrgPermID, a.Ticker+":"+a.OrganizationPermID, a)
+			key := a.Ticker + ":" + a.OrganizationPermID
+			idx.byTickerOrgPermID[key] = append(idx.byTickerOrgPermID[key], a)
 		}
 
 		idx.byTicker[a.Ticker] = append(idx.byTicker[a.Ticker], a)
@@ -343,14 +334,75 @@ func assetIndexUpsert(m map[string]*Asset, key string, a *Asset) {
 	}
 }
 
+// pickLifecycleMatch returns the candidate whose listed/delisted
+// window contains asOf. With a single candidate the lookup is
+// unambiguous. With multiple, ValidFor disambiguates; when more than
+// one candidate's window contains asOf the tiebreaker prefers an
+// active row over inactive and, among same active-state rows, the
+// most-recently-updated one. Returns (nil, false) when no candidate's
+// window contains asOf.
+func pickLifecycleMatch(candidates []*Asset, asOf time.Time) (*Asset, bool) {
+	if len(candidates) == 0 {
+		return nil, false
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+
+	if asOf.IsZero() {
+		asOf = time.Now()
+	}
+
+	var best *Asset
+
+	for _, c := range candidates {
+		if !assetLifecycleContains(c, asOf) {
+			continue
+		}
+
+		if best == nil || lifecycleCandidateBeats(c, best) {
+			best = c
+		}
+	}
+
+	if best == nil {
+		return nil, false
+	}
+
+	return best, true
+}
+
+// lifecycleCandidateBeats reports whether a should be preferred over b
+// among candidates whose windows both contain the lookup asOf.
+func lifecycleCandidateBeats(a, b *Asset) bool {
+	if a.Active != b.Active {
+		return a.Active
+	}
+
+	return a.LastUpdated.After(b.LastUpdated)
+}
+
+// assetLifecycleContains reports whether t falls inside a's listed /
+// delisted window. An empty ListingDate is treated as "always listed";
+// an empty DelistingDate is treated as "still active".
+func assetLifecycleContains(a *Asset, t time.Time) bool {
+	if listed := parseAssetDate(a.ListingDate); !listed.IsZero() && t.Before(listed) {
+		return false
+	}
+
+	if delisted := parseAssetDate(a.DelistingDate); !delisted.IsZero() && t.After(delisted) {
+		return false
+	}
+
+	return true
+}
+
 // Lookup finds the best match in the index for an incoming asset.
 // Tries every identifier carried on the asset, in order from most
 // specific (security-level) to least specific (entity-level
-// disambiguated by ticker). See AssetIndex's doc for the full
-// precedence.
-//
-// Returns (nil, false) when no identifier on the incoming asset
-// matches anything in the index.
+// disambiguated by ticker). Returns (nil, false) when no identifier
+// on the incoming asset matches anything in the index.
 func (idx AssetIndex) Lookup(a *Asset) (*Asset, bool) {
 	if a == nil {
 		return nil, false
@@ -395,13 +447,13 @@ func (idx AssetIndex) Lookup(a *Asset) (*Asset, bool) {
 	}
 
 	if a.Ticker != "" && a.CIK != "" {
-		if m, ok := idx.byTickerCIK[a.Ticker+":"+a.CIK]; ok {
+		if m, ok := pickLifecycleMatch(idx.byTickerCIK[a.Ticker+":"+a.CIK], a.ValidFor); ok {
 			return m, true
 		}
 	}
 
 	if a.Ticker != "" && a.OrganizationPermID != "" {
-		if m, ok := idx.byTickerOrgPermID[a.Ticker+":"+a.OrganizationPermID]; ok {
+		if m, ok := pickLifecycleMatch(idx.byTickerOrgPermID[a.Ticker+":"+a.OrganizationPermID], a.ValidFor); ok {
 			return m, true
 		}
 	}

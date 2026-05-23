@@ -21,20 +21,11 @@ import (
 )
 
 // LogCapture is an io.Writer that intercepts zerolog's JSON output, picks
-// out events tagged with a SubscriptionID matching an active run, and:
-//
-//  1. publishes a "log" SSE event to the run's event channel so connected
-//     clients see logs streaming in real time,
-//  2. appends the line to a per-run buffer that the run pipeline drains and
-//     persists alongside the run history record.
-//
-// The writer also forwards every line untouched to a passthrough writer
-// (typically the existing zerolog ConsoleWriter) so dev/console output is
-// unchanged.
-//
-// The per-run buffer is intentionally unbounded: the captured log is
-// preserved in full for diagnostic value, with retention enforced at
-// the database layer via SweepRunLogs (30 days by default).
+// out events tagged with a SubscriptionID matching an active run, publishes
+// a "log" SSE event to the run's event channel, and appends the line to a
+// per-run buffer that the run pipeline persists alongside the run history
+// record. The per-run buffer is intentionally unbounded; retention is
+// enforced at the database layer via SweepRunLogs (30 days by default).
 type LogCapture struct {
 	registry *RunRegistry
 	mu       sync.Mutex
@@ -115,9 +106,8 @@ func (lc *LogCapture) Snapshot(subID string) string {
 
 // extractSubscriptionID parses one zerolog JSON line for a SubscriptionID
 // or subscription_id field. Returns "" when no UUID-shaped value is found.
-//
-// We use a string scan rather than json.Unmarshal because Write is on the
-// hot path and most lines do not pertain to an active run.
+// Uses a string scan rather than json.Unmarshal because Write is on the hot
+// path and most lines do not pertain to an active run.
 func extractSubscriptionID(p []byte) string {
 	const (
 		key1 = `"SubscriptionID":"`

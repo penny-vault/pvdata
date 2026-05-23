@@ -21,18 +21,10 @@ import (
 
 // AssetHistory resolves "what asset record was active for this ticker
 // on this date?" — including for tickers that have been delisted or
-// reused. Importers that translate provider rows (which carry only a
-// ticker and a date) into FIGI-tagged observations need this as-of-date
-// semantics because a ticker active on 2003-10-08 might be inactive
-// today, but its 2003 bars are still valid data; and a ticker that has
-// been delisted and reissued must resolve to different FIGIs for the
-// two tenancies.
-//
-// The same ticker can appear under multiple FIGIs across time (ticker
-// reuse after a long delisting); each ticker's slice holds every known
-// window and AssetAt / FIGIAt pick the one whose [listed, delisted]
-// range covers the requested date. Tickers are normalized to uppercase
-// at insertion and lookup; callers do not need to pre-normalize.
+// reused. Importers translating provider rows (ticker + date) into
+// FIGI-tagged observations need this as-of-date semantics. Tickers are
+// normalized to uppercase at insertion and lookup; callers do not need
+// to pre-normalize.
 type AssetHistory struct {
 	byTicker map[string][]assetHistoryEntry
 }
@@ -71,17 +63,11 @@ func NewAssetHistory(assets []*Asset) *AssetHistory {
 
 // AssetAt returns the asset record whose [listed, delisted] window
 // covers date for ticker. A zero listed time is treated as "always
-// listed before"; a zero delisted time is treated as "still active"
-// (i.e. an infinitely-far-future end). Both endpoints are inclusive.
-//
-// When two or more windows cover the same date — which usually means
-// the underlying assets table has conflicting rows — the window with
-// the earliest delisted date wins. A still-active window (delisted =
-// zero) loses to any finite-end match and only wins when nothing
-// finite matches. This rule makes resolution independent of insertion
-// order and prefers the more constrained record, so a delisted entity
-// is favored over a later record that erroneously claims a listing
-// date back in the delisted entity's tenancy.
+// listed before"; a zero delisted time is treated as "still active".
+// Both endpoints are inclusive. When two or more windows cover the
+// same date, the window with the earliest delisted date wins (a
+// still-active window only wins when nothing finite matches), making
+// resolution insertion-order independent.
 func (h *AssetHistory) AssetAt(ticker string, date time.Time) (*Asset, bool) {
 	if h == nil {
 		return nil, false

@@ -20,40 +20,18 @@ import (
 	"time"
 )
 
-// ResolveDirect attempts to find a value for a direct field mapping by searching
-// the CompanyFacts for matching XBRL tags. Tags are tried in order; the first
-// tag with at least one matching fact wins, and within that tag's matching
-// facts the one with the latest Filed date is selected.
-//
-// For instant (balance sheet) concepts, matches facts where End == periodEnd.
-// For duration (income/cash flow) concepts, matches facts where End == periodEnd
-// and the filing form matches.
-//
-// "Latest filed" semantics depend on the caller:
-//   - When called directly with a CompanyFacts containing all facts, this picks
-//     the most recently reported value across the entire history (i.e. an MR
-//     view).
-//   - When called via ResolveFieldsForFiling, the cf has already been filtered
-//     to facts with Filed <= filedDate, so this picks the latest fact within
-//     that window. For an AR resolution the caller passes ARFiledDate (the
-//     earliest filing date for the period) and the window collapses to the
-//     facts in the original 10-K/10-Q. For an MR resolution the caller passes
-//     MRFiledDate (the latest filing date for the period) and the window
-//     covers any subsequent restatements as well.
-//
-// Note that a 10-K/A amendment filed later than the original 10-K but still
-// before MRFiledDate will overwrite the AR value when the AR window happens
-// to extend to its filing date; this is the desired behavior because the
-// amendment is the authoritative record of the period as filed.
+// ResolveDirect searches CompanyFacts for the first tag in m.XBRLTags that
+// has a fact matching periodEnd and formType. When multiple facts match,
+// single-quarter wins over cumulative, then latest filing, then shortest
+// duration.
 func ResolveDirect(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) (float64, bool) {
 	if val, ok := resolveDirectForm(cf, m, periodEnd, formType); ok {
 		return val, true
 	}
 
 	// Cross-form fallback: some filers only tag certain balance-sheet
-	// concepts on 10-Q (e.g. MCD's operating lease liabilities are
-	// silent on the 10-K). When the requested form has no match, try
-	// the opposite form at the same period end.
+	// concepts on 10-Q (MCD's operating lease liabilities are silent on
+	// the 10-K).
 	if m.AllowCrossFormFallback {
 		otherForm := "10-Q"
 		if formType == "10-Q" {
@@ -74,9 +52,8 @@ func resolveDirectForm(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 		tags = m.FallbackTags
 	}
 
-	// Normalize the target period end once so we match facts whose raw end
-	// date differs by a day or two but belongs to the same fiscal period
-	// (ghost-period variation across XBRL concepts).
+	// Normalize once so we match facts whose raw end date differs by a day
+	// or two but belongs to the same fiscal period.
 	normalPeriodEnd := NormalizeEventDate(periodEnd, formType)
 
 	for _, tag := range tags {
@@ -108,23 +85,17 @@ func resolveDirectForm(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 					continue // Skip quarterly data in an annual filing
 				}
 			} else if m.StatementType == StmtFlow {
-				// Instant-style facts (zero Start) aren't meaningful for flow
-				// concepts. UNH tags PaymentsOfDividendsCommonStock and
-				// CommonStockDividendsPerShareCashPaid with the dividend
-				// declaration date as End and no Start (e.g. end=2025-06-24
-				// val=2,000,000,000 for the Q2 2025 dividend payment, or
-				// end=2024-12-17 val=$2.10 per share). These normalize to the
-				// quarter end and would compete with — and sometimes beat —
-				// the valid YTD/single-quarter duration facts.
+				// Instant-style facts (zero Start) aren't meaningful for
+				// flow concepts: some filers tag dividend amounts with the
+				// declaration date as End and no Start, and those would
+				// otherwise compete with valid duration facts.
 				continue
 			}
 
-			// Prefer single-quarter facts over YTD cumulative regardless of
-			// filing date. Comparative filings from later periods often
-			// include only the cumulative value (not single-quarter), so
-			// preferring the latest filing date would lose the original
-			// single-quarter fact. Within the same duration category,
-			// prefer the latest filing date (most recent data).
+			// Single-quarter beats cumulative regardless of filing date:
+			// comparative filings often include only the cumulative value,
+			// and preferring latest-filed would lose the original
+			// single-quarter fact.
 			if best == nil {
 				best = f
 			} else {
@@ -157,20 +128,17 @@ func resolveDirectForm(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 	return 0, false
 }
 
-// ResolveLongestDuration is like ResolveDirect but prefers the longest-duration
-// matching fact instead of the shortest. This resolves YTD cumulative values
-// from 10-Q filings for per-share fields where the company-reported cumulative
-// value avoids rounding error from summing individually rounded quarterly values.
+// ResolveLongestDuration is like ResolveDirect but prefers the longest
+// duration fact, used for YTD cumulative per-share values to avoid summing
+// individually rounded quarterly values.
 func ResolveLongestDuration(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) (float64, bool) {
 	return resolveLongestDurationBounded(cf, m, periodEnd, formType, 0)
 }
 
-// resolveLongestDurationBounded is the shared implementation behind
-// ResolveLongestDuration. minDays imposes an additional lower bound on the
-// accepted fact duration for 10-Q facts (ignored for 10-K, which already
-// requires >=300 days). Callers that need "truly YTD" values (e.g. the Q4
-// synthesis cumulative map) pass minDays > ytdThresholdDays so that single-
-// quarter facts are not returned as if they were multi-quarter cumulatives.
+// resolveLongestDurationBounded backs ResolveLongestDuration. minDays
+// requires a 10-Q fact's duration to exceed that bound; callers needing
+// "truly YTD" values pass minDays > ytdThresholdDays so single-quarter
+// facts aren't mistaken for multi-quarter cumulatives.
 func resolveLongestDurationBounded(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string, minDays int) (float64, bool) {
 	tags := m.XBRLTags
 	if m.Type == MappingDerived {
@@ -251,14 +219,8 @@ func resolveLongestDurationBounded(cf *CompanyFacts, m FieldMapping, periodEnd t
 // for unusual fiscal calendars while cleanly excluding 2-quarter YTD (~180 days).
 const ytdThresholdDays = 120
 
-// needsDecumulation reports whether a flow field's best-matching fact for the
-// given 10-Q period is a YTD cumulative value. It mirrors ResolveDirect's tag
-// priority: the first tag with matching facts determines the answer.
-//
-// Returns true when the matching tag has duration facts for the period end but
-// none of them are single-quarter (all > ytdThresholdDays). This indicates the
-// SEC filing only reported YTD cumulative values for this concept, as is
-// standard for cash flow statement items.
+// needsDecumulation reports whether a flow field's best-matching 10-Q fact
+// is a YTD cumulative value (no single-quarter fact is available).
 func needsDecumulation(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, formType string) bool {
 	if formType != "10-Q" {
 		return false
@@ -314,14 +276,10 @@ func needsDecumulation(cf *CompanyFacts, m FieldMapping, periodEnd time.Time, fo
 	return false
 }
 
-// hasNonQuarterlyDPSDeclarationCadence returns true when the company tags
-// CommonStockDividendsPerShareDeclared with non-quarterly cadence — i.e., a
-// non-Q1 10-Q period where the single-period fact equals the YTD fact. LLY
-// declares dividends semi-annually but pays quarterly, so the Q2 single-period
-// declared value (start=Apr-1, val=$3.00) duplicates the YTD H1 value
-// (start=Jan-1, val=$3.00) instead of representing a real Q2-only $1.50
-// declaration. Such filers need cash-paid DPS for Sharadar parity; quarterly
-// declarers (AAPL, MSFT) keep the declared per-share value.
+// hasNonQuarterlyDPSDeclarationCadence reports whether the company tags
+// CommonStockDividendsPerShareDeclared with non-quarterly cadence (a non-Q1
+// 10-Q where single-period equals YTD). Filers like LLY declare semi-annually
+// but pay quarterly; they need cash-paid DPS for Sharadar parity.
 func hasNonQuarterlyDPSDeclarationCadence(cf *CompanyFacts) bool {
 	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
 	if !ok {
@@ -347,9 +305,7 @@ func hasNonQuarterlyDPSDeclarationCadence(cf *CompanyFacts) bool {
 			continue
 		}
 
-		// Only consider recent facts (last 3 years) to avoid old anomalies
-		// — e.g. JPM had a single Q2 2018 with single==YTD that doesn't
-		// reflect their current quarterly cadence.
+		// Only consider facts from the last 3 years to avoid stale anomalies.
 		if time.Since(f.End) > 3*365*24*time.Hour {
 			continue
 		}
@@ -383,21 +339,14 @@ func hasNonQuarterlyDPSDeclarationCadence(cf *CompanyFacts) bool {
 	return false
 }
 
-// conceptFiledQuarterly returns true if any of the given XBRL concept names
-// has at least one fact filed on a 10-Q form in cf within the last 3 years.
-// This distinguishes balance sheet line items (filed quarterly) from
-// supplemental disclosures (10-K only). The recency check avoids false
-// positives from tags that were filed on 10-Q years ago but have since been
-// discontinued (e.g. AAPL's AccruedIncomeTaxesCurrent, last on 10-Q in 2010).
+// conceptFiledQuarterly reports whether any of tags has a 10-Q fact within
+// the last 3 years. The recency check avoids false positives from discontinued
+// tags (e.g. AAPL's AccruedIncomeTaxesCurrent, last on 10-Q in 2010).
 func conceptFiledQuarterly(cf *CompanyFacts, tags []string) bool {
 	return conceptFiledOnForm(cf, tags, "10-Q")
 }
 
-// conceptFiledAnnually is the 10-K counterpart of conceptFiledQuarterly: it
-// returns true when the company reports any of the given concepts on a 10-K
-// within the last 3 years. Used by ExcludeIfAnnual to distinguish filers
-// whose 10-K tags a concept (standard presentation) from filers whose 10-K
-// omits it and only tags the 10-Q comparatives (MCD-style).
+// conceptFiledAnnually is the 10-K counterpart of conceptFiledQuarterly.
 func conceptFiledAnnually(cf *CompanyFacts, tags []string) bool {
 	return conceptFiledOnForm(cf, tags, "10-K")
 }
@@ -430,29 +379,23 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	resolved := make(map[string]float64)
 
 	for _, m := range FieldMappings {
-		// RequireQuarterly: skip this field entirely if none of its XBRL
-		// tags are filed on 10-Q by this company. This ensures we only
-		// include balance sheet line items that the company breaks out as
-		// separate lines, not items buried in annual note disclosures.
+		// RequireQuarterly skips fields whose tags aren't filed on 10-Q by
+		// this company (so we only include balance-sheet lines, not annual
+		// note disclosures).
 		if m.RequireQuarterly && !conceptFiledQuarterly(cf, m.XBRLTags) {
 			continue
 		}
 
-		// ExcludeIfQuarterly: skip this field if a sentinel concept is
-		// filed on 10-Q, indicating the field's tags are sub-components
-		// of a broader line item rather than separate balance sheet lines.
-		// ExcludeIfQuarterlyUnless provides an escape: the skip is
-		// cancelled when any of the listed concepts are also filed
-		// quarterly (see WMT TaxLiabilities retailer pattern).
+		// ExcludeIfQuarterly skips fields when a sentinel concept signals the
+		// field's tags are sub-components of a broader line. ExcludeIfQuarterlyUnless
+		// cancels the skip when one of its concepts is also filed quarterly.
 		if len(m.ExcludeIfQuarterly) > 0 && conceptFiledQuarterly(cf, m.ExcludeIfQuarterly) &&
 			(len(m.ExcludeIfQuarterlyUnless) <= 0 || !conceptFiledQuarterly(cf, m.ExcludeIfQuarterlyUnless)) {
 			continue
 		}
 
-		// ExcludeIfAnnual: skip this field when a sentinel concept is
-		// filed on 10-K. Used to gate the MCD-style op-lease-current
-		// operand of debt_current — include it only when the 10-K omits
-		// the concept and the 10-Q comparatives are the sole source.
+		// ExcludeIfAnnual skips when a sentinel concept is filed on 10-K
+		// (gates the MCD-style op-lease-current operand of debt_current).
 		if len(m.ExcludeIfAnnual) > 0 && conceptFiledAnnually(cf, m.ExcludeIfAnnual) {
 			continue
 		}
@@ -474,11 +417,9 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 			}
 
 		case MappingDerived:
-			// Try direct XBRL fallback tags first.
-			// FallbackRequireIfQuarterly gates the attempt: only try
-			// FallbackTags when a sentinel concept is filed quarterly
-			// (standard companies). Non-standard companies (e.g. BRK/B
-			// without COGS) skip FallbackTags and use the formula.
+			// Try direct fallback tags first. FallbackRequireIfQuarterly
+			// gates the attempt so non-standard filers (BRK/B without COGS)
+			// skip the fallback and use the formula.
 			useFallback := len(m.FallbackTags) > 0
 			if useFallback && len(m.FallbackRequireIfQuarterly) > 0 {
 				useFallback = conceptFiledQuarterly(cf, m.FallbackRequireIfQuarterly)
@@ -494,11 +435,10 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 						val = -val
 					}
 
-					// When the FallbackTag resolves to zero but the formula
-					// produces a non-zero value, prefer the formula. MCD tags
-					// us-gaap:DebtCurrent=0 on the 10-K while the sub-components
-					// (commercial paper, operating-lease-current) carry real
-					// values that Sharadar rolls into debt_current.
+					// Prefer the formula when the fallback resolves to zero
+					// but a derived value is non-zero (e.g. MCD tags
+					// DebtCurrent=0 on 10-K while sub-components carry real
+					// values that Sharadar rolls into debt_current).
 					if m.PreferFormulaWhenFallbackZero && val == 0 {
 						if fv, fok := computeDerived(m, resolved); fok && fv != 0 {
 							resolved[m.FieldName] = fv
@@ -520,11 +460,10 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 		}
 	}
 
-	// Health insurers (UNH, detected via PolicyholderBenefitsAndClaimsIncurredNet)
-	// report medical claims reserves under LiabilityForClaimsAndClaimsAdjustmentExpense,
-	// which Sharadar includes in payables alongside standard accounts payable.
-	// BRK-style insurance conglomerates don't file PolicyholderBenefitsAndClaimsIncurredNet
-	// so this gate leaves them alone.
+	// Health insurers (UNH) report medical claims reserves under
+	// LiabilityForClaimsAndClaimsAdjustmentExpense, which Sharadar includes
+	// in payables. BRK-style insurance conglomerates don't file
+	// PolicyholderBenefitsAndClaimsIncurredNet so this gate skips them.
 	if conceptFiledQuarterly(cf, []string{"PolicyholderBenefitsAndClaimsIncurredNet"}) {
 		if v, ok := ResolveDirect(cf, FieldMapping{
 			XBRLTags:      []string{"LiabilityForClaimsAndClaimsAdjustmentExpense"},
@@ -547,15 +486,10 @@ func ResolveAllFields(cf *CompanyFacts, periodEnd time.Time, formType string) ma
 	return resolved
 }
 
-// isIndustrialFinancialFiler detects CAT-style industrial manufacturers with
-// a captive financial-services subsidiary. Their income statement groups MET
-// cost of goods sold + captive-finance interest expense + other operating
-// items under a single CostsAndExpenses subtotal, and the balance sheet
-// carries customer-finance notes and loans receivable alongside standard
-// trade receivables. Gate combines three distinctive quarterly concepts:
-// CostOfRevenue (primary CoGS line), OtherOperatingIncomeExpenseNet (other
-// operating net line), and CostsAndExpenses (aggregate subtotal). The energy
-// exclusion (ExplorationExpense) keeps XOM on its existing deriver.
+// isIndustrialFinancialFiler detects CAT-style industrial manufacturers with a
+// captive financial-services subsidiary, via the combination of CostOfRevenue,
+// OtherOperatingIncomeExpenseNet, and CostsAndExpenses filed quarterly. The
+// ExplorationExpense exclusion keeps XOM on its existing deriver.
 func isIndustrialFinancialFiler(cf *CompanyFacts) bool {
 	if !conceptFiledQuarterly(cf, []string{"CostOfRevenue"}) {
 		return false
@@ -579,21 +513,6 @@ func isIndustrialFinancialFiler(cf *CompanyFacts) bool {
 // overrideBalanceSheetForIndustrialFinancialFiler reclassifies CAT-style
 // balance-sheet line items to match Sharadar's treatment of captive-finance
 // assets and contract-liability deposits.
-//
-//   - Receivables = AccountsReceivableNetCurrent + AccountsReceivableNetNoncurrent
-//   - NotesAndLoansReceivableNetCurrent + NotesAndLoansReceivableNetNoncurrent.
-//     Sharadar sums all four because the captive-finance notes and loans are
-//     core operating receivables from customer equipment financing.
-//   - Investments = 0. CAT's AvailableForSaleSecuritiesDebtSecurities belongs
-//     to Caterpillar Insurance Services; Sharadar rolls it into other-current
-//     / other-noncurrent rather than a dedicated investments bucket.
-//   - Deposits gets the ContractWithCustomerLiabilityCurrent balance (customer
-//     advances/deposits under ASC 606) and DeferredRevenue zeros out — Sharadar
-//     classifies advance payments for long-lead machinery orders as deposits
-//     rather than deferred revenue for industrial OEMs.
-//   - TaxAssets = DeferredTaxAssetsNet (10-K-only annual disclosure flowed to
-//     each quarterly balance sheet). Sharadar reports this as tax_assets for
-//     industrials whose 10-Q does not tag DeferredIncomeTaxAssetsNet.
 func overrideBalanceSheetForIndustrialFinancialFiler(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time, formType string) {
 	if !isIndustrialFinancialFiler(cf) {
 		return
@@ -622,15 +541,10 @@ func overrideBalanceSheetForIndustrialFinancialFiler(cf *CompanyFacts, fields ma
 		fields["DeferredRevenue"] = 0
 	}
 
-	// CAT tags "Deferred and refundable income taxes" on the balance sheet
-	// under the extension concept NoncurrentDeferredAndRefundableIncomeTaxes
-	// (captured from inline XBRL by EnrichWithExtensionFacts under the bare
-	// local name). This is Sharadar's tax_assets source and is filed on
-	// every 10-Q and 10-K. Fall back to us-gaap:DeferredTaxAssetsNet (10-K
-	// only, annual valuation allowance-netted value) for older periods where
-	// the extension tag isn't captured. The balance-sheet line is already
-	// a net DTA-DTL figure, so zero out TaxLiabilities to avoid double-counting
-	// the 10-K-only DeferredIncomeTaxLiabilitiesNet footnote disclosure.
+	// CAT's NoncurrentDeferredAndRefundableIncomeTaxes (an extension concept)
+	// is Sharadar's tax_assets source. Falling back to DeferredTaxAssetsNet
+	// (10-K only) covers older periods. Both are net DTA-DTL, so zero out
+	// TaxLiabilities to avoid double-counting the 10-K-only footnote.
 	if dta, ok := resolveInstantValue(cf, "NoncurrentDeferredAndRefundableIncomeTaxes", periodEnd, formType); ok && dta > 0 {
 		fields["TaxAssets"] = dta
 		fields["TaxLiabilities"] = 0
@@ -647,20 +561,10 @@ func overrideBalanceSheetForIndustrialFinancialFiler(cf *CompanyFacts, fields ma
 	fields["ShareBasedCompensation"] = 0
 }
 
-// overrideDebtCurrentForSmallAmortization zeros out a small
-// LongTermDebtCurrent ("current portion of long-term debt") when it
-// represents the minimum principal amortization of a term loan rather
-// than a meaningful current-debt balance. Sharadar reports debt_current =
-// 0 and rolls the amount into debt_non_current when the filer's
-// LongTermDebtCurrent is under 2% of total long-term debt AND no other
-// current-debt components (ShortTermBorrowings, CommercialPaper,
-// Operating/FinanceLeaseLiabilityCurrent) are filed.
-//
-// CELH post-Alani acquisition (Q2/Q3 2025) has $9M of current portion
-// on an $871M term loan (~1%); our formula reports debt_current = $9M
-// while Sharadar reports 0. MSFT / NVDA / AAPL / WMT all have either
-// commercial paper, operating lease current, or significantly larger
-// LongTermDebtCurrent ratios and stay unaffected.
+// overrideDebtCurrentForSmallAmortization zeros LongTermDebtCurrent and rolls
+// it into non-current when it's under 2% of total long-term debt and no
+// other current-debt components are filed (matches Sharadar's treatment of
+// term-loan minimum amortization).
 func overrideDebtCurrentForSmallAmortization(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
 	ltdCurrent, hasLtdCurrent := resolveInstantValue(cf, "LongTermDebtCurrent", periodEnd, formType)
 	if !hasLtdCurrent || ltdCurrent <= 0 {
@@ -677,10 +581,8 @@ func overrideDebtCurrentForSmallAmortization(cf *CompanyFacts, resolved map[stri
 		return
 	}
 
-	// Skip if any other current-debt-like component is filed for this
-	// period. The presence of short-term borrowings, commercial paper, or
-	// operating/finance lease current indicates a richer current-debt
-	// balance-sheet section that Sharadar recognizes and includes.
+	// Skip when any other current-debt component is filed; that signals a
+	// richer current-debt balance-sheet section Sharadar would include.
 	for _, tag := range []string{
 		"ShortTermBorrowings",
 		"CommercialPaper",
@@ -701,20 +603,13 @@ func overrideDebtCurrentForSmallAmortization(cf *CompanyFacts, resolved map[stri
 	}
 }
 
-// overrideCashAndEquivalentsIncludeRestrictedCash switches cash_and_equivalents
-// to the combined "cash + restricted cash" balance when the filer reports a
-// non-zero RestrictedCash balance for this period. Sharadar includes
-// restricted cash in cashneq for filers that tag it as a separate
-// balance-sheet item (CELH Q3 2025 has $126M of restricted cash post-Alani
-// closing); our default _cashStandard mapping prefers the plain
-// CashAndCashEquivalentsAtCarryingValue tag to keep short-term investments
-// out, but that tag excludes restricted cash by definition.
+// overrideCashAndEquivalentsIncludeRestrictedCash adds restricted cash to
+// cash_and_equivalents when the filer reports it as a separate balance-sheet
+// item, matching Sharadar's cashneq treatment.
 func overrideCashAndEquivalentsIncludeRestrictedCash(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
 	restricted, hasRestricted := resolveInstantValue(cf, "RestrictedCash", periodEnd, formType)
 	if !hasRestricted || restricted <= 0 {
-		// Some filers (XOM) tag restricted cash under the
-		// -AtCarryingValue suffix rather than the unqualified
-		// RestrictedCash concept. Fall through to that concept.
+		// XOM-style filers use the -AtCarryingValue suffix instead.
 		restricted, hasRestricted = resolveInstantValue(cf, "RestrictedCashAndCashEquivalentsAtCarryingValue", periodEnd, formType)
 		if !hasRestricted || restricted <= 0 {
 			return
@@ -739,17 +634,9 @@ func overrideCashAndEquivalentsIncludeRestrictedCash(cf *CompanyFacts, resolved 
 	}
 }
 
-// overrideRandDExpensesForFootnoteOnly zeros out RandDExpenses for filers
-// that tag R&D as a footnote disclosure rather than an income-statement
-// line item. The heuristic: if R&D is less than 1% of revenue (and under
-// 10M absolute), treat it as footnote-only and exclude. Sharadar excludes
-// such small amounts because they appear only in the notes to the
-// financial statements, not on the face of the income statement.
-//
-// CELH (consumer beverage) files ResearchAndDevelopmentExpense at ~200K
-// per quarter / 1M annual — Sharadar reports 0. Real R&D-spending filers
-// (NVDA/MSFT/LLY/AAPL) all have R&D > 8% of revenue so the threshold
-// leaves them unaffected.
+// overrideRandDExpensesForFootnoteOnly zeros RandDExpenses when it's under
+// 1% of revenue and under $10M absolute (heuristic for footnote-only R&D,
+// which Sharadar excludes).
 func overrideRandDExpensesForFootnoteOnly(resolved map[string]float64) {
 	rd, ok := resolved["RandDExpenses"]
 	if !ok || rd == 0 {
@@ -773,14 +660,9 @@ func overrideRandDExpensesForFootnoteOnly(resolved map[string]float64) {
 }
 
 // overrideRandDForEnergyFilers replaces RandDExpenses with ExplorationExpense
-// for integrated oil/gas filers (XOM). These companies tag their
-// income-statement "Exploration expenses, including dry holes" line under
-// us-gaap:ExplorationExpense, which Sharadar maps to r_and_d_expenses for
-// the energy sector. Any ResearchAndDevelopmentExpense XBRL tag is an
-// annual-only footnote disclosure (not on the face of the 10-Q income
-// statement) and Sharadar excludes it in favor of the quarterly exploration
-// line. Gate: ExplorationExpense is filed quarterly. Non-energy filers
-// don't file ExplorationExpense at all, so they're unaffected.
+// for energy filers (XOM-style). Sharadar maps the "Exploration expenses"
+// line to r_and_d_expenses for the energy sector. Gate: ExplorationExpense
+// is filed quarterly.
 func overrideRandDForEnergyFilers(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
 	if !conceptFiledQuarterly(cf, []string{"ExplorationExpense"}) {
 		return
@@ -801,20 +683,9 @@ func overrideRandDForEnergyFilers(cf *CompanyFacts, resolved map[string]float64,
 
 // overridePreferredDividendsForMezzanineAccretion reclassifies the residual
 // between NetIncome and NetIncomeCommonStock as preferred_dividends when the
-// filer reports explicit preferred dividends BUT no NCI tag. Sharadar treats
-// this residual (explicit preferred + accretion of redeemable preferred to
-// redemption value + other mezzanine adjustments) as a single
-// preferred_dividends_income_statement_impact and zeros out NCI.
-//
-// CELH (Series A preferred held by PepsiCo) files
-// PreferredStockDividendsIncomeStatementImpact = 27.5M and has another 10M
-// of accretion; Sharadar reports preferred_dividends = 37.6M and NCI = 0.
-//
-// GS (actual preferred dividends equal the full residual) is unaffected
-// because explicit preferred already equals the residual, so the override
-// sees no residual-to-reclassify. JPM (no explicit preferred tag, real NCI
-// from consolidated subsidiaries) is also unaffected because the override
-// gates on PreferredStockDividendsIncomeStatementImpact being filed.
+// filer reports explicit preferred dividends but no NCI tag. Sharadar treats
+// this residual as a single preferred_dividends_income_statement_impact and
+// zeros out NCI.
 func overridePreferredDividendsForMezzanineAccretion(cf *CompanyFacts, resolved map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{
 		"PreferredStockDividendsIncomeStatementImpact",
@@ -848,30 +719,10 @@ func overridePreferredDividendsForMezzanineAccretion(cf *CompanyFacts, resolved 
 	resolved["NetIncomeToNonControllingInterests"] = 0
 }
 
-// overrideIntangiblesForSplitComponents recomputes Intangibles from the
-// component tags (Goodwill + IntangibleAssetsNetExcludingGoodwill OR
-// FiniteLivedIntangibleAssetsNet + IndefiniteLivedIntangibleAssetsExcludingGoodwill
-// + IndefiniteLivedTrademarks) when the component sum exceeds what the
-// default formula/fallback produced. Two patterns motivate this:
-//
-//  1. CELH files IntangibleAssetsNetIncludingGoodwill as its fallback-preferred
-//     rollup, but the tag value is smaller than Goodwill + components (the
-//     company essentially mis-tags the rollup as goodwill alone).
-//  2. For periods where IntangibleAssetsNetExcludingGoodwill (the finite+indefinite
-//     rollup) is not filed but FiniteLivedIntangibleAssetsNet AND
-//     IndefiniteLivedIntangibleAssetsExcludingGoodwill are filed separately,
-//     the priority-based sub-field resolution picks only one, missing the
-//     other. Summing both recovers the true ex-goodwill intangibles.
-//
-// Only component tags the filer reports on a 10-Q are eligible — mirroring
-// _intangiblesExGoodwill's RequireQuarterly gate. AMZN discloses ex-goodwill
-// intangibles only in 10-K footnotes (not on the face of the balance sheet),
-// and Sharadar excludes them; the override must do the same.
-//
-// The override never shrinks Intangibles — it only increases when the
-// component sum is larger than the current value. This preserves FallbackTag-
-// based resolutions (JPM extension tag captures MSR that the us-gaap
-// components miss).
+// overrideIntangiblesForSplitComponents recomputes Intangibles from component
+// tags (Goodwill + IntangibleAssetsNetExcludingGoodwill, or finite/indefinite
+// splits) when the component sum exceeds the default. The override never
+// shrinks Intangibles and only counts tags filed on a 10-Q.
 func overrideIntangiblesForSplitComponents(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
 	// GS-pattern filer: contract liabilities are bundled under Other assets,
 	// intangibles are not a separate balance-sheet line.
@@ -963,18 +814,10 @@ func overrideIntangiblesForSplitComponents(cf *CompanyFacts, resolved map[string
 	}
 }
 
-// overrideSGAForSmallOtherSGA handles filers that file both
-// us-gaap:OtherSellingGeneralAndAdministrativeExpense and the broader
-// us-gaap:SellingGeneralAndAdministrativeExpense. The default SGA mapping
-// prefers OtherSGA first (MCD-style franchisors where OtherSGA IS the
-// main income-statement line). Product-sales filers (KO) also file
-// OtherSGA but as a carve-out from the main SGA line — Sharadar uses the
-// main SGA total for them.
-//
-// The gate excludes franchisor filers (presence of us-gaap:FranchiseRevenue
-// or us-gaap:FranchiseCosts on any filing — MCD tagged these pre-2020 and
-// they remain in the company-facts history) so the override applies only
-// to product-sales filers like KO.
+// overrideSGAForSmallOtherSGA switches to the broader
+// SellingGeneralAndAdministrativeExpense tag for product-sales filers (KO),
+// gated to non-franchisors via FranchiseRevenue/FranchiseCosts so MCD-style
+// franchisors keep the OtherSGA preference.
 func overrideSGAForSmallOtherSGA(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
 	if _, ok := cf.Facts["FranchiseRevenue"]; ok {
 		return
@@ -996,23 +839,11 @@ func overrideSGAForSmallOtherSGA(cf *CompanyFacts, resolved map[string]float64, 
 }
 
 // overrideForEmbeddedCurrentDebt rewrites DebtCurrent, DeferredRevenue, and
-// TotalDebt when the filer presents current debt embedded in accrued expenses
-// rather than as a separate balance-sheet line. Sharadar detects this
-// presentation via the balance-sheet identity:
-//
-//	AccountsPayable + AccruedLiabilitiesCurrent + ContractWithCustomerLiabilityCurrent ≈ LiabilitiesCurrent
-//
-// When the identity holds (AMZN pattern), Sharadar reports debt_current = 0,
-// total_debt = debt_non_current, and deferred_revenue =
-// ContractWithCustomerLiabilityCurrent (treating the current contract
-// liability as its own balance-sheet line rather than a sub-component of
-// accrued). When the identity does NOT hold (NVDA pattern: current debt is the
-// separate line and contract liability is rolled into accrued), leave the
-// resolved values alone.
+// TotalDebt when current debt is embedded in accrued expenses (identity:
+// AccountsPayable + AccruedLiabilitiesCurrent + ContractLiabilityCurrent ~=
+// LiabilitiesCurrent).
 func overrideForEmbeddedCurrentDebt(cf *CompanyFacts, resolved map[string]float64, periodEnd time.Time, formType string) {
-	// Both sentinel concepts must be filed quarterly; otherwise this is not
-	// a filer whose balance sheet has accrued-liabilities AND contract
-	// liability lines.
+	// Both sentinels must be filed quarterly.
 	if !conceptFiledQuarterly(cf, []string{"AccruedLiabilitiesCurrent"}) ||
 		!conceptFiledQuarterly(cf, []string{"ContractWithCustomerLiabilityCurrent"}) {
 		return
@@ -1031,20 +862,15 @@ func overrideForEmbeddedCurrentDebt(cf *CompanyFacts, resolved map[string]float6
 		return
 	}
 
-	// Balance-sheet identity check: the three lines must sum to essentially
-	// all of LiabilitiesCurrent (within 0.1%). When the identity holds, any
-	// current debt (ShortTermBorrowings, LongTermDebtCurrent) is embedded
-	// inside AccruedLiabilitiesCurrent rather than presented separately.
-	// AMZN matches at 0%; NVDA sits around 1% because contract liability is
-	// inside accrued (and current debt is the separate line), so a tight
-	// tolerance keeps them distinct.
+	// Identity check within 0.1%: when it holds, current debt is embedded in
+	// AccruedLiabilitiesCurrent. AMZN matches at 0%; NVDA sits near 1%, so a
+	// tight tolerance keeps them distinct.
 	sumExplicit := ap + accrued + contract
 	if math.Abs(sumExplicit-liabCurrent)/liabCurrent > 0.001 {
 		return
 	}
 
-	// Zero out current debt; total_debt collapses to debt_non_current.
-	// InvestedCapital uses TotalDebt as an operand so recompute it.
+	// Zero current debt; total_debt collapses to debt_non_current.
 	oldTotalDebt := resolved["TotalDebt"]
 
 	if _, ok := resolved["DebtCurrent"]; ok {
@@ -1188,26 +1014,8 @@ func computeDerived(m FieldMapping, resolved map[string]float64) (float64, bool)
 	return 0, false
 }
 
-// OverrideDPSFromCash computes DividendsPerBasicCommonShare from the cash-paid
-// methodology when _absDividendsPaid is present. This matches Sharadar's DPS
-// computation: total cash dividends paid / weighted-average shares, rounded to
-// 2 decimal places.
-//
-// _absDividendsPaid resolves from PaymentsOfDividendsCommonStock when filed
-// (MSFT, BRK/B, JPM, GS), in which case the override always runs on both AR
-// and MR. When it resolves from the broader PaymentsOfDividends fallback, the
-// override is restricted for non-quarterly declarers (LLY-style):
-//   - MR: always overrides (Sharadar's MR DPS for LLY is cash-paid).
-//   - AR: overrides only for periods where the company filed a 10-Q
-//     CommonStockDividendsPerShareDeclared fact at periodEnd. Sharadar uses
-//     declared values for periods covered by the original 10-K (Q4 fiscal
-//     year-end) and cash-paid for in-fiscal-year quarterly periods where the
-//     XBRL-declared per-share value is unreliable (LLY's Q2 2025 single fact
-//     is tagged equal to the H1 YTD value of $3.00 instead of the actual
-//     $1.50 quarterly payment).
-//   - AAPL (quarterly declarer): override is skipped entirely because
-//     PaymentsOfDividends includes dividend equivalents on RSUs that inflate
-//     cash-paid relative to the declared per-share value Sharadar uses.
+// OverrideDPSFromCash sets DividendsPerBasicCommonShare = cashPaid / wavg
+// shares (rounded to 2 decimals), matching Sharadar's methodology.
 func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool, periodEnd time.Time, isAnnualView bool) {
 	cashPaid, hasCash := fields["_absDividendsPaid"]
 	shares, hasShares := fields["WeightedAverageShares"]
@@ -1216,12 +1024,9 @@ func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool,
 		return
 	}
 
-	// CAT-style industrial-financial filers: Sharadar reports the declared
-	// per-share dividend from the 10-K (CommonStockDividendsPerShareDeclared
-	// FY value, 5.53 for CAT FY 2024) as the AR annual DPS, not the cash-paid
-	// ÷ wavg computation. At quarterly cadence Sharadar reverts to cash-paid
-	// / (prior-quarter-end shares) which is very close to cash-paid / wavg;
-	// we keep the existing cash-paid override for ARQ.
+	// CAT-style industrial-financial filers: Sharadar uses the 10-K declared
+	// per-share value as the AR annual DPS; quarterly cadence still uses
+	// cash-paid.
 	if !isMR && isAnnualView && isIndustrialFinancialFiler(cf) {
 		return
 	}
@@ -1239,11 +1044,8 @@ func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool,
 		}
 	}
 
-	// WMT-style filers declare a single annual per-share amount in the
-	// Q1 10-Q and re-publish that same annual value on every subsequent
-	// 10-Q/10-K. Sharadar's quarterly DPS for these filers is
-	// AnnualDeclared / 4 truncated to 3 decimals; annual views keep the
-	// full annual value.
+	// WMT-style annual-only declared DPS: Sharadar's quarterly value is
+	// AnnualDeclared / 4 truncated to 3 decimals.
 	if !isAnnualView && dpsIsAnnualOnly(cf) {
 		if annualDps, ok := latestAnnualDpsDeclared(cf, periodEnd); ok && annualDps > 0 {
 			truncated := math.Trunc(annualDps/4*1000) / 1000
@@ -1260,13 +1062,8 @@ func OverrideDPSFromCash(cf *CompanyFacts, fields map[string]float64, isMR bool,
 }
 
 // dpsIsAnnualOnly reports true when CommonStockDividendsPerShareDeclared
-// facts always carry the full-year amount, even when their duration
-// looks quarterly (WMT-style: Q1 10-Q tags start=FY-start end=Q1-end
-// with the annualized value, later 10-Qs repeat the annual value on
-// YTD contexts and report a zero stub for the single-quarter context).
-// Filers that tag genuine per-quarter declared amounts (AAPL, MSFT)
-// return false because their max single-quarter value is much smaller
-// than the annual value.
+// facts always carry the full-year amount (WMT-style: even "quarterly"
+// duration contexts hold the annualized value).
 func dpsIsAnnualOnly(cf *CompanyFacts) bool {
 	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
 	if !ok {
@@ -1328,12 +1125,9 @@ func dpsIsAnnualOnly(cf *CompanyFacts) bool {
 	return maxShortVal >= annual-0.0001
 }
 
-// latestAnnualDpsDeclared returns the fiscal-year annual declared DPS
-// that applies to periodEnd. WMT-style filers publish the annual amount
-// on every 10-Q (Q1 duration, YTD durations, 10-K FY context). We look
-// for the fact whose [start, end] window contains periodEnd and return
-// the max value — the max handles "stub 0" facts that represent a
-// single quarter with no new declaration.
+// latestAnnualDpsDeclared returns the max declared DPS whose [start, end]
+// window contains periodEnd. The max handles "stub 0" facts for quarters
+// without a new declaration.
 func latestAnnualDpsDeclared(cf *CompanyFacts, periodEnd time.Time) (float64, bool) {
 	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
 	if !ok {
@@ -1368,12 +1162,10 @@ func latestAnnualDpsDeclared(cf *CompanyFacts, periodEnd time.Time) (float64, bo
 	return bestVal, found
 }
 
-// hasQuarterlyDPSDeclarationAt returns true when the company filed a 10-Q
-// CommonStockDividendsPerShareDeclared fact (any duration) at the given
-// periodEnd. For LLY this distinguishes Q1/Q2/Q3 dates (covered by 10-Q
-// filings) from Q4 fiscal year-end (covered only by the 10-K). Sharadar uses
-// XBRL-declared values for fiscal year-end and cash-paid for in-year quarters
-// when the company declares dividends on a non-quarterly cadence.
+// hasQuarterlyDPSDeclarationAt reports whether a 10-Q DPS-declared fact
+// exists at periodEnd. Distinguishes in-year quarters from fiscal year-end
+// for non-quarterly declarers (LLY): Sharadar uses XBRL-declared values for
+// year-end and cash-paid for in-year quarters in that case.
 func hasQuarterlyDPSDeclarationAt(cf *CompanyFacts, periodEnd time.Time) bool {
 	facts, ok := cf.Facts["CommonStockDividendsPerShareDeclared"]
 	if !ok {
@@ -1391,21 +1183,8 @@ func hasQuarterlyDPSDeclarationAt(cf *CompanyFacts, periodEnd time.Time) bool {
 }
 
 // resolveSharesBasicAsOf returns the shares outstanding value from the most
-// recently filed 10-K or 10-Q as of the given date.
-//
-// It checks two sources in order:
-//  1. EntityCommonStockSharesOutstanding (DEI cover-page count)
-//  2. CommonStockSharesOutstanding (us-gaap, captured from Class A and
-//     Class B dimensional contexts for multi-class filers like BRK/B)
-//
-// The most recently filed value across both sources is used. For multi-class
-// filers, the selected filing may contain one fact per share class; all
-// facts from that same concept and filing date are summed so the returned
-// value is the total raw share count. Stale values (filed more than 2 years
-// before asOfDate) are ignored so that old DEI entries from companies that
-// stopped reporting the tag don't persist.
-//
-// Returns (0, false) when no suitable fact is found.
+// recently filed 10-K or 10-Q as of the given date. Returns (0, false) when
+// no suitable fact is found.
 func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool) {
 	staleThreshold := asOfDate.AddDate(-2, 0, 0)
 
@@ -1467,35 +1246,15 @@ func resolveSharesBasicAsOf(cf *CompanyFacts, asOfDate time.Time) (float64, bool
 	return total, true
 }
 
-// resolveSharesBasicForAnnualAR returns the as-reported shares outstanding for
-// an annual (10-K) period. SEC 10-K cover pages disclose shares outstanding
-// under two conventions:
-//
-//  1. "As of [latest practicable date before filing], there were N shares" —
-//     filed as dei:EntityCommonStockSharesOutstanding with end > fiscal year
-//     end. AAPL/MSFT/most filers follow this convention.
-//  2. "As of [last business day of fiscal Q2], there were N shares" (for
-//     public-float calculation) — CAT-style filers only disclose this value
-//     on the cover page and don't tag a separate post-period-end DEI. The
-//     value is only in XBRL via the mid-fiscal-year Q2 10-Q filing.
-//
-// Sharadar's ARQ shares_basic for 10-K periods matches whichever disclosure
-// the filer uses. This function:
-//
-//   - First picks the latest DEI fact filed by arFiledDate whose end > periodEnd
-//     (convention #1).
-//   - Falls back to the DEI fact with end ≈ periodEnd − 6 months (fiscal Q2 end,
-//     convention #2).
-//
-// Quarterly periods continue to use the simpler resolveSharesBasicAsOf path.
+// resolveSharesBasicForAnnualAR returns the as-reported shares outstanding
+// for an annual (10-K) period. Tries the post-period cover-page DEI first,
+// then fiscal-Q2 DEI, then the generic latest-filed resolution.
 func resolveSharesBasicForAnnualAR(cf *CompanyFacts, arFiledDate, periodEnd time.Time) (float64, bool) {
 	staleThreshold := arFiledDate.AddDate(-2, 0, 0)
 	postPeriodEndWindow := periodEnd.AddDate(0, 4, 0) // ~4 months after FY end
 
-	// Convention #1: find the latest-filed DEI whose end is after the fiscal
-	// year end (cover-page "as of recent date" disclosure). Gate the end date
-	// to within 4 months of period end so comparative data from a later 10-Q
-	// doesn't leak in.
+	// Convention #1: latest-filed DEI whose end is after fiscal year end
+	// (cover-page "as of recent date" disclosure), gated to within 4 months.
 	var (
 		postPeriodConcept string
 		postPeriodFiled   time.Time
@@ -1622,20 +1381,10 @@ func resolveSharesBasicForAnnualAR(cf *CompanyFacts, arFiledDate, periodEnd time
 	return resolveSharesBasicAsOf(cf, arFiledDate)
 }
 
-// resolveSharesBasicForMR returns the shares outstanding value for MR
-// (most-recent) dimensions. When the latest-filed DEI is from a 10-K and its
-// end matches the 10-K's balance sheet date (i.e., fiscal year end), it
-// represents the balance sheet disclosure rather than the cover-page "shares
-// outstanding as of [recent date]" count. Sharadar's MR semantics use the
-// cover-page value as the current known shares count until the next 10-Q
-// refreshes it.
-//
-// Behavior:
-//  1. Find the latest-filed DEI at or before asOfDate (as in resolveSharesBasicAsOf).
-//  2. If that DEI is from a 10-K and its end matches a companion Assets fact
-//     filed on the same date (balance-sheet DEI), substitute the 10-K's
-//     cover-page value via resolveSharesBasicForAnnualAR.
-//  3. Otherwise return the latest-filed DEI value.
+// resolveSharesBasicForMR returns the MR shares outstanding. When the latest
+// 10-K DEI is actually the balance-sheet disclosure (not the cover-page
+// recent-date count), falls back to the annual-AR resolver since Sharadar's
+// MR uses the cover-page value.
 func resolveSharesBasicForMR(cf *CompanyFacts, asOfDate time.Time) (float64, bool) {
 	staleThreshold := asOfDate.AddDate(-2, 0, 0)
 
@@ -1674,10 +1423,8 @@ func resolveSharesBasicForMR(cf *CompanyFacts, asOfDate time.Time) (float64, boo
 		return 0, false
 	}
 
-	// Balance-sheet DEI check: if latest is from a 10-K and a companion
-	// Assets fact with the same filed date and end date exists, the DEI
-	// represents the fiscal-year-end financial-statement shares rather
-	// than the 10-K cover-page disclosure. Use the annual-AR resolver.
+	// Balance-sheet DEI check: a companion Assets fact with the same filed
+	// and end dates means this DEI is the financial-statement disclosure.
 	if latestFact.Form == "10-K" && isBalanceSheetDEI(cf, latestFact) {
 		if val, ok := resolveSharesBasicForAnnualAR(cf, latestFact.Filed, latestFact.End); ok {
 			return val, true
@@ -1697,11 +1444,9 @@ func resolveSharesBasicForMR(cf *CompanyFacts, asOfDate time.Time) (float64, boo
 	return total, true
 }
 
-// isBalanceSheetDEI returns true if a companion balance-sheet fact (Assets,
-// StockholdersEquity, or CashAndCashEquivalents) was filed on the same date
-// with the same end as the DEI fact. Such facts only coincide on the fiscal
-// year end balance sheet — cover-page DEIs (end dated weeks after period end)
-// have no matching balance-sheet companion.
+// isBalanceSheetDEI reports whether a companion balance-sheet fact shares the
+// DEI's filed and end dates. Cover-page DEIs (end dated weeks after period
+// end) have no matching companion.
 func isBalanceSheetDEI(cf *CompanyFacts, dei *Fact) bool {
 	for _, concept := range []string{"Assets", "StockholdersEquity", "Liabilities"} {
 		facts, ok := cf.Facts[concept]
@@ -1720,31 +1465,17 @@ func isBalanceSheetDEI(cf *CompanyFacts, dei *Fact) bool {
 	return false
 }
 
-// resolveClassSharesAsOf returns the Class A and Class B raw cover-page share
-// counts from the most recently filed 10-K or 10-Q on or before asOfDate.
-// Returns (filed, classA, classB, true) when a filing with BOTH class values
-// is available, or zero values with false otherwise.
-//
-// When a filing reports multiple source concepts (e.g. dei:
-// EntityCommonStockSharesOutstanding on the cover-page instant and
-// us-gaap:CommonStockSharesOutstanding on the period-end balance sheet),
-// EntityCommonStockSharesOutstanding is preferred because Sharadar's
-// shares_basic matches the cover-page sum, not the balance-sheet instant.
-//
-// Used by the market-ratio share_factor formula for multi-class filers:
-//
-//	share_factor = (A*A_price + B*B_price) / ((A+B) * our_price)
-//
-// where our_price is the price of the traded class being processed.
+// resolveClassSharesAsOf returns Class A and Class B raw cover-page share
+// counts from the most recent filing on or before asOfDate. Returns
+// (filed, classA, classB, true) when both class values are available.
 func resolveClassSharesAsOf(cf *CompanyFacts, asOfDate time.Time) (filed time.Time, classA, classB float64, ok bool) {
 	type filingKey struct {
 		filed time.Time
 		form  string
 	}
 
-	// For each filing, prefer EntityCommonStockSharesOutstanding; fall back
-	// to CommonStockSharesOutstanding only if Entity data is absent for that
-	// class. Track per-class values separately with the preferred concept.
+	// Prefer EntityCommonStockSharesOutstanding per class; fall back to
+	// CommonStockSharesOutstanding only when Entity data is absent.
 	type classPair struct {
 		A, B        float64
 		AFromEntity bool
@@ -1799,23 +1530,10 @@ func resolveClassSharesAsOf(cf *CompanyFacts, asOfDate time.Time) (filed time.Ti
 	return
 }
 
-// applyMRComparativeFilter zeroes out MR values for quarterly flow fields
-// where the XBRL concept has NO fact for the given periodEnd filed in a
-// subsequent-year filing. This matches Sharadar's "MR quarterly requires a
-// comparative in a later-year filing" semantics: if the concept is
-// discontinued (e.g. BRK stopped reporting PaymentsToAcquireBusinessesNet
-// OfCashAcquired in 2025 10-Qs), the older Q1-Q3 MR values go to 0 rather
-// than inheriting from the original 10-Q.
-//
-// The filter only fires when a subsequent-year filing EXISTS for the
-// company (any concept, filed more than 11 months after periodEnd). For
-// the most recent quarter where no Y+1 filing has been produced yet, the
-// original fact is still used — matching Sharadar's MR = AR behavior for
-// the freshest period.
+// applyMRComparativeFilter zeroes MR quarterly flow fields whose concepts
+// have no fact for periodEnd filed in a Y+1 filing. Below the 11-month
+// threshold, no Y+1 filing has landed and the original fact is authoritative.
 func applyMRComparativeFilter(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time) {
-	// Require at least one fact (any concept) filed more than 11 months
-	// after periodEnd. Below this threshold, no Y+1 filing has landed and
-	// the original fact is still authoritative.
 	cutoff := periodEnd.AddDate(0, 11, 0)
 	hasSubsequent := false
 
@@ -1843,12 +1561,9 @@ func applyMRComparativeFilter(cf *CompanyFacts, fields map[string]float64, perio
 		byName[FieldMappings[i].FieldName] = &FieldMappings[i]
 	}
 
-	// collectLeafTags walks a derived field's operand tree and collects
-	// every underlying XBRL tag (its own XBRLTags/FallbackTags plus the
-	// operands' XBRLTags/FallbackTags, recursively). This lets the filter
-	// treat "SGA = G&A + S&M" as having comparatives whenever either
-	// G&A or S&M was re-reported in a subsequent filing, even if the
-	// company never reports the aggregate SellingGeneralAnd... tag itself.
+	// collectLeafTags walks a derived field's operand tree and collects every
+	// underlying XBRL tag so the filter treats a derived sum as having
+	// comparatives whenever any operand's tag was re-reported.
 	var collectLeafTags func(fieldName string, visited map[string]bool) []string
 
 	collectLeafTags = func(fieldName string, visited map[string]bool) []string {
@@ -1914,24 +1629,12 @@ func applyMRComparativeFilter(cf *CompanyFacts, fields map[string]float64, perio
 	}
 }
 
-// overrideNCFDebtResidual recomputes NetCashFlowDebt as the residual of
-// the financing section: debt = financing - common - dividend. This captures
-// items that are not separately tagged in XBRL but are included in the
-// financing total.
-//
-// Applied in two cases:
-//  1. AccruedLiabilitiesCurrent is filed on 10-Q (NVDA) — the company bundles
-//     financing items into broader categories.
-//  2. AssetsCurrent is NOT filed on 10-Q (banks like JPM) — bank financing
-//     activities include deposits, fed funds, and repo agreements that aren't
-//     captured by the standard debt-proceeds/repayments tags.
-//
-// For companies like AAPL that present debt cash flows as separate lines
-// and DO file AssetsCurrent, the direct XBRL-based computation is correct.
+// overrideNCFDebtResidual recomputes NetCashFlowDebt as financing - common -
+// dividend, capturing items included in the financing total but not
+// separately tagged.
 func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, periodEnd time.Time, formType string) {
-	// Banks lack AssetsCurrent (no current/non-current classification) AND
-	// report Deposits (a bank-specific liability). Insurance conglomerates
-	// like BRK/B also lack AssetsCurrent but don't have Deposits.
+	// Banks lack AssetsCurrent and have Deposits; insurance conglomerates
+	// (BRK/B) lack AssetsCurrent without Deposits.
 	lacksAssetsCurrent := !conceptFiledQuarterly(cf, []string{"AssetsCurrent"})
 	isBank := lacksAssetsCurrent &&
 		conceptFiledQuarterly(cf, []string{"Deposits", "DepositsDomestic", "DepositsTotal"})
@@ -1946,15 +1649,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	common, hasC := fields["NetCashFlowCommon"]
 	dividend, hasD := fields["NetCashFlowDividend"]
 
-	// WMT-style filers bundle accrued-liabilities-current but break debt
-	// cash flows out into specific XBRL tags. When the filer reports a
-	// distinct quarterly net-style short-term-debt tag (revolver/commercial-
-	// paper activity), Sharadar's NCFDEBT follows the direct formula rather
-	// than the financing-section residual (which sweeps in "other, net" items
-	// Sharadar doesn't classify as debt, e.g. CAT's cat:FinancingCosts
-	// extension for captive-finance interest-on-debt). NVDA-style filers
-	// bundle into Other/Accrued and don't file any distinctive net-short-
-	// term-debt tag, so they continue using the residual path.
+	// WMT-style filers with a distinct quarterly net-short-term-debt tag
+	// keep the direct formula instead of the residual (which would sweep in
+	// "other, net" items Sharadar doesn't classify as debt).
 	if bundlesFinancing && !isBank && !isInsuranceConglomerate &&
 		conceptFiledQuarterly(cf, []string{
 			"ProceedsFromRepaymentsOfShortTermDebt",
@@ -1967,11 +1664,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		fields["NetCashFlowDebt"] = financing - common - dividend
 	}
 
-	// For banks, recompute derived income fields from their Q4 components.
-	// The Q4 synthesis computes each field independently (Annual - Q1-Q2-Q3),
-	// but when NetIncome uses the cumulative path (43,199) while the Q1-Q3
-	// EBT sum uses single-quarter NI (43,197), derived fields like EBT/EBIT
-	// get a 2M inconsistency. Recomputing from formulas ensures consistency.
+	// For banks, recompute derived income fields from Q4 components to keep
+	// EBT/EBIT/EBITDA consistent when NetIncome and the Q1-Q3 EBT sum take
+	// different cumulative paths.
 	if isBank {
 		if ni, hasNI := fields["NetIncome"]; hasNI {
 			tax := fields["IncomeTaxExpense"]
@@ -1982,12 +1677,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 			fields["EBIT"] = ni + tax + intExp
 			fields["EBITDA"] = ni + tax + intExp + da
 
-			// Recompute NCI from corrected values. Use NetIncomeCommonStock
-			// (after preferred) rather than NetIncome: for companies that
-			// report PreferredStockDividendsIncomeStatementImpact (GS), NetIncome
-			// resolves to NetIncomeLoss (before preferred) and would make the
-			// identity ConsolidatedIncome - NetIncome - Preferred double-count
-			// the preferred deduction.
+			// Use NetIncomeCommonStock (after preferred), not NetIncome:
+			// some banks (GS) resolve NetIncome to NetIncomeLoss (before
+			// preferred), which would double-count the preferred deduction.
 			if consolidated, hasCons := fields["ConsolidatedIncome"]; hasCons {
 				niCommon, hasNIC := fields["NetIncomeCommonStock"]
 				if !hasNIC {
@@ -2000,17 +1692,12 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 		}
 	}
 
-	// For banks, override NCFDEBT with a direct computation from de-cumulated
-	// bank-specific fields. The residual approach doesn't work for banks
-	// because the financing total includes deposits, preferred stock, and
-	// other non-debt items. The sub-fields (_bankFedFundsChange, etc.) are
-	// mapped as StmtFlow in FieldMappings so YTD cumulative values are
-	// properly de-cumulated before reaching this point.
+	// For banks, compute NCFDEBT directly from de-cumulated bank-specific
+	// fields. The residual fails because the financing total includes
+	// deposits, preferred stock, and other non-debt items.
 	if isBank {
-		// GS-style banks file their financing cash flows as separate unsecured/
-		// secured tranches plus extension short-term-net concepts, rather than
-		// the standard ProceedsFromIssuanceOfLongTermDebt + FedFundsChange tags
-		// that commercial banks (JPM) use. Detect via CustomerAndOtherPayables.
+		// GS-style banks file financing cash flows as separate
+		// unsecured/secured tranches plus extension short-term-net concepts.
 		_, isGSStyle := cf.Facts["CustomerAndOtherPayables"]
 
 		var bankDebtFields []struct {
@@ -2267,15 +1954,9 @@ func overrideNCFDebtResidual(cf *CompanyFacts, fields map[string]float64, period
 	}
 }
 
-// deriveCostOfRevenueBottomUp recomputes income statement fields for companies
-// that don't report CostOfRevenue or OperatingIncomeLoss directly (insurance
-// and conglomerate companies like BRK/B). When CostOfRevenue is missing but
-// OperatingIncome and SGA are available, the income statement is reconstructed
-// bottom-up:
-//
-//	OperatingExpenses = SGA + R&D
-//	GrossProfit = OperatingIncome + OperatingExpenses
-//	CostOfRevenue = Revenues - GrossProfit
+// deriveCostOfRevenueBottomUp reconstructs CostOfRevenue/GrossProfit/OpEx
+// when CostOfRevenue is missing but OperatingIncome and SGA are available
+// (insurance/conglomerate filers like BRK/B).
 func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 	// Only apply when CostOfRevenue is missing and OperatingIncome is present.
 	if _, hasCOR := fields["CostOfRevenue"]; hasCOR {
@@ -2306,11 +1987,8 @@ func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 
 	costOfRevenue := revenue - grossProfit
 
-	// Sanity check: COGS should be positive. For insurance/conglomerate
-	// companies where revenue includes investment gains/losses, COGS can
-	// legitimately exceed revenue in years with large unrealized losses
-	// (e.g. BRK 2022: COGS 238B > Revenue 234B due to -53B unrealized
-	// investment losses). So only check the lower bound.
+	// Only the lower bound is checked: insurance/conglomerate revenue can
+	// include investment losses that legitimately push COGS above revenue.
 	if costOfRevenue < 0 {
 		return
 	}
@@ -2319,28 +1997,15 @@ func deriveCostOfRevenueBottomUp(fields map[string]float64) {
 	fields["GrossProfit"] = grossProfit
 	fields["OperatingExpenses"] = opEx
 
-	// Recompute GrossMargin from the corrected GrossProfit/Revenues.
-	// ResolveAllFields computed it earlier using GrossProfit=Revenues
-	// (CostOfRevenue defaulted to 0 via OptionalOperands), yielding 1.0.
+	// Recompute GrossMargin against the corrected GrossProfit.
 	if revenue != 0 {
 		fields["GrossMargin"] = math.Round(grossProfit/revenue*1000) / 1000
 	}
 }
 
 // deriveCostOfRevenueForSegmentFiler handles MCD-style restaurant filers
-// where CostOfGoodsAndServicesSold carries only the franchised-occupancy
-// slice of cost-of-revenue while the company-operated restaurant expenses
-// are disclosed on the income statement without a consolidating us-gaap
-// tag. Sharadar splits CostsAndExpenses as:
-//
-//	cost_of_revenue     = CostsAndExpenses - SG&A - SegmentReportingOtherItemAmount
-//	operating_expenses  = SG&A + SegmentReportingOtherItemAmount
-//
-// using the broader SellingGeneralAndAdministrativeExpense (not Other-SG&A)
-// and the corporate-segment disclosure under SegmentReportingOtherItemAmount.
-// The gate is presence of SegmentReportingOtherItemAmount on a recent 10-Q;
-// none of the standard regression tickers (AAPL, JPM, MSFT, NVDA, GS, LLY,
-// UNH, AMZN, BRK/B) file that concept.
+// whose CostOfGoodsAndServicesSold is only a partial slice. Gate:
+// SegmentReportingOtherItemAmount filed quarterly.
 func deriveCostOfRevenueForSegmentFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"SegmentReportingOtherItemAmount"}) {
 		return
@@ -2370,36 +2035,10 @@ func deriveCostOfRevenueForSegmentFiler(cf *CompanyFacts, fields map[string]floa
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
-// deriveCostOfRevenueForRestaurantFiler handles TXRH-style restaurant filers
-// whose income statement breaks restaurant operating costs into sub-lines
-// (Food/Labor/Rent/Other) and separately reports D&A, Pre-opening, and
-// Impairment as their own expense lines. Sharadar's split:
-//
-//	operating_expenses = G&A + D&A + Pre-opening + Impairment + Rent
-//	cost_of_revenue    = CostsAndExpenses - operating_expenses
-//
-// The gate is presence of PreOpeningCosts on a recent 10-Q — a concept
-// filed by restaurants/retailers/hotels but none of the regression tickers
-// (AAPL, JPM, MSFT, NVDA, GS, LLY, UNH, AMZN, MCD, BRK/B).
-//
-// Rent is the company-specific extension concept that captures the "Rent"
-// line on the income statement (e.g. txrh:RentAndLeaseExpenseIncludedInCostOfRevenue).
-// When the rent extension does not resolve for a period, the fix is skipped
-// to avoid over-shifting costs; the previously-derived CoR/OpEx remain.
 // deriveCostOfRevenueForEnergyFiler handles XOM-style integrated oil/gas
-// filers whose income statement lists "Crude oil and product purchases" and
-// "Production and manufacturing expenses" inside a single CostsAndExpenses
-// subtotal alongside SG&A, D&A, Exploration expenses, Non-service pension,
-// Interest expense, and Other taxes and duties. Sharadar's split:
-//
-//	operating_expenses = SG&A + D&A + Exploration + NonServicePension
-//	cost_of_revenue    = CostsAndExpenses - operating_expenses - InterestExpense
-//
-// The gate is presence of ExplorationExpense on a recent 10-Q — a concept
-// filed by oil/gas/mining filers but none of the regression tickers (AAPL,
-// JPM, MSFT, NVDA, GS, LLY, UNH, AMZN, MCD, TXRH, WMT, KO, CELH, BRK/B).
-// Runs after deriveCostOfRevenueBottomUp, overriding its OpEx=SGA-only
-// result when the richer energy pattern applies.
+// filers whose CostsAndExpenses bundles SGA, D&A, exploration, pension,
+// interest. Runs after deriveCostOfRevenueBottomUp and overrides its
+// SGA-only OpEx when ExplorationExpense is filed quarterly.
 func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"ExplorationExpense"}) {
 		return
@@ -2434,24 +2073,8 @@ func deriveCostOfRevenueForEnergyFiler(cf *CompanyFacts, fields map[string]float
 }
 
 // deriveCostOfRevenueForFullCostEnergyFiler handles BATL-style small E&P
-// companies reporting under the full-cost method. Their income statement
-// breaks production costs into Lease operating, Workover, Production taxes,
-// and Gathering/transportation, plus a separate G&A, DD&A (accretion), and
-// impairment section. Sharadar's split:
-//
-//	cost_of_revenue    = LeaseOperating + Workover
-//	operating_expenses = G&A + DD&A + AssetImpairment + ProductionTax
-//	operating_income   = Revenue - cost_of_revenue - operating_expenses
-//
-// Gathering/transportation is excluded from both buckets entirely (Sharadar
-// treats it as a pass-through revenue adjustment rather than an operating
-// cost), so this operating_income diverges from the filer's
-// OperatingIncomeLoss tag.
-//
-// The gate is presence of OilAndGasPropertyFullCostMethodNet on a recent
-// 10-Q — a balance-sheet tag filed only by full-cost E&P companies; none
-// of the regression tickers (AAPL, JPM, MSFT, NVDA, GS, LLY, UNH, AMZN, MCD,
-// TXRH, WMT, KO, CELH, XOM, BRK/B) file it.
+// companies reporting under the full-cost method. The gate is presence of
+// OilAndGasPropertyFullCostMethodNet on a recent 10-Q.
 func deriveCostOfRevenueForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
 		return
@@ -2486,34 +2109,9 @@ func deriveCostOfRevenueForFullCostEnergyFiler(cf *CompanyFacts, fields map[stri
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
-// deriveCostOfRevenueForIndustrialFinancialFiler handles CAT-style industrial
-// manufacturers with a captive financial-services arm. CAT's income statement
-// groups five expense lines under a single CostsAndExpenses subtotal:
-//
-//	Cost of goods sold                         (us-gaap:CostOfRevenue)
-//	Selling, general, and administrative       (us-gaap:SGA)
-//	Research and development                   (us-gaap:R&D)
-//	Interest expense of Financial Products     (extension tag, not in companyfacts)
-//	Other operating (income) expenses          (us-gaap:OtherOperatingIncomeExpenseNet)
-//
-// The default _cogsRaw resolver picks CostOfGoodsAndServicesSold (a small
-// residual line filed alongside the main CostOfRevenue) as the CoR value,
-// yielding wildly wrong CoR/GrossProfit/OperatingExpenses. Sharadar's split:
-//
-//	operating_expenses = SGA + R&D + abs(OtherOperatingIncomeExpenseNet)
-//	cost_of_revenue    = CostsAndExpenses - operating_expenses
-//
-// Absolute value of OtherOperatingIncomeExpenseNet reflects Sharadar's
-// convention of treating the net other-operating line as an expense-side
-// component regardless of sign. Taking abs also absorbs the captive-finance
-// interest-expense extension into cost_of_revenue without naming it
-// explicitly, which is what Sharadar does for this filer shape.
-//
-// Gate: CostOfRevenue, CostsAndExpenses, and OtherOperatingIncomeExpenseNet
-// all filed quarterly. This triple-concept combination is distinctive to
-// industrial-financial hybrids. None of the regression tickers (AAPL, JPM,
-// MSFT, NVDA, GS, LLY, UNH, AMZN, MCD, TXRH, WMT, KO, CELH, XOM, BATL, BRK/B)
-// file all three.
+// deriveCostOfRevenueForIndustrialFinancialFiler handles CAT-style filers by
+// replacing the small CostOfGoodsAndServicesSold residual with
+// CostsAndExpenses - (SGA + R&D + abs(OtherOperating)).
 func deriveCostOfRevenueForIndustrialFinancialFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"CostOfRevenue"}) {
 		return
@@ -2557,17 +2155,9 @@ func deriveCostOfRevenueForIndustrialFinancialFiler(cf *CompanyFacts, fields map
 	fields["GrossMargin"] = math.Round(grossProfit/revenues*1000) / 1000
 }
 
-// overrideLiabilitiesForFullCostEnergyFiler adds BATL-style balance-sheet
-// line items that Sharadar rolls into liabilities_non_current but that do
-// not flow into our derivation when the filer omits us-gaap:Liabilities /
-// us-gaap:LiabilitiesNoncurrent: asset-retirement obligations, long-term
-// derivative liabilities, and the carrying amount of redeemable convertible
-// preferred stock (mezzanine equity).
-//
-// Gate on OilAndGasPropertyFullCostMethodNet filed quarterly — a balance-
-// sheet tag filed only by full-cost E&P companies. None of the regression
-// tickers file it, so additions here don't affect them even if they file
-// one of the three component tags.
+// overrideLiabilitiesForFullCostEnergyFiler adds BATL-style ARO, derivative,
+// and mezzanine-equity balances to liabilities_non_current. Gate:
+// OilAndGasPropertyFullCostMethodNet filed quarterly.
 func overrideLiabilitiesForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
 		return
@@ -2599,20 +2189,9 @@ func overrideLiabilitiesForFullCostEnergyFiler(cf *CompanyFacts, fields map[stri
 	}
 }
 
-// overrideNCIForFullCostEnergyFiler zeros the NCI residual for BATL-style
-// filers that have no consolidated subsidiaries (no
-// NetIncomeLossAttributableToNoncontrollingInterest tag) but whose
-// ConsolidatedIncome / NetIncomeCommonStock / PreferredDividends values
-// drift apart quarter-by-quarter because of mezzanine-accretion timing —
-// the preferred_dividends line on the income statement lags the XBRL
-// PreferredStockDividendsIncomeStatementImpact value in some quarters.
-// Sharadar reports NCI = 0 for all these filers and rolls the residual
-// into preferred_dividends; this override does the same and recomputes
-// NetIncomeCommonStock so the identity ci - nic - pref = 0 holds.
-//
-// Gate on OilAndGasPropertyFullCostMethodNet filed quarterly and the
-// absence of NetIncomeLossAttributableToNoncontrollingInterest (only true
-// for full-cost E&P filers with no operating NCI).
+// overrideNCIForFullCostEnergyFiler zeros NCI and rolls the residual into
+// preferred_dividends for BATL-style filers without consolidated subsidiaries
+// (no NetIncomeLossAttributableToNoncontrollingInterest tag).
 func overrideNCIForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
 		return
@@ -2634,25 +2213,9 @@ func overrideNCIForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float
 	fields["NetIncomeToNonControllingInterests"] = 0
 }
 
-// overrideInvestingClassificationForFullCostEnergyFiler reclassifies two
-// cash-flow items to match Sharadar's treatment for full-cost E&P filers:
-//
-//   - PaymentsToAcquireOtherProductiveAssets is moved from NetCashFlowBusiness
-//     into CapitalExpenditure. The general _paymentsOtherProductiveAssets
-//     operand routes to NCF_business, but Sharadar treats the concept as
-//     capex for E&P filers because it corresponds to the "Other operating
-//     property and equipment capital expenditures" income-statement line.
-//   - PaymentsToAcquireOilAndGasProperty is added to CapitalExpenditure.
-//     The general _capexGross resolves first-match and picks
-//     PaymentsToExploreAndDevelopOilAndGasProperties for full-cost filers,
-//     which excludes this smaller acquisition line.
-//
-// FreeCashFlow is recomputed against the updated CapitalExpenditure.
-// _paymentsInvestEquityMethod is gated off in mapping_config.go for this
-// filer pattern (Sharadar leaves the payment unclassified rather than
-// putting it into NCF_invest).
-//
-// Gate on OilAndGasPropertyFullCostMethodNet.
+// overrideInvestingClassificationForFullCostEnergyFiler moves
+// PaymentsToAcquireOtherProductiveAssets and PaymentsToAcquireOilAndGasProperty
+// into capex, then recomputes FreeCashFlow.
 func overrideInvestingClassificationForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
 		return
@@ -2666,13 +2229,11 @@ func overrideInvestingClassificationForFullCostEnergyFiler(cf *CompanyFacts, fie
 	}
 
 	if ncfBiz, ok := fields["NetCashFlowBusiness"]; ok {
-		// _paymentsOtherProductiveAssets was added to NCF_business with a -1
-		// coefficient; reverse that so the item only appears in capex.
+		// Reverse the -1 coefficient on _paymentsOtherProductiveAssets so it
+		// appears only in capex.
 		fields["NetCashFlowBusiness"] = ncfBiz + otherProductive
 	}
 
-	// Recompute FreeCashFlow = NCF_ops + CapitalExpenditure (capex is signed
-	// negative for outflows) and downstream FreeCashFlowPerShare.
 	if ncfOps, ok := fields["NetCashFlowFromOperations"]; ok {
 		if capex, ok := fields["CapitalExpenditure"]; ok {
 			fcf := ncfOps + capex
@@ -2685,12 +2246,9 @@ func overrideInvestingClassificationForFullCostEnergyFiler(cf *CompanyFacts, fie
 	}
 }
 
-// overrideInterestExpenseForFullCostEnergyFiler sets interest_expense from
-// the filer's income-statement "Interest expense and other" line rather
-// than the us-gaap:InterestExpense tag. BATL files the line under the
-// company-specific extension InterestExpenseAndOtherNonoperatingIncomeExpense,
-// which nets minor other-income items with gross interest and matches
-// Sharadar's interest_expense. Gate on OilAndGasPropertyFullCostMethodNet.
+// overrideInterestExpenseForFullCostEnergyFiler swaps in the filer's
+// "Interest expense and other" line (a company extension) for InterestExpense.
+// Gate: OilAndGasPropertyFullCostMethodNet filed quarterly.
 func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"OilAndGasPropertyFullCostMethodNet"}) {
 		return
@@ -2703,8 +2261,7 @@ func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[
 
 	fields["InterestExpense"] = val
 
-	// EBIT = NetIncome + IncomeTaxExpense + InterestExpense — recompute
-	// against the updated InterestExpense. EBITDA = EBIT + DD&A follows.
+	// Recompute EBIT/EBITDA against the updated InterestExpense.
 	netIncome, hasNI := fields["NetIncome"]
 	taxExp := fields["IncomeTaxExpense"]
 
@@ -2714,9 +2271,8 @@ func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[
 
 		rev, hasRev := fields["Revenues"]
 
-		// Recompute ReturnOnSales only when it was already populated before
-		// the override — ResolveAllFields skips the ratio for quarterly
-		// dimensions where Sharadar reports 0.
+		// Only recompute when already populated; ResolveAllFields skips
+		// the ratio for quarterly dimensions where Sharadar reports 0.
 		if _, hasROS := fields["ReturnOnSales"]; hasROS && hasRev && rev != 0 {
 			fields["ReturnOnSales"] = math.Round(ebit/rev*1000) / 1000
 		}
@@ -2730,8 +2286,7 @@ func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[
 			}
 		}
 
-		// ROIC = EBIT / InvestedCapitalAverage. Only recompute when
-		// ResolveAllFields already produced a ROIC value.
+		// Only recompute ROIC when ResolveAllFields already produced one.
 		if _, hasROIC := fields["ROIC"]; hasROIC {
 			if ic, ok := fields["InvestedCapitalAverage"]; ok && ic != 0 {
 				fields["ROIC"] = math.Round(ebit/ic*1000) / 1000
@@ -2743,22 +2298,9 @@ func overrideInterestExpenseForFullCostEnergyFiler(cf *CompanyFacts, fields map[
 }
 
 // overrideNCFBusinessAsResidualForReceivablesFiler computes NetCashFlowBusiness
-// as the residual of the investing-activities section for filers (XOM) that
-// don't tag explicit business-acquisition concepts and instead bundle
-// minority-interest cash flows, equity-method investments, and other
-// investing items into an unidentified residual line. Sharadar reproduces
-// that residual by subtracting the explicitly classified buckets from the
-// total:
-//
-//	NCF_business = NCF_from_investing - NCF_invest - CapitalExpenditure
-//	               - ProceedsFromSaleAndCollectionOfReceivables
-//
-// (CapitalExpenditure is already negative in our schema, so subtracting it
-// adds back the gross PPE outflow.)
-//
-// Gate on ProceedsFromSaleAndCollectionOfReceivables filed quarterly. None
-// of the protected regression tickers file this concept, so the gate is
-// safe; XOM is the canonical match.
+// as the investing-section residual for XOM-style filers without explicit
+// business-acquisition tags. Gate: ProceedsFromSaleAndCollectionOfReceivables
+// filed quarterly.
 func overrideNCFBusinessAsResidualForReceivablesFiler(cf *CompanyFacts, fields map[string]float64) {
 	if !conceptFiledQuarterly(cf, []string{"ProceedsFromSaleAndCollectionOfReceivables"}) {
 		return

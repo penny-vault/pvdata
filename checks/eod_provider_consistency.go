@@ -30,17 +30,11 @@ import (
 // provider is wrong.
 type EODProviderConsistency struct{}
 
-// Tolerance constants for the OHLCV comparison.
-//
-// Prices: providers source close from the official tape and usually
-// agree to the cent, but late corrections and adjustment/unadjusted
-// confusion can produce small differences. The check passes if the
-// absolute difference is within priceAbsTolerance OR the relative
-// difference is within priceRelTolerance.
-//
-// Volume: aggregations differ across providers because some count
-// odd-lot/auction trades and others don't. We allow up to
-// volumeRelTolerance relative difference.
+// Tolerance constants for the OHLCV comparison. Prices pass if absolute
+// difference is within priceAbsTolerance OR relative difference is
+// within priceRelTolerance (covers late corrections and
+// adjusted/unadjusted variance). Volume allows up to volumeRelTolerance
+// relative difference (covers odd-lot/auction-volume counting variance).
 const (
 	priceAbsTolerance  = 0.01 // 1 cent
 	priceRelTolerance  = 0.0001

@@ -116,9 +116,6 @@ func TriggerRun(c *fiber.Ctx) error {
 // completes its in-flight HTTP/sleep) and is detached from the registry so a
 // new run can be triggered. Without force the context is cancelled and the
 // goroutine is allowed to finalise the row itself on the way out.
-//
-// Returns 200 with `{status:"cancelled"|"cancelling"}` on success, 404 when
-// no run is active for the subscription.
 func CancelRun(c *fiber.Ctx) error {
 	id := c.Params("id")
 	myLibrary := getLibrary(c)

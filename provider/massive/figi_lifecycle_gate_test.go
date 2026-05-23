@@ -192,4 +192,26 @@ var _ = Describe("lifecycleContaining", func() {
 		_, ok := lifecycleContaining(ranges, time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC))
 		Expect(ok).To(BeFalse())
 	})
+
+	It("matches a timestamp on the range's end calendar day even when its time-of-day pushes it past UTC midnight", func() {
+		// BBT-style failure: ValidFor came in as 2019-12-06T21:27:06-05:00,
+		// which is 2019-12-07T02:27:06Z. Without calendar-day normalization
+		// the raw-timestamp comparison rejected it as past the range End
+		// 2019-12-06T00:00:00Z, the lifecycle lookup failed, and EOD
+		// candidates landed empty downstream.
+		bbtRanges := []dateRange{
+			{Start: time.Date(2003, 9, 10, 0, 0, 0, 0, time.UTC), End: time.Date(2019, 12, 6, 0, 0, 0, 0, time.UTC)},
+			{Start: time.Date(2025, 9, 2, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)},
+		}
+
+		eastern, err := time.LoadLocation("America/New_York")
+		Expect(err).NotTo(HaveOccurred())
+
+		validFor := time.Date(2019, 12, 6, 21, 27, 6, 0, eastern)
+
+		r, ok := lifecycleContaining(bbtRanges, validFor)
+
+		Expect(ok).To(BeTrue())
+		Expect(r.End).To(Equal(bbtRanges[0].End))
+	})
 })

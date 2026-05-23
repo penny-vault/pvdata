@@ -41,12 +41,9 @@ type enrichBudgetCtxKey struct{}
 // WithAPIBudget attaches a shared API-call budget to ctx. The budget
 // is a pool: every permid.Enrich call that derives from the same ctx
 // decrements the same atomic counter, so the cap applies across every
-// publish() call within a run instead of resetting per-call. Without
-// this, a per-asset publish path could issue thousands of API calls
-// per run because each invocation would start with a fresh 250.
-//
-// Pass 0 or a negative value to disable Enrich's API calls entirely
-// (DB-index fill still runs).
+// publish() call within a run instead of resetting per-call. Pass 0 or
+// a negative value to disable Enrich's API calls entirely (DB-index
+// fill still runs).
 func WithAPIBudget(ctx context.Context, budget int) context.Context {
 	remaining := &atomic.Int64{}
 	remaining.Store(int64(budget))
@@ -379,14 +376,10 @@ func micToExchange(mic string) data.Exchange {
 
 // fillFromAssetIndex copies OrganizationPermID and InstrumentPermID
 // onto each asset from a matching entry in the existing-assets index
-// (data.AssetIndexFromContext). Pure local lookup, no API calls.
-// Does not overwrite a value already on the asset.
-//
-// Lookup goes through AssetIndex.Lookup, which keys on
-// ticker:composite_figi or ticker:cik. Ticker-alone matches are
-// refused: a reused ticker like BBI (Blockbuster 2010, Brickell
-// Biotech 2022) would otherwise risk copying the wrong entity's
-// PermIDs.
+// (data.AssetIndexFromContext). Pure local lookup, no API calls; does
+// not overwrite values already on the asset. Lookup keys on
+// ticker:composite_figi or ticker:cik — ticker-alone matches are
+// refused because reused tickers would risk copying the wrong entity.
 func fillFromAssetIndex(ctx context.Context, assets []*data.Asset) {
 	idx := data.AssetIndexFromContext(ctx)
 	if idx.IsZero() {

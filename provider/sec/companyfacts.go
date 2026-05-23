@@ -55,24 +55,17 @@ type Fact struct {
 	Start time.Time // Period start date (present for duration concepts; zero for instant concepts)
 	Filed time.Time // Date the filing was submitted to SEC
 	Val   float64   // The reported value
-	// Accn is the SEC accession number identifying the filing that reported
-	// this fact. It is currently parsed for completeness but not used for
-	// dedup or correlation. A future enhancement could key on Accn to detect
-	// "this exact filing was already processed" at the fact level, or to
-	// group facts reported together in the same filing for provenance
-	// tracking.
-	Accn  string // SEC accession number
-	Form  string // Filing form type (10-K, 10-Q)
-	FP    string // Fiscal period (FY, Q1, Q2, Q3, Q4)
-	Frame string // XBRL frame identifier (e.g. CY2023Q3I)
-	FY    int    // Fiscal year
+	Accn  string    // SEC accession number (parsed but not currently used)
+	Form  string    // Filing form type (10-K, 10-Q)
+	FP    string    // Fiscal period (FY, Q1, Q2, Q3, Q4)
+	Frame string    // XBRL frame identifier (e.g. CY2023Q3I)
+	FY    int       // Fiscal year
 }
 
 // ClassSharesFact captures a Class A or Class B raw cover-page share count
-// from a specific filing. Used for the market-ratio share_factor formula in
-// multi-class filers: share_factor = (A*A_price + B*B_price) / ((A+B)*our_price).
-// Only raw CommonClassAMember / CommonClassBMember contexts are captured —
-// equivalent (B-unit) totals like EquivClassAMember are tracked elsewhere.
+// for the market-ratio share_factor formula. Only raw CommonClassAMember /
+// CommonClassBMember contexts are captured; equivalent (B-unit) totals are
+// tracked elsewhere.
 type ClassSharesFact struct {
 	Filed   time.Time // Date the filing was submitted to SEC
 	End     time.Time // Cover-page instant date
@@ -88,24 +81,18 @@ type CompanyFacts struct {
 	EntityName string            // Company name
 	Facts      map[string][]Fact // Map of concept name to facts (e.g. "Assets" -> []Fact)
 
-	// NonPreferredUnitConcepts tracks concepts loaded from non-preferred
-	// units (e.g. EUR, GBP, JPY instead of USD). These values may be
-	// foreign-currency denominations rather than consolidated USD totals.
-	// Dimensional synthesis can replace these with correct segment sums.
+	// NonPreferredUnitConcepts tracks concepts loaded from non-USD units;
+	// these values may be foreign-currency denominations that dimensional
+	// synthesis can replace.
 	NonPreferredUnitConcepts map[string]bool
 
 	// ClassShares collects Class A and Class B cover-page share counts from
-	// dual-class filings. Populated during inline XBRL parsing whenever
-	// EntityCommonStockSharesOutstanding or CommonStockSharesOutstanding is
-	// reported on a context with a CommonClassAMember or CommonClassBMember.
-	// Used by resolveClassSharesAsOf for the market-ratio share_factor.
+	// dual-class filings; consumed by resolveClassSharesAsOf.
 	ClassShares []ClassSharesFact
 }
 
-// FilterByFilingDate removes all facts that were filed after the given cutoff
-// date. This is used to reproduce the data view at a historical point in time,
-// e.g. to compare SEC-derived fundamentals against a Sharadar snapshot taken
-// on a specific date.
+// FilterByFilingDate drops facts filed after cutoff so the view reproduces
+// the data available at a historical point in time.
 func (cf *CompanyFacts) FilterByFilingDate(cutoff time.Time) {
 	for concept, facts := range cf.Facts {
 		kept := facts[:0]
@@ -130,16 +117,9 @@ var unitPreference = []string{"USD", "USD/shares", "shares", "pure"}
 
 const dateFormat = "2006-01-02"
 
-// ParseCompanyFacts parses SEC EDGAR companyfacts JSON into a CompanyFacts struct.
-// It only includes facts from 10-K and 10-Q filings and selects the preferred
-// unit type when multiple are available for a concept.
-//
-// All XBRL namespaces present in the JSON are parsed, including:
-//   - "us-gaap": financial statement data (balance sheet, income, cash flow)
-//   - "dei": filing metadata (EntityCommonStockSharesOutstanding, etc.)
-//   - Company extensions (e.g. "msft", "aapl"): custom concepts that companies
-//     define for line items not covered by us-gaap, such as MSFT's
-//     DepreciationAmortizationAndOther cash flow line.
+// ParseCompanyFacts parses SEC EDGAR companyfacts JSON. Only 10-K/10-Q facts
+// are included; the preferred unit type is selected per concept; all
+// namespaces (us-gaap, dei, company extensions) are parsed.
 func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 	if !gjson.ValidBytes(jsonData) {
 		return nil, fmt.Errorf("invalid JSON data")
@@ -153,9 +133,8 @@ func ParseCompanyFacts(jsonData []byte) (*CompanyFacts, error) {
 		Facts:      make(map[string][]Fact),
 	}
 
-	// Parse ALL namespaces present in the facts object, not just us-gaap
-	// and dei. Company extension namespaces contain custom concepts for
-	// line items that aren't covered by standard taxonomies.
+	// Parse all namespaces, not just us-gaap/dei: company extension
+	// namespaces contain custom concepts for non-standard line items.
 	root.Get("facts").ForEach(func(nsName, nsData gjson.Result) bool {
 		parseNamespaceFacts(nsData, cf)
 		return true
@@ -187,11 +166,9 @@ func parseNamespaceFacts(nsData gjson.Result, cf *CompanyFacts) {
 			}
 		}
 
-		// If no preferred unit found, try the first available unit.
-		// Some concepts (e.g. BRK's DebtAndCapitalLeaseObligations) only
-		// have foreign-currency units in the API. We load them as
-		// placeholders; dimensional synthesis will replace them with
-		// correct consolidated values when inline XBRL data is available.
+		// Fall back to the first available unit. Foreign-currency-only
+		// concepts get loaded as placeholders for dimensional synthesis
+		// to replace with consolidated values later.
 		isNonPreferred := false
 
 		if !selectedUnit.Exists() {
@@ -255,13 +232,8 @@ func parseNamespaceFacts(nsData gjson.Result, cf *CompanyFacts) {
 		if len(facts) > 0 {
 			// Sort facts by Filed ascending so ResolveFieldsForFiling can use
 			// binary search to slice the prefix of facts available at any
-			// given filing date. This is a one-time cost per concept that
-			// avoids O(N) scans on every (period, filing-date) lookup.
-			//
-			// Use a stable sort so facts filed on the same day preserve their
-			// JSON parse order; this keeps downstream resolution deterministic
-			// when multiple facts share a filing date (e.g. comparative
-			// balance-sheet entries reported in the same 10-K).
+			// given filing date. Stable sort preserves JSON parse order for
+			// same-day filings so downstream resolution is deterministic.
 			sort.SliceStable(facts, func(i, j int) bool {
 				return facts[i].Filed.Before(facts[j].Filed)
 			})
@@ -281,12 +253,9 @@ func parseNamespaceFacts(nsData gjson.Result, cf *CompanyFacts) {
 	})
 }
 
-// weightedAvgShareConcepts are us-gaap share concepts that some filers
-// (e.g. MCD starting FY2023) report in compact units (millions) rather than
-// absolute share counts. The companyfacts API returns the raw filed value
-// (e.g. val=712.9), which is 6 orders of magnitude too small for downstream
-// per-share calculations. normalizeShareScale detects and corrects this on
-// a per-fact basis.
+// weightedAvgShareConcepts are share concepts that some filers report in
+// compact units (millions/thousands) rather than absolute counts;
+// normalizeShareScale rescales them.
 var weightedAvgShareConcepts = []string{
 	"WeightedAverageNumberOfSharesOutstandingBasic",
 	"WeightedAverageNumberOfDilutedSharesOutstanding",
@@ -294,20 +263,9 @@ var weightedAvgShareConcepts = []string{
 	"WeightedAverageNumberOfSharesIssuedBasic",
 }
 
-// normalizeShareScale rescales weighted-average share facts that were filed
-// in compact units (millions or thousands) so they match the absolute share
-// counts used by Sharadar. MCD's current 10-K/10-Q filings report
-// WeightedAverageNumberOfSharesOutstandingBasic as 712.9 (meaning 712.9M
-// shares), while the companyfacts API passes the value through verbatim.
-//
-// Detection is per-fact: for each weighted-avg fact we compare its absolute
-// value to the temporally-nearest EntityCommonStockSharesOutstanding
-// reference (a DEI cover-page count that is consistently filed in absolute
-// units). A ratio of ~1e6 implies the fact is in millions; ~1e3 implies
-// thousands. Normal filings have ratio ~1 and are left unchanged.
-//
-// Mixed-scale history is preserved: MCD filed WAS in absolute units before
-// FY2023, so those older facts have ratio ~1 and are untouched.
+// normalizeShareScale rescales weighted-average share facts filed in compact
+// units to absolute counts, detecting per-fact against the temporally-nearest
+// EntityCommonStockSharesOutstanding reference.
 func normalizeShareScale(cf *CompanyFacts) {
 	refFacts := cf.Facts["EntityCommonStockSharesOutstanding"]
 	if len(refFacts) == 0 {
@@ -327,9 +285,7 @@ func normalizeShareScale(cf *CompanyFacts) {
 			}
 
 			ref := nearestRefShareCount(refFacts, facts[i].End)
-			// Require a large enough reference so the ratio is meaningful.
-			// Companies with under a million shares outstanding are unlikely
-			// to use compact unit reporting anyway.
+			// Require a large enough reference for the ratio to be meaningful.
 			if ref < 1_000_000 {
 				continue
 			}
@@ -397,14 +353,8 @@ func FetchCompanyFacts(ctx context.Context, client *resty.Client, cik int) (*Com
 // submissionsURL is the SEC EDGAR endpoint for company submission metadata.
 const submissionsURL = "https://data.sec.gov/submissions/"
 
-// EnrichWithExtensionFacts fetches the company's recent 10-K/10-Q inline XBRL
-// filings from SEC EDGAR and parses extension facts (company-specific XBRL
-// concepts not in us-gaap or dei). These are added to cf.Facts alongside the
-// standard facts already parsed from companyfacts JSON.
-//
-// Extension concepts are used by companies for cash flow line items like
-// "Depreciation, amortization, and other" (msft:DepreciationAmortizationAndOther)
-// that aren't covered by us-gaap taxonomy concepts.
+// EnrichWithExtensionFacts fetches recent 10-K/10-Q inline XBRL filings and
+// parses extension facts (concepts outside us-gaap/dei) into cf.Facts.
 func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int, cf *CompanyFacts) {
 	// Fetch the submissions metadata to find recent filings.
 	subURL := submissionsURL + FormatCIK(cik) + ".json"
@@ -419,11 +369,9 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 
 	root := gjson.ParseBytes(resp.Body())
 
-	// Collect recent 10-K and 10-Q filings for extension enrichment. We need
-	// enough history so that Q4 synthesis for the prior fiscal year uses
-	// consistent extension facts. The submissions list is reverse-chronological,
-	// so we collect filings until we see the THIRD 10-K (giving us two full
-	// fiscal years of quarterly filings plus their annual summaries).
+	// Collect filings until we've seen the third 10-K so Q4 synthesis for the
+	// prior fiscal year has consistent extension facts across two fiscal
+	// years of quarterly filings.
 	type filingInfo struct {
 		accession  string
 		doc        string
@@ -489,9 +437,8 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 		goto done
 	}
 
-	// If we haven't found enough 10-K filings, load overflow submission
-	// files. Large filers (e.g. JPM with 23K+ filings/year) push older
-	// 10-K/10-Q filings into overflow files.
+	// Large filers (e.g. JPM) push older 10-K/10-Q filings into overflow
+	// files; scan those if recent didn't have enough.
 	{
 		overflowFiles := root.Get("filings.files").Array()
 		for _, f := range overflowFiles {
@@ -520,11 +467,9 @@ func EnrichWithExtensionFacts(ctx context.Context, client *resty.Client, cik int
 
 done:
 
-	// Reverse so filings are processed in chronological order (oldest first).
-	// This ensures the original 10-Q's dimensional synthesis facts are
-	// established before later filings' comparative data is processed.
-	// Without this, a Q1-2025 10-Q's restated Q1-2024 comparative would
-	// block the original Q1-2024 synthesis (hasFactForPeriodAndForm).
+	// Process oldest first so the original 10-Q's dimensional synthesis facts
+	// are established before later filings' comparatives, otherwise the
+	// restated comparative would block the original synthesis.
 	for i, j := 0, len(filings)-1; i < j; i, j = i+1, j-1 {
 		filings[i], filings[j] = filings[j], filings[i]
 	}
@@ -579,11 +524,9 @@ func parseExtensionFactsFromFiling(ctx context.Context, client *resty.Client, ci
 	parseXBRLInstanceExtensions(resp.Body(), cf, filed, formType)
 }
 
-// dimensionalShareConcepts lists us-gaap concepts for per-share and share
-// count data that some multi-class filers (e.g. BRK/B) report ONLY with
-// dimensional XBRL (one value per share class). The companyfacts API
-// excludes dimensional facts, so they must be captured from the inline XBRL
-// instance when the context carries a "ClassB" member.
+// dimensionalShareConcepts lists us-gaap per-share/share-count concepts that
+// multi-class filers report only with dimensional XBRL. The companyfacts API
+// excludes dimensional facts, so we capture them from inline XBRL.
 var dimensionalShareConcepts = map[string]bool{
 	"WeightedAverageNumberOfSharesOutstandingBasic":          true,
 	"WeightedAverageNumberOfDilutedSharesOutstanding":        true,
@@ -594,9 +537,8 @@ var dimensionalShareConcepts = map[string]bool{
 	"EntityCommonStockSharesOutstanding":                     true, // DEI cover-page shares; multi-class filers report per-class
 }
 
-// contextHasClassBMember returns true if any dimension member in the context
-// contains "ClassB" (matching both standard us-gaap:CommonClassBMember and
-// company extensions like brka:EquivalentClassBMember).
+// contextHasClassBMember reports whether any dimension member contains
+// "ClassB" (matching us-gaap:CommonClassBMember and company extensions).
 func contextHasClassBMember(ctx contextPeriod) bool {
 	for _, m := range ctx.dimMembers {
 		if strings.Contains(m, "ClassB") {
@@ -607,11 +549,9 @@ func contextHasClassBMember(ctx contextPeriod) bool {
 	return false
 }
 
-// contextHasClassAMember returns true if any dimension member in the context
-// contains "ClassA" (matching us-gaap:CommonClassAMember and company
-// extensions). Used alongside contextHasClassBMember for share count concepts
-// where both class totals must be captured and summed (e.g. BRK/B's
-// EntityCommonStockSharesOutstanding is filed per-class in raw share units).
+// contextHasClassAMember reports whether any dimension member contains
+// "ClassA". Used with contextHasClassBMember for share-count concepts where
+// both class totals must be summed.
 func contextHasClassAMember(ctx contextPeriod) bool {
 	for _, m := range ctx.dimMembers {
 		if strings.Contains(m, "ClassA") {
@@ -623,10 +563,9 @@ func contextHasClassAMember(ctx contextPeriod) bool {
 }
 
 // multiClassShareCountConcepts lists share-count concepts whose per-class
-// values are raw share counts that must be summed across classes to match
-// Sharadar's shares_basic. Per-share (EPS) and weighted-average-shares
-// concepts are NOT in this set: Sharadar reports those in Class B
-// (equivalent) units, so only the Class B dimensional value is captured.
+// values are raw counts to sum across classes. EPS/WAS concepts are NOT in
+// this set: Sharadar reports those in Class B equivalent units, so only the
+// Class B dimensional value is captured.
 var multiClassShareCountConcepts = map[string]bool{
 	"CommonStockSharesOutstanding":       true,
 	"EntityCommonStockSharesOutstanding": true,
@@ -642,9 +581,8 @@ type rawFact struct {
 	isGapFill      bool // true for standard us-gaap concepts captured to fill companyfacts API gaps
 }
 
-// hasFactForPeriod returns true if CompanyFacts already contains at least one
-// fact for the given concept name and period end date. This is used to avoid
-// duplicating data that the companyfacts API already provides.
+// hasFactForPeriod reports whether cf already contains a fact for concept
+// and period end. Used to avoid duplicating data from the companyfacts API.
 func hasFactForPeriod(cf *CompanyFacts, conceptName string, end time.Time) bool {
 	facts, ok := cf.Facts[conceptName]
 	if !ok || len(facts) == 0 {
@@ -660,11 +598,9 @@ func hasFactForPeriod(cf *CompanyFacts, conceptName string, end time.Time) bool 
 	return false
 }
 
-// latestFiledForConceptPeriodForm returns the latest Filed date among existing
-// facts for the given concept, period end, and form type. Returns the zero
-// time and false when no such fact exists. Used to allow synthesis of
-// restated comparative values from later filings — the check is "did a newer
-// filing already process this period?" rather than "does ANY prior fact exist?".
+// latestFiledForConceptPeriodForm returns the latest Filed date for matching
+// facts. Used to allow synthesis of restated comparative values from later
+// filings: the check is "did a newer filing already process this period?".
 func latestFiledForConceptPeriodForm(cf *CompanyFacts, conceptName string, end time.Time, formType string) (time.Time, bool) {
 	facts, ok := cf.Facts[conceptName]
 	if !ok || len(facts) == 0 {
@@ -687,12 +623,9 @@ func latestFiledForConceptPeriodForm(cf *CompanyFacts, conceptName string, end t
 	return latest, found
 }
 
-// hasFactForPeriodStartAndForm returns true if CompanyFacts already contains a
-// fact matching the concept, period end, period start, and form type. Use this
-// instead of hasFactForPeriodAndForm when distinguishing between facts that
-// share the same end date but differ in duration (e.g. the Q3 10-Q reports
-// both a single-quarter 90-day WAS fact and a 273-day YTD WAS fact — both end
-// 2024-09-30 but have different starts).
+// hasFactForPeriodStartAndForm reports whether a matching fact exists. Use
+// when distinguishing same-end-date facts with different durations (e.g. Q3
+// 10-Q reports both single-quarter and YTD WAS facts ending 2024-09-30).
 func hasFactForPeriodStartAndForm(cf *CompanyFacts, conceptName string, end, start time.Time, formType string) bool {
 	facts, ok := cf.Facts[conceptName]
 	if !ok || len(facts) == 0 {
@@ -709,13 +642,9 @@ func hasFactForPeriodStartAndForm(cf *CompanyFacts, conceptName string, end, sta
 }
 
 // parseXBRLInstanceExtensions parses an XBRL instance XML document and
-// extracts extension facts (concepts not in us-gaap or dei namespaces).
-// It also captures us-gaap share/EPS concepts from dimensional contexts
-// with a Class B member, since multi-class filers may only report these
-// dimensionally (not in the companyfacts API). Additionally, it captures
-// standard us-gaap concepts from non-dimensional contexts when the
-// companyfacts API is missing data for that concept and period (gap-fill).
-// It uses encoding/xml for proper XML parsing.
+// extracts extension (non-us-gaap/dei) facts, plus dimensional us-gaap
+// share/EPS facts for multi-class filers and gap-fill us-gaap facts the
+// companyfacts API omits.
 func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Time, formType string) {
 	decoder := xml.NewDecoder(bytes.NewReader(xmlData))
 	// Inline XBRL instance XML may contain HTML entities; be lenient.
@@ -760,14 +689,10 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 				strings.Contains(ns, "xbrl.sec.gov/ecd")
 			isShareConcept := isStdNS && dimensionalShareConcepts[conceptName]
 
-			// Standard us-gaap concepts that are NOT share concepts are
-			// captured as gap-fill candidates. The companyfacts API sometimes
-			// omits consolidated facts for conglomerates and insurance
-			// companies (e.g. BRK/B's PropertyPlantAndEquipmentNet,
-			// CostOfGoodsAndServicesSold). These facts exist in the inline
-			// XBRL but are absent from the API. We capture them from
-			// non-dimensional contexts and only add them when no existing
-			// fact covers the same period.
+			// Standard us-gaap concepts that aren't share concepts are
+			// captured as gap-fill: the companyfacts API sometimes omits
+			// consolidated facts for conglomerates and insurance companies
+			// even though they appear in the inline XBRL.
 			isGapFill := isStdNS && !isShareConcept
 
 			var contextRef, unitRef, signAttr string
@@ -1035,21 +960,13 @@ func parseXBRLInstanceExtensions(xmlData []byte, cf *CompanyFacts, filed time.Ti
 	}
 }
 
-// synthesizeConsolidatedFacts creates consolidated (non-dimensional) facts from
-// dimensional segment data for concepts missing from CompanyFacts. Conglomerates
-// like BRK/B report certain balance sheet and income statement items only with
-// segment dimensions (e.g. srt:ProductOrServiceAxis with InsuranceAndOther and
-// RailroadUtilitiesAndEnergy members). The consolidated value is the sum of
-// top-level segment totals along the product/service axis.
+// synthesizeConsolidatedFacts creates consolidated facts from dimensional
+// segment data for concepts missing from CompanyFacts. Conglomerates report
+// some line items only with segment dimensions; we sum top-level segments
+// along the product/service axis, excluding sub-segments.
 //
-// Only facts with exactly one dimension member on the srt:ProductOrServiceAxis
-// are considered. Sub-segments (whose values sum to a parent segment's value)
-// are detected and excluded to avoid double-counting.
-// singleSegmentAllowed lists concepts where a single ProductOrServiceAxis
-// segment value represents the consolidated total. These are items reported
-// only by one segment because the other segment uses different cost categories.
-// For example, conglomerates report SGA under Insurance while operating
-// subsidiaries classify overhead as railroad/utility operating expenses.
+// singleSegmentAllowed lists concepts where one segment alone represents the
+// consolidated total (the other segment uses a different cost taxonomy).
 var singleSegmentAllowed = map[string]bool{
 	"SellingGeneralAndAdministrativeExpense":                   true,
 	"IntangibleAssetsNetExcludingGoodwill":                     true,
@@ -1065,10 +982,8 @@ var singleSegmentAllowed = map[string]bool{
 	"ProceedsFromDebtMaturingInMoreThanThreeMonths":            true, // CAT: 10-K dimensional (only FP segment; MET has no LT debt issuance)
 }
 
-// extensionSynthesisConcepts lists extension (non-us-gaap) concept names that
-// should be eligible for dimensional synthesis in synthesizeConsolidatedFacts.
-// Normally only us-gaap gap-fill concepts are processed; these extension
-// concepts are added because they exist only in dimensional contexts.
+// extensionSynthesisConcepts whitelists extension (non-us-gaap) concepts for
+// dimensional synthesis because they exist only in dimensional contexts.
 var extensionSynthesisConcepts = map[string]bool{
 	"USTreasuryBills":                                          true,
 	"AccountsAndOtherReceivablesNet":                           true, // BRK (brka:) extension: Railroad/Utilities trade receivables
@@ -1110,18 +1025,11 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			continue
 		}
 
-		// For concepts with preferred USD units in the API, skip synthesis
-		// when the API already has data for this period+form that was
-		// filed on or after the current filing. The prior fact is still
-		// authoritative. When the CURRENT filing is NEWER than any existing
-		// fact, re-synthesize so comparative restatements are captured —
-		// e.g. BRK's Q1 2025 10-Q reclassifies Q1 2024 SGA by +768M into
-		// Insurance and Other. Without this, our MR resolution is stuck on
-		// the original 10-Q's value and Sharadar's MRQ (which picks up the
-		// restated comparative) doesn't match. For non-preferred-unit
-		// concepts (e.g. BRK's DebtAndCapitalLeaseObligations in EUR),
-		// always collect so synthesis can replace with correct segment
-		// sums.
+		// For preferred-USD concepts, skip when the API already has a fact
+		// filed on or after this one. Re-synthesize when the current filing
+		// is newer so comparative restatements get captured. For
+		// non-preferred-unit concepts always collect so synthesis can
+		// replace foreign-currency placeholders.
 		if !cf.NonPreferredUnitConcepts[rf.conceptName] {
 			if latestFiled, ok := latestFiledForConceptPeriodForm(cf, rf.conceptName, ctx.end, formType); ok {
 				if !filed.After(latestFiled) {
@@ -1142,9 +1050,8 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 	const tolerance = 0.02
 
 	for pk, facts := range groups {
-		// Deduplicate by member: same member+period can appear multiple
-		// times in a filing (balance sheet vs. segment note). Keep the
-		// first occurrence.
+		// Deduplicate by member: same member+period can appear in multiple
+		// notes within one filing. Keep the first occurrence.
 		seen := make(map[string]bool)
 		deduped := facts[:0]
 
@@ -1215,11 +1122,7 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			}
 		}
 
-		// Some concepts are correctly represented by a single segment when
-		// the other segment doesn't report this item (different cost taxonomy).
-		// For example, SGA and intangibles-ex-goodwill in conglomerates are
-		// reported only under the Insurance segment because operating
-		// subsidiaries classify their overhead under segment-specific tags.
+		// A single-segment value is allowed only for whitelisted concepts.
 		if count < 2 && !singleSegmentAllowed[pk.concept] {
 			continue
 		}
@@ -1232,12 +1135,10 @@ func synthesizeConsolidatedFacts(cf *CompanyFacts, rawFacts []rawFact, contexts 
 			Form:  formType,
 		}
 
-		// When synthesis produces a multi-segment value (count >= 2) for
-		// a non-preferred-unit concept, replace ALL existing facts for
-		// the same period+form. The API may have loaded facts from
-		// foreign-currency units (e.g. BRK's EUR-denominated debt).
-		// Preserve the earliest original filing date so the synthesized
-		// fact passes the same filing-date filters as the original.
+		// For non-preferred-unit concepts, replace existing same-period+form
+		// facts (the API may have loaded foreign-currency placeholders).
+		// Preserve the earliest original filing date so the synthesized fact
+		// passes the same filing-date filters.
 		if count >= 2 && cf.NonPreferredUnitConcepts[pk.concept] {
 			filtered := make([]Fact, 0, len(cf.Facts[pk.concept]))
 			earliestFiled := filed
@@ -1368,15 +1269,9 @@ func readElementText(decoder *xml.Decoder) (string, error) {
 	}
 }
 
-// DownloadCompanyFactsZip downloads and extracts the bulk companyfacts.zip file,
-// calling processFn for each individual CIK JSON file. The download is streamed
-// to a temp file on disk to avoid loading the entire ~1GB archive into memory;
-// the zip itself requires random access (its central directory is at the end of
-// the file), so it is then opened from the temp file using zip.OpenReader.
-//
-// If localZipPath is non-empty, the local file is used directly instead of
-// downloading from SEC. This is useful during development to avoid re-downloading
-// the ~1GB file on every run.
+// DownloadCompanyFactsZip downloads and extracts companyfacts.zip, calling
+// processFn for each CIK JSON. Streams to a temp file to avoid loading the
+// ~1GB archive into memory. If localZipPath is set, uses the local file.
 func DownloadCompanyFactsZip(ctx context.Context, client *resty.Client, localZipPath string, processFn func(cik int, jsonData []byte) error) error {
 	zipPath := localZipPath
 	removeTmp := false

@@ -38,16 +38,12 @@ type AssetInfo struct {
 	CompositeFigi string
 	CIK           int
 
-	// SiblingFigi is the composite FIGI of another share class sharing the
-	// same CIK (e.g. BRK.A for BRK.B, GOOG for GOOGL). Empty for single-class
-	// filers or when no dual-class sibling exists in the assets table. Used
-	// by the market-ratio share_factor formula in EnrichMarketData.
+	// SiblingFigi is another share class's composite FIGI under the same CIK
+	// (e.g. BRK.A for BRK.B). Used by the market-ratio share_factor formula.
 	SiblingFigi string
 }
 
 // ParseCompanyTickers parses the SEC company_tickers.json format into a CIK->entry map.
-// The JSON is an object with numeric string keys and objects like:
-// {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}
 func ParseCompanyTickers(jsonData []byte) (map[int]CIKEntry, error) {
 	result := make(map[int]CIKEntry)
 	root := gjson.ParseBytes(jsonData)
@@ -74,10 +70,8 @@ func FormatCIK(cik int) string {
 	return fmt.Sprintf("CIK%010d", cik)
 }
 
-// FetchCompanyTickers fetches the SEC's company_tickers.json file and parses
-// it into a CIK -> CIKEntry map. The file is ~10MB and is published by SEC at
-// companyTickersURL; SEC updates it daily so callers should not cache the
-// response between runs.
+// FetchCompanyTickers fetches and parses SEC's company_tickers.json. SEC
+// updates the file daily, so callers should not cache the response.
 func FetchCompanyTickers(ctx context.Context, client *resty.Client) (map[int]CIKEntry, error) {
 	resp, err := client.R().SetContext(ctx).Get(companyTickersURL)
 	if err != nil {
@@ -98,14 +92,10 @@ func FetchCompanyTickers(ctx context.Context, client *resty.Client) (map[int]CIK
 	return entries, nil
 }
 
-// LoadCIKMapFromDB loads asset information from the database, returning three
-// maps: a CIK-keyed map (one representative entry per CIK), a ticker-keyed map
-// (every asset with a CIK), and a figi-keyed map of distinct sibling FIGIs
-// sharing the same CIK (dual-class filers like BRK.A/BRK.B). Multiple tickers
-// can share a single CIK (e.g. JPM, AMJ, AMJB, VYLD all belong to CIK 19617)
-// and many of them also share a FIGI (aliases); the sibling map only records
-// FIGIs that differ, which is the dual-class case that the market-ratio
-// share_factor formula needs.
+// LoadCIKMapFromDB returns three maps from the active assets table: by CIK,
+// by ticker, and a sibling FIGI map keyed by FIGI for dual-class filers
+// (BRK.A/BRK.B, GOOG/GOOGL). Single-class CIKs with multiple ticker aliases
+// share one FIGI and contribute nothing to the sibling map.
 func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInfo, map[string]AssetInfo, map[string]string, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -113,12 +103,10 @@ func LoadCIKMapFromDB(ctx context.Context, pool *pgxpool.Pool) (map[int]AssetInf
 	}
 	defer conn.Release()
 
-	// Only active assets: inactive rows (e.g. delisted or superseded FIGIs
-	// that still carry the same CIK as a live listing — MCD has
-	// BBG000BNSZP1 active alongside inactive BBG000C9R4J8) would otherwise
-	// let Go map iteration order pick the dead FIGI for the CIK slot,
-	// causing SEC observations to be written under a FIGI Sharadar
-	// doesn't track and showing up as "missing in sharadar" diffs.
+	// Only active assets: inactive rows sharing a CIK with a live listing
+	// (e.g. MCD's inactive BBG000C9R4J8 alongside active BBG000BNSZP1) can
+	// otherwise win the CIK slot via map iteration order and cause SEC
+	// observations to be written under a FIGI Sharadar doesn't track.
 	rows, err := conn.Query(ctx,
 		`SELECT ticker, composite_figi, cik FROM assets WHERE cik IS NOT NULL AND cik != '' AND active = TRUE`)
 	if err != nil {

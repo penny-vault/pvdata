@@ -73,11 +73,6 @@ const archiveScanProgressInterval = 250
 // observed across every file scanned. The ranges feed the
 // MassiveEODArchive fields on DateCandidates so the date-assignment
 // algorithm can use real trading observations as one of its sources.
-//
-// The index is built once per run (at fetcher init or first use) and
-// shared read-only across all date-assignment calls. Memory cost is
-// O(unique tickers × ranges per ticker) — a handful of megabytes for
-// a typical universe.
 type EODArchive struct {
 	tickers       map[string][]dateRange
 	coverageStart time.Time
@@ -135,9 +130,8 @@ var archiveDateFile = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})\.parquet$`)
 // per-day parquet files whose date is newer than the index's
 // lastIndexedDate. A missing rootDir or absent index just produces
 // the empty starting state; the algorithm then reads every per-day
-// parquet from scratch and writes a fresh index at the end.
-//
-// An unreadable parquet file aborts the load so a corruption issue
+// parquet from scratch and writes a fresh index at the end. An
+// unreadable parquet file aborts the load so a corruption issue
 // does not silently drop observations.
 func LoadEODArchive(rootDir string) (*EODArchive, error) {
 	archive := newEmptyArchive()

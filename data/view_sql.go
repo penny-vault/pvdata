@@ -87,17 +87,12 @@ func (dt *DataType) buildWhereClause(s ViewSource) string {
 
 // buildDedupedUnion emits a CREATE OR REPLACE VIEW where each lower-priority
 // leg excludes rows whose dedup-key tuple already appears in any
-// higher-priority leg. The resulting view returns each unique dedup-key
-// tuple exactly once, taking the row whole from the highest-priority source
-// containing it.
-//
-// Date bounds (FromDate/UntilDate) are not applied in dedup mode -- there is
-// no real-world data type today that uses both DedupKeys and a DateColumn,
-// and the asset case explicitly has DateColumn == "". A non-nil
-// ViewGenerator is honored for the SELECT portion of each leg; the
-// NOT EXISTS clauses always qualify dedup keys with the bare table name, so
-// the generator must not introduce a table alias (i.e. emit
-// "SELECT cols FROM <table>" with no AS).
+// higher-priority leg, returning each unique dedup-key tuple exactly once
+// from the highest-priority source containing it. Date bounds are not
+// applied in dedup mode. A non-nil ViewGenerator is honored for the SELECT
+// portion of each leg; the NOT EXISTS clauses always qualify dedup keys
+// with the bare table name, so the generator must not introduce a table
+// alias.
 func (dt *DataType) buildDedupedUnion(viewName string, sources []ViewSource) string {
 	legs := make([]string, len(sources))
 

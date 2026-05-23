@@ -49,23 +49,11 @@ func GetRunHistory(c *fiber.Ctx) error {
 }
 
 // GetRunLog returns a paged slice of the captured log text for a specific
-// run_history row. The response shape is:
-//
-//	{
-//	  "lines":      ["..."],   // chronological order
-//	  "total":      <int>,     // total line count across the full log
-//	  "start_line": <int>,     // 1-indexed lineno of lines[0] (0 when empty)
-//	  "limit":      <int>      // applied page size
-//	}
-//
-// Query parameters:
-//   - limit  -- page size (default 1000, capped at 5000)
-//   - before -- upper-bound line cursor (exclusive) for "load earlier"
-//     paging. Omit or set to 0 to fetch the tail (newest lines).
-//
-// `lines` is empty when no log was ever captured or the 30-day retention
-// has cleared it. To download the full log unpaged, use the
-// /log/download endpoint.
+// run_history row, with chronological lines plus total/start_line/limit
+// metadata. Query parameters: limit (default 1000, capped at 5000) and
+// before (upper-bound line cursor, exclusive; omit or 0 for the newest tail).
+// `lines` is empty when no log was captured or the 30-day retention has
+// cleared it; for the full log unpaged use the /log/download endpoint.
 func GetRunLog(c *fiber.Ctx) error {
 	id := c.Params("id")
 	runID := c.Params("runID")

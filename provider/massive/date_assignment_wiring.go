@@ -55,16 +55,12 @@ func secRegistrationFormPrefix(t data.AssetType) string {
 // the asset, the walk-window indexes on api, the per-lifecycle EOD
 // archive range that contains the asset's observation date, and the
 // SEC submissions cache (via sec.FetchSubmissions, which is cache-
-// backed so a repeat call costs nothing). The result is the
-// single-asset input to AssignDatesForTicker.
-//
-// MassiveEODArchiveFirstBar and MassiveEODArchiveLastBar come from the
-// archive range that contains asset.ValidFor. When two assets share a
-// ticker, each gets the first and last bar of its own lifecycle, not
-// the ticker-wide span. The CoverageStart and CoverageEnd fields
-// remain archive-wide so the edge-buffer check in eodFirstBarUsableAsValue
-// still rejects the lifecycle of an asset whose first bar sits at the
-// start of our coverage.
+// backed so a repeat call costs nothing). MassiveEODArchiveFirstBar and
+// MassiveEODArchiveLastBar come from the archive range containing
+// asset.ValidFor so each asset gets its own lifecycle bounds, while
+// CoverageStart and CoverageEnd remain archive-wide so the edge-buffer
+// check in eodFirstBarUsableAsValue still rejects a first bar sitting
+// at the start of coverage.
 func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *data.Asset) DateCandidates {
 	logger := zerolog.Ctx(ctx)
 	traced := traceAsset(ctx, asset.Ticker)
@@ -72,6 +68,7 @@ func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *
 	c := DateCandidates{
 		AssetType: asset.AssetType,
 		Active:    asset.Active,
+		ValidFor:  asset.ValidFor,
 	}
 
 	if t := parseISODate(asset.ListingDate); !t.IsZero() {
@@ -134,8 +131,26 @@ func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *
 		)
 
 		if len(ranges) > 0 {
-			assetDate := asset.ValidFor
-			if assetDate.IsZero() {
+			// Prefer the walk window's firstSeen as the lookup key
+			// when available. The walk records the earliest date
+			// Massive returned the asset under this (ticker, FIGI |
+			// CIK | name), which is a direct signal of when the
+			// asset's lifecycle began. ValidFor, by contrast,
+			// frequently defaults to "now" for delisted entities
+			// (assetDetail's pickValidFor bumps it to time.Now()
+			// when the successor-boundary path fires), which would
+			// snap the lookup to the wrong lifecycle for any ticker
+			// that has been reassigned across a multi-year vacancy
+			// (e.g., JATT's predecessor Zura era and the unrelated
+			// new SPAC three years later).
+			var assetDate time.Time
+
+			switch {
+			case !c.MassiveReferenceWalkFirstSeen.IsZero():
+				assetDate = c.MassiveReferenceWalkFirstSeen
+			case !asset.ValidFor.IsZero():
+				assetDate = asset.ValidFor
+			default:
 				assetDate = time.Now()
 			}
 
@@ -156,10 +171,13 @@ func (api *massiveAssetFetcher) buildDateCandidates(ctx context.Context, asset *
 			if lifecycleFound {
 				c.MassiveEODArchiveFirstBar = lifecycle.Start
 				c.MassiveEODArchiveLastBar = lifecycle.End
+				c.MassiveEODArchivePreviousLifecycleEnd = previousLifecycleEnd(ranges, lifecycle)
 			} else {
 				logger.Warn().
 					Str("Ticker", asset.Ticker).
+					Time("AssetDate", assetDate).
 					Time("ValidFor", asset.ValidFor).
+					Time("WalkFirstSeen", c.MassiveReferenceWalkFirstSeen).
 					Int("ArchiveRangeCount", len(ranges)).
 					Str("Ranges", formatDateRanges(ranges)).
 					Msg("massive: asset date does not fall inside any EOD archive lifecycle range; skipping per-lifecycle EOD candidates")
@@ -412,15 +430,10 @@ func (api *massiveAssetFetcher) isLookbackRun() bool {
 // isolation. This is the single-asset entry point used by callers
 // that operate on assets one at a time (the pre-figi seeding step in
 // filterAssetsByLastUpdated), where rough dates are good enough and
-// no other same-ticker asset is in scope.
-//
-// Use assignDatesForGroup when two or more assets share a ticker and
-// the cross-asset reconciliation in AssignDatesForTicker has to see
-// them together.
-//
-// Daily runs short-circuit: when isLookbackRun reports false there is
-// nothing historical to reconcile and the per-ticker reference value
-// already on the asset is the right answer.
+// no other same-ticker asset is in scope. Daily runs short-circuit:
+// when isLookbackRun reports false there is nothing historical to
+// reconcile and the per-ticker reference value already on the asset
+// is the right answer.
 func (api *massiveAssetFetcher) assignDates(ctx context.Context, asset *data.Asset) {
 	api.assignDatesForGroup(ctx, []*data.Asset{asset})
 }
@@ -433,11 +446,10 @@ func (api *massiveAssetFetcher) assignDates(ctx context.Context, asset *data.Ass
 // Each asset's chosen listing and delisting dates are written back
 // onto the asset in place. Active is flipped to false on any asset
 // whose chosen delisting is in the past so the lifecycle flag stays
-// consistent with the date.
-//
-// Daily runs short-circuit: when isLookbackRun reports false there
-// is nothing historical to reconcile and the per-ticker reference
-// values already on the assets are the right answer.
+// consistent with the date. Daily runs short-circuit: when
+// isLookbackRun reports false there is nothing historical to
+// reconcile and the per-ticker reference values already on the
+// assets are the right answer.
 func (api *massiveAssetFetcher) assignDatesForGroup(ctx context.Context, assets []*data.Asset) {
 	if !api.isLookbackRun() || len(assets) == 0 {
 		return

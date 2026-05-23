@@ -293,16 +293,11 @@ var _ = Describe("AssignDatesForTicker", func() {
 			Expect(got[0].DelistingSource).To(Equal("massive_eod_archive_last_bar"))
 		})
 
-		It("rejects identical Massive listing dates across two same-ticker assets and falls back to lower-priority candidates", func() {
-			// BBI-style: Massive returns the ticker's first-allocation
-			// date 1993-03-16 as the list_date for both the early
-			// holder (Blockbuster, 2003-2010 lifecycle) and the later
-			// holder (Brickell Biotech, 2019-2022 lifecycle). Both
-			// assets should reject that shared Massive value and fall
-			// through to their own lower-priority candidates: the
-			// early holder uses SEC because EOD sits at the coverage
-			// edge for its lifecycle, and the later holder uses EOD
-			// because its lifecycle is fully inside coverage.
+		It("keeps Massive's listing on the earliest lifecycle and clears it for later siblings that share the same value", func() {
+			// BBI-style: Massive returns 1993-03-16 as the list_date
+			// for both the early lifecycle and the later lifecycle.
+			// The earlier lifecycle (lower EOD first bar) keeps it;
+			// later siblings fall through to their own EOD first bar.
 			blockbuster := DateCandidates{
 				AssetType:                      data.CommonStock,
 				Active:                         false,
@@ -329,24 +324,57 @@ var _ = Describe("AssignDatesForTicker", func() {
 
 			Expect(got).To(HaveLen(2))
 
-			// Blockbuster: SEC earliest filing 1999-05-06 is the
-			// next-priority listing candidate once the shared Massive
-			// date is rejected. Delisting comes from the per-lifecycle
-			// EOD last bar plus one calendar day.
-			Expect(got[0].ListingDate).To(Equal(d("1999-05-06")))
-			Expect(got[0].ListingSource).To(Equal("sec_earliest_filing_matching_form"))
+			Expect(got[0].ListingDate).To(Equal(d("1993-03-16")))
+			Expect(got[0].ListingSource).To(Equal("massive_reference_listing_date"))
 			Expect(got[0].DelistingDate).To(Equal(d("2010-07-07")))
 
-			// Brickell: EOD first bar 2019-09-03 is the next-priority
-			// listing candidate once the shared Massive date is
-			// rejected. Delisting comes from the per-lifecycle EOD
-			// last bar plus one calendar day.
 			Expect(got[1].ListingDate).To(Equal(d("2019-09-03")))
 			Expect(got[1].ListingSource).To(Equal("massive_eod_archive_first_bar"))
 			Expect(got[1].DelistingDate).To(Equal(d("2022-09-08")))
 
-			// And the two windows do not overlap.
 			Expect(got[0].DelistingDate.Before(got[1].ListingDate)).To(BeTrue())
+		})
+
+		It("keeps Massive's listing on the earliest lifecycle for a same-CIK bankruptcy gap (DAL-style)", func() {
+			// DAL: pre-bankruptcy (1967-2005) and post-bankruptcy
+			// (2007-now) share Massive list_date 1967-07-03. Earliest
+			// lifecycle (lower EOD first bar) keeps it; the post-
+			// bankruptcy lifecycle falls through to its own EOD
+			// first bar.
+			historical := DateCandidates{
+				AssetType:                      data.CommonStock,
+				Active:                         false,
+				MassiveReferenceListingDate:    d("1967-07-03"),
+				MassiveEODArchiveFirstBar:      d("2003-09-10"),
+				MassiveEODArchiveLastBar:       d("2005-10-12"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-08"),
+				SECEarliestFilingMatchingForm:  d("1994-01-27"),
+			}
+
+			modern := DateCandidates{
+				AssetType:                             data.CommonStock,
+				Active:                                true,
+				MassiveReferenceListingDate:           d("1967-07-03"),
+				MassiveEODArchiveFirstBar:             d("2007-05-03"),
+				MassiveEODArchiveLastBar:              d("2026-05-15"),
+				MassiveEODArchiveCoverageStart:        d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:          d("2026-05-08"),
+				MassiveEODArchivePreviousLifecycleEnd: d("2005-10-12"),
+				SECEarliestFilingMatchingForm:         d("1994-01-27"),
+			}
+
+			got := AssignDatesForTicker(silentLogger(), []DateCandidates{historical, modern}, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(2))
+
+			Expect(got[0].ListingDate).To(Equal(d("1967-07-03")))
+			Expect(got[0].ListingSource).To(Equal("massive_reference_listing_date"))
+			Expect(got[0].DelistingDate).To(Equal(d("2005-10-13")))
+
+			Expect(got[1].ListingDate).To(Equal(d("2007-05-03")))
+			Expect(got[1].ListingSource).To(Equal("massive_eod_archive_first_bar"))
+			Expect(got[1].DelistingDate.IsZero()).To(BeTrue())
 		})
 
 		It("produces non-overlapping windows when Massive reference would have created overlap", func() {
@@ -461,7 +489,7 @@ var _ = Describe("AssignDatesForTicker", func() {
 			Expect(got[0].ListingSource).To(Equal("sec_earliest_filing_matching_form"))
 		})
 
-		It("returns zero listing date when no candidate is both usable and satisfies the constraints", func() {
+		It("returns zero listing date only when every candidate, including ValidFor, is missing", func() {
 			future := time.Now().AddDate(1, 0, 0)
 
 			candidates := []DateCandidates{{
@@ -474,6 +502,299 @@ var _ = Describe("AssignDatesForTicker", func() {
 
 			Expect(got[0].ListingDate.IsZero()).To(BeTrue())
 			Expect(got[0].ListingSource).To(Equal(""))
+		})
+
+		It("falls back to ValidFor when every other signal is missing", func() {
+			// Sparse-Massive case: a long-delisted ticker that
+			// Massive's reference no longer returns a list_date for,
+			// has no EOD archive coverage (the EOD subscription is
+			// unconfigured or the archive load failed), no walk
+			// window entry under any index, and no CIK so SEC cannot
+			// help either. The observation's ValidFor is the only
+			// remaining signal that the asset existed; the algorithm
+			// must use it rather than emit null.
+			candidates := []DateCandidates{{
+				AssetType: data.CommonStock,
+				Active:    false,
+				ValidFor:  d("2018-04-12"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("2018-04-12")))
+			Expect(got[0].ListingSource).To(Equal("valid_for"))
+		})
+
+		It("rejects MassiveReferenceListingDate when it predates the previous EOD lifecycle's end (ticker reassignment)", func() {
+			// OSG's Octave Specialty Group case: ticker OSG was held
+			// by Overseas Shipholding through 2024-07-09, then Octave
+			// took the ticker and its first EOD bar is 2025-11-20.
+			// Massive's per-ticker endpoint reports list_date
+			// 1989-08-25 for the new entity — that is the original
+			// ticker allocation date, not when Octave started trading
+			// under OSG. Accepting it would put a 1989 listing on a
+			// row whose entity did not exist on this ticker until
+			// 2025. With the previous-lifecycle gate in place, the
+			// algorithm rejects the 1989 value and falls through to
+			// Octave's own EOD first bar.
+			candidates := []DateCandidates{{
+				AssetType:                             data.CommonStock,
+				Active:                                true,
+				MassiveReferenceListingDate:           d("1989-08-25"),
+				MassiveEODArchiveFirstBar:             d("2025-11-20"),
+				MassiveEODArchiveLastBar:              d("2026-05-15"),
+				MassiveEODArchiveCoverageStart:        d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:          d("2026-05-15"),
+				MassiveEODArchivePreviousLifecycleEnd: d("2024-07-09"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("2025-11-20")))
+			Expect(got[0].ListingSource).To(Equal("massive_eod_archive_first_bar"))
+		})
+
+		It("rejects MassiveReferenceListingDate when the ticker's first EOD bar is multiple years after Massive's claim and coverage was active during the gap (iShares Morningstar rebrand)", func() {
+			// iShares Morningstar IMCG case: Massive returns list_date
+			// 2004-06-28 for ticker IMCG, but IMCG's own EOD lifecycle
+			// begins 2021-03-22 — the date the iShares Morningstar
+			// family was rebranded from JK* tickers to IM/IL/IS*
+			// tickers. The previous-lifecycle gate above does not fire
+			// because the new ticker has no earlier lifecycle in the
+			// archive under IMCG itself. The gap-tolerance gate
+			// catches it: coverage starts 2003-09-10 (active during
+			// the claimed 2004 listing), and the 17-year gap between
+			// the claim and the first bar is far above the 365-day
+			// tolerance.
+			candidates := []DateCandidates{{
+				AssetType:                      data.ETF,
+				Active:                         true,
+				MassiveReferenceListingDate:    d("2004-06-28"),
+				MassiveEODArchiveFirstBar:      d("2021-03-22"),
+				MassiveEODArchiveLastBar:       d("2026-05-15"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-15"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("2021-03-22")))
+			Expect(got[0].ListingSource).To(Equal("massive_eod_archive_first_bar"))
+		})
+
+		It("rejects MassiveReferenceListingDate for an OTC-to-listed transition where the entity predates coverage but the ticker's first bar is well inside coverage", func() {
+			// BLFS-style case: Massive returns the entity's
+			// existence date (1989-11-22) but the asset did not
+			// reach a tracked exchange until 2014. The EOD archive
+			// has continuous coverage from 2003-09-10 and the
+			// first BLFS bar is 2014-03-26 — there are no ingest
+			// gaps inside coverage, so the absence of bars from
+			// 2003-09-10 to 2014-03-26 is evidence the ticker
+			// was not tracked-exchange-listed during that span.
+			// The gate fires even though Massive's claim predates
+			// our coverage window.
+			candidates := []DateCandidates{{
+				AssetType:                      data.CommonStock,
+				Active:                         true,
+				MassiveReferenceListingDate:    d("1989-11-22"),
+				MassiveEODArchiveFirstBar:      d("2014-03-26"),
+				MassiveEODArchiveLastBar:       d("2026-05-15"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-15"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("2014-03-26")))
+			Expect(got[0].ListingSource).To(Equal("massive_eod_archive_first_bar"))
+		})
+
+		It("accepts MassiveReferenceListingDate when it predates the archive's coverage start AND the first bar sits at the coverage edge (legitimately old asset)", func() {
+			// MSA's case: list_date 1988-09-26 predates our 2003-09-10
+			// coverage. The gap-tolerance gate must not fire because
+			// the archive cannot speak to whether trading occurred
+			// before its coverage window opened. Without that
+			// guardrail we would discard valid listings for every
+			// pre-2003 asset.
+			candidates := []DateCandidates{{
+				AssetType:                      data.CommonStock,
+				Active:                         true,
+				MassiveReferenceListingDate:    d("1988-09-26"),
+				MassiveEODArchiveFirstBar:      d("2003-09-10"),
+				MassiveEODArchiveLastBar:       d("2026-05-15"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-15"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("1988-09-26")))
+			Expect(got[0].ListingSource).To(Equal("massive_reference_listing_date"))
+		})
+
+		It("accepts MassiveReferenceListingDate when the gap to the first EOD bar is inside the tolerance (routine IPO lag)", func() {
+			// A newly-listed asset whose first bar lands a few weeks
+			// after the listing — common when archive ingestion lags
+			// or when the IPO window has thin trading. The
+			// gap-tolerance gate must not fire because the gap is
+			// well below 365 days.
+			candidates := []DateCandidates{{
+				AssetType:                      data.CommonStock,
+				Active:                         true,
+				MassiveReferenceListingDate:    d("2022-04-01"),
+				MassiveEODArchiveFirstBar:      d("2022-04-15"),
+				MassiveEODArchiveLastBar:       d("2026-05-15"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-15"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("2022-04-01")))
+			Expect(got[0].ListingSource).To(Equal("massive_reference_listing_date"))
+		})
+
+		It("accepts MassiveReferenceListingDate when there is no previous EOD lifecycle (no reassignment)", func() {
+			// MSA's case: single continuous EOD lifecycle. Massive's
+			// list_date 1988-09-26 predates EOD coverage but the
+			// entity has been continuously trading throughout — there
+			// is no previous lifecycle to compare against and the
+			// gate must not fire. The list_date is the correct
+			// answer.
+			candidates := []DateCandidates{{
+				AssetType:                      data.CommonStock,
+				Active:                         true,
+				MassiveReferenceListingDate:    d("1988-09-26"),
+				MassiveEODArchiveFirstBar:      d("2003-09-10"),
+				MassiveEODArchiveLastBar:       d("2026-05-15"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-15"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("1988-09-26")))
+			Expect(got[0].ListingSource).To(Equal("massive_reference_listing_date"))
+		})
+
+		It("uses massive_eod_archive_last_bar_edge for an inactive asset whose EOD last bar sits at the coverage edge", func() {
+			// The inactive-only edge fallback exists so that
+			// active=false rows always carry a delisted timestamp even
+			// when the EOD last bar sits inside the buffer window of
+			// the archive's coverage end and the normal candidate is
+			// gated. The result is the last bar + 1 calendar day, the
+			// same as the non-edge candidate.
+			candidates := []DateCandidates{{
+				AssetType:                      data.CommonStock,
+				Active:                         false,
+				MassiveReferenceListingDate:    d("2018-04-10"),
+				MassiveEODArchiveFirstBar:      d("2018-04-10"),
+				MassiveEODArchiveLastBar:       d("2026-04-30"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-08"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].DelistingDate).To(Equal(d("2026-05-01")))
+			Expect(got[0].DelistingSource).To(Equal("massive_eod_archive_last_bar_edge"))
+		})
+
+		It("uses massive_reference_walk_last_seen_edge for an inactive asset with only walk evidence at the walk window edge", func() {
+			// When EOD coverage is missing and the walk last-seen
+			// sits inside the buffer of walk_end, the high-confidence
+			// walk_last_seen candidate is gated out. The inactive-only
+			// edge fallback supplies last_seen + 1 calendar day so the
+			// active=false row still ends with a delisted timestamp.
+			candidates := []DateCandidates{{
+				AssetType:                     data.CommonStock,
+				Active:                        false,
+				MassiveReferenceListingDate:   d("2003-09-15"),
+				MassiveReferenceWalkFirstSeen: d("2003-09-15"),
+				MassiveReferenceWalkLastSeen:  d("2026-05-01"),
+				MassiveReferenceWalkStart:     d("2003-09-10"),
+				MassiveReferenceWalkEnd:       d("2026-05-08"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].DelistingDate).To(Equal(d("2026-05-02")))
+			Expect(got[0].DelistingSource).To(Equal("massive_reference_walk_last_seen_edge"))
+		})
+
+		It("returns zero delisting for an inactive asset with no EOD or walk evidence (no metadata-mtime fallback)", func() {
+			// last_updated and ValidFor are metadata timestamps, not
+			// trading signals, so they are not delisting candidates.
+			// When no EOD bars and no walk evidence exist the algorithm
+			// must return zero rather than stamping today's date — the
+			// caller (delistedAssets) decides how to handle the gap.
+			candidates := []DateCandidates{{
+				AssetType:                   data.CommonStock,
+				Active:                      false,
+				MassiveReferenceListingDate: d("2010-03-15"),
+				ValidFor:                    d("2026-05-15"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].DelistingDate.IsZero()).To(BeTrue())
+			Expect(got[0].DelistingSource).To(Equal(""))
+		})
+
+		It("does not run the inactive-only edge fallbacks for an active asset", func() {
+			// Active assets are expected to have an open-ended (null)
+			// delisting. Even with an EOD last bar at the coverage
+			// edge, the edge fallback must not fire because the rule
+			// it backstops (active=false implies delisted set) does
+			// not apply.
+			candidates := []DateCandidates{{
+				AssetType:                      data.CommonStock,
+				Active:                         true,
+				MassiveReferenceListingDate:    d("2018-04-10"),
+				MassiveEODArchiveFirstBar:      d("2018-04-10"),
+				MassiveEODArchiveLastBar:       d("2026-04-30"),
+				MassiveEODArchiveCoverageStart: d("2003-09-10"),
+				MassiveEODArchiveCoverageEnd:   d("2026-05-08"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].DelistingDate.IsZero()).To(BeTrue())
+			Expect(got[0].DelistingSource).To(Equal(""))
+		})
+
+		It("prefers walk first-seen edge over ValidFor when both are available", func() {
+			// ValidFor is the absolute lowest priority: any signal
+			// older than the observation is preferred. Walk
+			// first-seen at the walk-start edge is the next-lowest
+			// real signal, so the algorithm must pick it ahead of
+			// ValidFor.
+			candidates := []DateCandidates{{
+				AssetType:                     data.CommonStock,
+				Active:                        false,
+				MassiveReferenceWalkFirstSeen: d("2003-09-10"),
+				MassiveReferenceWalkLastSeen:  d("2010-06-30"),
+				MassiveReferenceWalkStart:     d("2003-09-10"),
+				MassiveReferenceWalkEnd:       d("2026-05-08"),
+				ValidFor:                      d("2018-04-12"),
+			}}
+
+			got := AssignDatesForTicker(silentLogger(), candidates, calendarPreviousDay)
+
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].ListingDate).To(Equal(d("2003-09-10")))
+			Expect(got[0].ListingSource).To(Equal("massive_reference_walk_first_seen_edge"))
 		})
 	})
 

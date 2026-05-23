@@ -43,10 +43,6 @@ var dailyMarketSummaryURL = "https://api.massive.com/v2/aggs/grouped/locale/us/m
 // flat-files bucket gets the previous trading day's file at roughly
 // 11:00 America/New_York; until that cutoff we have to use the
 // Daily Market Summary REST endpoint to pick up that day's data.
-//
-// The check is wall-clock - it does not know about market holidays or
-// half days - which is fine because the REST endpoint also returns an
-// empty results set for non-trading days.
 func flatFileAvailableForDate(d, now time.Time) bool {
 	nyc, err := time.LoadLocation("America/New_York")
 	if err != nil {

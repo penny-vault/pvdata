@@ -24,33 +24,15 @@ import (
 	"github.com/penny-vault/pvdata/data"
 )
 
-// TTM span limits: a valid trailing-twelve-month aggregation should cover roughly
-// one calendar year. We allow some slack for fiscal calendar variations (52/53-
-// week filers whose fiscal year end drifts 4-6 days off calendar month-end, leap
-// years, fiscal-year boundary shifts) but reject anything that could not
-// plausibly represent twelve months of activity. KO's 52/53-week calendar aligns
-// quarters to Fridays, so its end-to-end 4-quarter span dips to 269 days in
-// years when Dec 31 falls mid-week and Sept quarter-end falls on Fri before the
-// 30th (2014, 2020, 2025).
+// TTM span limits accommodate 52/53-week filers (KO's 4-quarter span dips to
+// 269 days in some years) while rejecting spans too short or long to represent
+// twelve months of activity.
 const (
 	ttmMinSpanDays = 265
 	ttmMaxSpanDays = 410
 )
 
 // Period represents a unique reporting period identified from CompanyFacts.
-//
-// ARFiledDate is the earliest Filed date observed across every concept that
-// reported on this period. Because ParseCompanyFacts only retains facts from
-// 10-K and 10-Q filings, ARFiledDate is effectively "earliest 10-K or 10-Q
-// filing date that reported on this period" -- not a guarantee that the
-// filing on that date was the original 10-K. In practice, for most companies
-// the earliest filing for a fiscal year-end period IS the original 10-K, and
-// for a quarter-end period IS the original 10-Q, so ARFiledDate corresponds
-// to the "as-reported" view the names suggests.
-//
-// MRFiledDate is the latest Filed date observed across every concept for
-// this period, i.e. the most recent restatement or amendment that touched
-// any fact in the period.
 type Period struct {
 	PeriodEnd   time.Time // End date of the fiscal period
 	FormType    string    // "10-K" or "10-Q"
@@ -60,23 +42,6 @@ type Period struct {
 
 // IdentifyPeriods scans all facts in a CompanyFacts to find unique reporting periods
 // and their earliest/latest filing dates.
-//
-// SEC XBRL filings frequently contain "ghost periods": the same logical fiscal
-// quarter is reported with subtly different end dates across filings (e.g.
-// 2018-09-29 in one 10-Q and 2018-09-30 in a later amendment). To collapse
-// these together, periods are deduplicated by (NormalizeEventDate, FormType):
-//   - PeriodEnd is the latest raw end date in the group (the company's most
-//     recently used canonical end date)
-//   - ARFiledDate is the earliest filing date across the group
-//   - MRFiledDate is the latest filing date across the group
-//
-// Invariant: because ParseCompanyFacts drops every fact whose form is not
-// 10-K or 10-Q, ARFiledDate is effectively "earliest 10-K or 10-Q filing
-// date that reported on this period". A 10-K/A amendment or other form
-// cannot contribute to ARFiledDate (or MRFiledDate) because its facts never
-// enter the CompanyFacts in the first place.
-//
-// The returned slice is sorted by PeriodEnd ascending.
 func IdentifyPeriods(cf *CompanyFacts) []Period {
 	type periodKey struct {
 		end  time.Time
@@ -84,17 +49,9 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 	}
 
 	// First pass: group raw facts by exact (end, form) pair so we collect
-	// AR/MR filed dates per raw period end.
-	//
-	// Only duration concepts (those with a non-zero Start date) drive period
-	// identification. Instant concepts (balance sheet items like Assets that
-	// have no Start date) supplement existing periods during field resolution
-	// but must not create new periods on their own. Without this filter,
-	// comparative balance sheet data included in 10-Q filings (which reports
-	// instant values as of the prior fiscal year-end) would create spurious
-	// 10-Q periods at fiscal year-end dates. Those fake periods resolve only
-	// balance sheet fields, leaving revenues and shares at zero, which trips
-	// inline data quality checks.
+	// AR/MR filed dates per raw period end. Only duration concepts drive
+	// period identification; instants supplement existing periods during
+	// field resolution but must not create new periods on their own.
 	rawPeriods := make(map[periodKey]*Period)
 
 	for _, facts := range cf.Facts {
@@ -184,24 +141,8 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 	}
 
 	// Filter out spurious 10-Q periods that collide with a 10-K at the same
-	// normalized date. Two kinds of spurious 10-Q appear in practice:
-	//
-	//   1. Far-from-quarter-end: one-off transaction dates (e.g. JPM's
-	//      PaymentsToAcquireBusinessesGross at 2025-01-31 which normalizes
-	//      to 2024-12-31). Raw PeriodEnd is > 10 days from the normalized
-	//      quarter end; real quarterly filings are within a few days.
-	//
-	//   2. At-fiscal-year-end: duration facts in a 10-Q that happen to end
-	//      at the prior fiscal year-end (e.g. GS/JPM comparative or rolling
-	//      facts at 2024-12-31 in a Q1/Q2/Q3 2025 10-Q). Raw PeriodEnd
-	//      equals the 10-K's raw PeriodEnd; a company does not file a
-	//      separate 10-Q covering the same end date as its 10-K.
-	//
-	// We keep legitimate 10-Q periods that merely share a normalized date
-	// with a 10-K because of calendar-normalization (e.g. AAPL fiscal Q1
-	// at 2024-12-28 normalizes to 2024-12-31; its 10-K at 2024-09-28 also
-	// normalizes to 2024-12-31 via the annual-to-year-end rule, but the
-	// two raw PeriodEnds are ~3 months apart).
+	// normalized date, while keeping legitimate 10-Q periods that merely share
+	// a normalized date with a 10-K because of calendar-normalization.
 	const sameFiscalEndDays = 10
 
 	periods := make([]Period, 0, len(dedupedPeriods))
@@ -245,16 +186,11 @@ func IdentifyPeriods(cf *CompanyFacts) []Period {
 	return periods
 }
 
-// NormalizeEventDate converts a raw period end date to a normalized calendar date,
-// matching Sharadar's EventDate convention:
-//   - Quarterly (10-Q, ARQ/MRQ/ART/MRT): snaps to the *nearest* calendar quarter end
-//     (3/31, 6/30, 9/30, 12/31). For example, 2018-07-24 maps to 2018-06-30 (closer
-//     to the previous quarter end than the next), and 2018-09-29 maps to 2018-09-30
-//     (Apple's fiscal Q-end). Ties are broken by snapping forward.
-//   - Annual (10-K, ARY/MRY): snaps to 12/31 of the year determined by the nearest
-//     calendar quarter end. This handles companies whose fiscal year ends in January
-//     (e.g., NVDA FY2025 ending 2025-01-26 snaps to 2024-12-31 because Jan 26 is
-//     nearest to Q4 of the prior year).
+// NormalizeEventDate snaps a raw period end to Sharadar's EventDate convention.
+// Quarterly forms snap to the nearest calendar quarter end (ties forward).
+// Annual forms snap to 12/31 of the year determined by the nearest quarter
+// end, handling January-ending fiscal years (NVDA FY2025 ending 2025-01-26
+// snaps to 2024-12-31).
 func NormalizeEventDate(periodEnd time.Time, formType string) time.Time {
 	if formType == "10-K" {
 		qe := nearestQuarterEnd(periodEnd)
@@ -288,9 +224,8 @@ func nearestQuarterEnd(periodEnd time.Time) time.Time {
 	return best
 }
 
-// quarterEndCandidates returns the calendar quarter ends that bracket the given date,
-// ordered from latest (forward) to earliest (backward) so that tie-breaking favors
-// snapping forward.
+// quarterEndCandidates returns the bracketing calendar quarter ends, ordered
+// latest first so ties break by snapping forward.
 func quarterEndCandidates(periodEnd time.Time) []time.Time {
 	year := periodEnd.Year()
 	allEnds := []time.Time{
@@ -331,15 +266,8 @@ func absDuration(d time.Duration) time.Duration {
 	return d
 }
 
-// ResolveFieldsForFiling resolves all fields using only facts filed on or before
-// a specific date. This allows producing AR (earliest filed) vs MR (latest filed)
-// views of the same period.
-//
-// Each concept's facts slice is pre-sorted by Filed ascending in
-// ParseCompanyFacts, so this uses sort.Search to find the prefix of facts
-// available at filedDate and re-uses the underlying array via slicing rather
-// than copying. The filtered CompanyFacts is read-only by ResolveAllFields, so
-// sharing the backing array is safe.
+// ResolveFieldsForFiling resolves all fields using only facts filed on or
+// before filedDate, producing AR or MR views of the same period.
 func ResolveFieldsForFiling(cf *CompanyFacts, periodEnd time.Time, formType string, filedDate time.Time) map[string]float64 {
 	filtered := &CompanyFacts{
 		CIK:        cf.CIK,
@@ -429,14 +357,9 @@ func ResolveFieldsForFiling(cf *CompanyFacts, periodEnd time.Time, formType stri
 	return ResolveAllFields(filtered, periodEnd, formType)
 }
 
-// ResolveCumulativePerShareForFiling resolves YTD cumulative values for per-share
-// flow fields (EPS, EPSDiluted, DividendsPerBasicCommonShare) using only facts
-// filed on or before filedDate. Unlike ResolveFieldsForFiling which prefers
-// shorter-duration (single-quarter) facts, this prefers the longest-duration fact
-// to capture the company-reported YTD cumulative. This is needed for accurate Q4
-// synthesis: subtracting the Q3 YTD cumulative from the annual avoids rounding
-// error that occurs when summing three individually rounded quarterly per-share
-// values.
+// ResolveCumulativePerShareForFiling resolves YTD cumulative per-share flow
+// values (EPS, EPSDiluted, DPS) using longest-duration facts. Needed for Q4
+// synthesis to avoid rounding error from summing per-share quarterly values.
 func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, formType string, filedDate time.Time) map[string]float64 {
 	if formType != "10-Q" {
 		return nil
@@ -585,11 +508,9 @@ func ResolveCumulativePerShareForFiling(cf *CompanyFacts, periodEnd time.Time, f
 	return result
 }
 
-// overrideCumPSForSmallOtherSGA mirrors overrideSGAForSmallOtherSGA in
-// mapping.go but operates on the YTD cumulative map. Applied only when the
-// resolved YTD is already populated (so the override affects the same
-// filers whose annual map gets the override) and the company isn't a
-// franchisor.
+// overrideCumPSForSmallOtherSGA is the YTD-cumulative-map counterpart of
+// overrideSGAForSmallOtherSGA. Applied only when YTD is already populated
+// and the company isn't a franchisor.
 func overrideCumPSForSmallOtherSGA(cf *CompanyFacts, result map[string]float64, periodEnd time.Time, formType string) {
 	if _, ok := result["SellingGeneralAndAdministrativeExpense"]; !ok {
 		return
@@ -611,20 +532,9 @@ func overrideCumPSForSmallOtherSGA(cf *CompanyFacts, result map[string]float64, 
 	}
 }
 
-// identifyStaleMRFields returns the set of Fundamental field names whose
-// underlying XBRL concepts are no longer reported by the company. A concept is
-// stale if it appeared in older filings but is absent from both the company's
-// latest 10-K filing AND any 10-Q filed after that 10-K. The 10-K is used as
-// the primary reference because it's the comprehensive annual filing, but
-// later 10-Q filings also count: some filers (MCD) tag certain balance-sheet
-// concepts (OperatingLeaseLiability*) only on 10-Q despite including them in
-// the 10-K notes, and those concepts must not be treated as stale.
-//
-// A balance-sheet (instant) concept is additionally flagged stale when the
-// filer's LATEST 10-Q omits it — CELH dropped OperatingLeaseLiability*
-// tags from Q2/Q3 2025 10-Qs after filing them in the 2024 10-K and Q1
-// 2025 10-Q, and Sharadar's MR reports those concepts as 0 rather than
-// carrying forward the older filing's value.
+// identifyStaleMRFields returns field names whose XBRL concepts are no longer
+// reported (absent from the latest 10-K and any subsequent 10-Q, plus an
+// instant-concept check against the latest 10-Q).
 func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 	// Find the latest 10-K and latest 10-Q filing dates.
 	var latest10KFiled, latest10QFiled time.Time
@@ -646,17 +556,9 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 	}
 
 	// Concepts present in the latest 10-K filing or in any 10-Q filed on or
-	// after that 10-K date. Including post-10-K 10-Qs ensures concepts that
-	// the filer tags only on 10-Q (e.g. MCD's OperatingLeaseLiability*) are
-	// not mis-classified as stale.
-	//
-	// For flow-style concepts (cash flow lines, income statement items),
-	// also include any 10-Q filed within the 18 months before the latest
-	// 10-K. WMT-style filers report non-recurring flows like
-	// ProceedsFromDivestitureOfBusinesses only in the quarters when the
-	// underlying activity happens — treating those as stale erases the
-	// quarterly value from MR synthesis even though the concept is still
-	// a valid active disclosure.
+	// after that 10-K date. For flow-style concepts, also include any 10-Q
+	// filed within the 18 months before the latest 10-K so that non-recurring
+	// flows (only tagged in active-event quarters) are not treated as stale.
 	flowLookback := latest10KFiled.AddDate(-1, -6, 0)
 	activeConcepts := make(map[string]bool)
 	latestQConcepts := make(map[string]bool)
@@ -803,12 +705,9 @@ func identifyStaleMRFields(cf *CompanyFacts) map[string]bool {
 	return staleFields
 }
 
-// stripStaleAndRecompute removes stale fields from a resolved field map and
-// recomputes derived fields whose operands were affected by staleness. This
-// ensures that values like EBIT (which depends on InterestExpense) are
-// recalculated without the stale operand, while derived fields resolved via
-// FallbackTags (e.g. DepreciationDepletionAndAmortization) are preserved when
-// none of their operands changed.
+// stripStaleAndRecompute removes stale fields and recomputes derived fields
+// whose operands changed, leaving fallback-resolved values intact when none
+// of their operands moved.
 func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool, cf *CompanyFacts) {
 	if len(stale) == 0 {
 		return
@@ -871,24 +770,8 @@ func stripStaleAndRecompute(fields map[string]float64, stale map[string]bool, cf
 	}
 }
 
-// DecumulateYTD converts YTD cumulative values in a 10-Q resolved field map to
-// single-quarter values by subtracting the prior quarter's (also YTD) values.
-//
-// SEC 10-Q filings report cash flow items as year-to-date cumulative values
-// only -- no single-quarter fact exists. Income statement items typically have
-// both a single-quarter and a YTD fact; ResolveDirect's shorter-duration
-// preference already picks the quarterly fact for those. This function handles
-// the remaining YTD-only fields.
-//
-// current and prior are the original resolved field maps (prior may contain YTD
-// values). cf is the unfiltered CompanyFacts; filedDate scopes the needsDecumulation
-// check to facts filed on or before filedDate so that a future amendment adding
-// a single-quarter fact does not mask the original filing's YTD-only reporting.
-// The returned map is a copy; current and prior are not modified.
-//
-// After de-cumulating direct fields, derived flow fields are recomputed from the
-// de-cumulated components. Metric-type derived fields (ratios) are then
-// recomputed from the updated flow/point-in-time values.
+// DecumulateYTD subtracts the prior YTD field map from current to produce
+// single-quarter values. Returns a copy; inputs are not modified.
 func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPeriodEnd, periodEnd time.Time, formType string, filedDate time.Time) map[string]float64 {
 	result := make(map[string]float64, len(current))
 	for k, v := range current {
@@ -1060,14 +943,9 @@ func DecumulateYTD(cf *CompanyFacts, current, prior map[string]float64, priorPer
 	return result
 }
 
-// ComputeTTM computes trailing twelve month values from the 4 most recent quarterly
-// resolved field sets. Flow items are summed; point-in-time items use the latest value.
-//
-// When strictFlow is true, flow fields require all 4 quarters to be present;
-// this matches Sharadar's MR (most-recently-reported) behavior where concepts
-// the company has stopped reporting are dropped from trailing values. When
-// false, any quarter with the field contributes to the sum (missing quarters
-// treated as 0), which preserves the trailing value as the field rolls off.
+// ComputeTTM sums flow fields and takes the latest point-in-time value across
+// 4 quarterly resolved sets. With strictFlow, flow fields require all 4
+// quarters to be present (Sharadar MR behavior); otherwise missing = 0.
 func ComputeTTM(quarters []map[string]float64, strictFlow bool) map[string]float64 {
 	if len(quarters) < 4 {
 		return nil
@@ -1130,12 +1008,8 @@ func ComputeTTM(quarters []map[string]float64, strictFlow bool) map[string]float
 
 // ComputeMultiQAverages computes period-average balance sheet fields by
 // averaging across multiple quarterly snapshots (typically 4 for TTM and
-// annual dimensions). current is the emit-ready field map (TTM aggregate or
-// annual) used for ratio numerators; quarterMaps are the individual quarterly
-// emit maps whose balance sheet fields are averaged.
-//
-// Returns a map containing only the computed fields; the caller merges these
-// into the emit map. Fields whose inputs are missing are silently omitted.
+// annual dimensions). Returns a map containing only the computed fields;
+// fields whose inputs are missing are silently omitted.
 func ComputeMultiQAverages(current map[string]float64, quarterMaps []map[string]float64) map[string]float64 {
 	result := make(map[string]float64)
 
@@ -1209,14 +1083,8 @@ func ComputeMultiQAverages(current map[string]float64, quarterMaps []map[string]
 	return result
 }
 
-// BuildFundamental converts a resolved field map into a data.Fundamental struct.
-//
-// lastUpdated is the timestamp the caller wants to record as the data's
-// freshness marker. SEC fundamentals use the underlying filing date so re-runs
-// of the provider produce stable LastUpdated values for the same source data:
-//   - AR observations pass the AR (earliest) filing date
-//   - MR observations pass the MR (latest) filing date
-//   - TTM observations pass the latest MR filing date among the constituent quarters
+// BuildFundamental converts a resolved field map into a data.Fundamental.
+// lastUpdated is the filing date so re-runs produce stable values.
 func BuildFundamental(fields map[string]float64, ticker, compositeFigi, dimension string, eventDate, dateKey, reportPeriod, lastUpdated time.Time) *data.Fundamental {
 	f := &data.Fundamental{
 		EventDate:     eventDate,

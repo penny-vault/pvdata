@@ -43,16 +43,6 @@ const cikMisattributionGraceDays = 365
 // swaps if the candidate passes the same gates the walk-time
 // ResolveAssetTypeWithCIKCorrection wrapper uses (different CIK,
 // no ticker conflict against the candidate's SEC tickers list).
-//
-// Runs inside enrichForPublish before sec.EnrichSubmissions so the
-// SEC name / SIC / description / etc. fields are filled from the
-// corrected entity rather than the wrong one. The SEC-side
-// correctMisattributedCIK in sec.EnrichSubmissions remains as a
-// fallback for callers that have already set ListingDate via Massive's
-// per-ticker reference, but the Massive-side wrapper has the broader
-// signal: walk and EOD evidence are available even when Massive's
-// per-ticker reference returns no list_date, which is the typical
-// case for delisted tickers.
 func (api *massiveAssetFetcher) correctMisattributedCIK(ctx context.Context, asset *data.Asset) {
 	if strings.TrimSpace(asset.CIK) == "" || strings.TrimSpace(asset.Name) == "" {
 		return
@@ -129,11 +119,6 @@ func (api *massiveAssetFetcher) correctMisattributedCIK(ctx context.Context, ass
 // seen date for the (ticker, CIK) or (ticker, FIGI) pair, or the EOD
 // archive's first bar of the lifecycle containing asset.ValidFor.
 // Returns the zero time when no evidence is available.
-//
-// This is intentionally a "best lower bound" rather than the asset's
-// listing date — listing dates may not have been assigned yet at the
-// point this is called, but walk and EOD evidence are populated
-// during the walk phase and are available throughout enrichment.
 func (api *massiveAssetFetcher) earliestTradingEvidence(asset *data.Asset) time.Time {
 	var earliest time.Time
 

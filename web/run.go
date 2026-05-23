@@ -76,12 +76,10 @@ type RunOptions struct {
 
 // RunSubscription executes a fetch for the subscription, persists observations,
 // saves run history, runs post-fetch hooks, publishes SSE events (if a run is
-// attached), and pings healthchecks at start and finish. The final run status
-// is returned so the scheduler can decide whether to retry.
-//
-// The caller must reserve a registry slot via TryReserve and pass the resulting
-// activeRun in opts.Run. RunSubscription owns the run lifecycle thereafter and
-// will call run.finish() before returning.
+// attached), and pings healthchecks at start and finish. The caller must
+// reserve a registry slot via TryReserve and pass the resulting activeRun in
+// opts.Run; RunSubscription owns the run lifecycle and calls run.finish()
+// before returning.
 func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Subscription, opts RunOptions) data.StatusType {
 	if opts.Run != nil {
 		defer opts.Run.finish()

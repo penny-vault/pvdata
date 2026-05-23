@@ -26,16 +26,8 @@ import (
 )
 
 // NewAuthMiddleware returns a Fiber handler that validates RS256 JWTs against
-// the configured OIDC issuer. Works with any provider (Auth0, Zitadel, etc.)
-// that publishes a JWKS and issues RS256-signed tokens.
-//
-// Required config keys:
-//
-//	auth.issuer    — full issuer URL exactly as it appears in the token's iss claim
-//	auth.jwks_url  — full JWKS URL
-//	auth.audience  — expected audience claim
-//
-// When auth.issuer is empty, it returns a pass-through middleware for dev mode.
+// the configured OIDC issuer (auth.issuer, auth.jwks_url, auth.audience).
+// When auth.issuer is empty, returns a pass-through middleware for dev mode.
 func NewAuthMiddleware() fiber.Handler {
 	issuer := viper.GetString("auth.issuer")
 	jwksURL := viper.GetString("auth.jwks_url")

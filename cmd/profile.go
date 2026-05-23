@@ -40,11 +40,6 @@ var (
 // PersistentPostRunE, with a SIGINT/SIGTERM handler that flushes the
 // CPU profile before exit so a Ctrl-C on a slow import still produces
 // a usable trace.
-//
-// CPU + heap diagnose hot code paths; block + mutex diagnose stalls
-// (channel waits, lock contention) — the latter is what you want when
-// the CPU profile shows the process idle most of the time, which is
-// the usual signature of a serial pipeline bottleneck.
 func registerProfileFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&cpuProfilePath, "cpu-profile", "", "write CPU profile to this file (analyse with `go tool pprof <file>`)")
 	cmd.PersistentFlags().StringVar(&memProfilePath, "mem-profile", "", "write heap profile to this file on exit (analyse with `go tool pprof <file>`)")

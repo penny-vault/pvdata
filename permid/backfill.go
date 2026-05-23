@@ -43,22 +43,11 @@ type backfillCandidate struct {
 	table string
 }
 
-// BackfillEmpty scans every asset_description table for rows
-// missing OrganizationPermID or InstrumentPermID, resolves up to
-// `limit` of them via Enrich, and writes the resolved values back
-// to the source table.
-//
-// Pass limit = DefaultBackfillLimit for the standard cadence;
-// pass 0 to no-op. The Enrich call honors the same API budget,
-// so a stalled Refinitiv quota will simply leave some candidates
-// unresolved for a future run rather than fail the backfill.
-//
-// Designed to be called as a step inside the run plumbing
-// (cmd/run.go / web/run.go) after the main Fetch completes — not
-// every provider produces assets, but PermID coverage is a
-// cross-cutting concern that every run can chip away at.
-//
-// Skips silently when no permid.apikey is configured.
+// BackfillEmpty scans every asset_description table for rows missing
+// OrganizationPermID or InstrumentPermID, resolves up to `limit` of
+// them via Enrich, and writes the resolved values back to the source
+// table. Pass limit = DefaultBackfillLimit for the standard cadence;
+// pass 0 to no-op. Skips silently when no permid.apikey is configured.
 func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, nil

@@ -24,13 +24,7 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// resolveAssetTypeCache memoizes the form-vote result keyed by CIK so
-// the same CIK queried from many pages of a walk pays the form-vote
-// cost (and the FetchSubmissions cache lookup) exactly once. Without
-// this, a full-universe walk re-parses the same ~250-row form list
-// per-record per-day for every untyped ticker — the same cost the
-// submissionsCache eliminates for the network layer, repeated for
-// CPU.
+// resolveAssetTypeCache memoizes the form-vote result keyed by CIK.
 type resolveResult struct {
 	assetType data.AssetType
 	ok        bool
@@ -40,50 +34,15 @@ var (
 	resolveAssetTypeCacheMu sync.RWMutex
 	resolveAssetTypeCache   = map[int]resolveResult{}
 
-	// resolveAssetTypeSingleflight collapses concurrent ResolveAssetType
-	// calls for the same CIK; without it, 128 walk workers all missing
-	// the cache simultaneously would each spawn FetchSubmissions
-	// goroutines and re-do the form-vote parse.
+	// resolveAssetTypeSingleflight collapses concurrent calls for the same CIK.
 	resolveAssetTypeSingleflight singleflight.Group
 )
 
-// ResolveAssetType inspects SEC submissions for the given CIK and
-// returns the asset type the entity primarily files as. Used by the
-// Massive walk to classify records that Massive returns without a
-// type tag — common for delisted pre-2010 tickers where Massive's
-// reference data has the entity but no `type` field.
-//
-// Form-to-type mapping (case-insensitive, prefix-based to catch the
-// many SEC form variants — 10-K, 10-K/A, 10-KSB, 10KSB40, 10-K405,
-// 10-KT, etc. all signal common-stock operating-issuer status):
-//
-//   - 10-K* / 10K*    -> data.CommonStock (incl. small business 10-KSB)
-//   - 10-Q* / 10Q*    -> data.CommonStock (incl. small business 10-QSB)
-//   - 20-F* / 40-F*   -> data.ADRC        (foreign private issuer)
-//   - N-CSR* / N-2*   -> data.CEF
-//   - N-1A*           -> data.MutualFund
-//
-// Form votes are counted across the `recent` filings batch only. The
-// overflow `files[]` would require fetching each old-filings JSON to
-// see its forms — recent filings carry the same type signal for any
-// entity that filed within the last ~1000 filings, which covers every
-// active and recently-delisted issuer (e.g., small banks that delisted
-// in the early 2000s still appear in `recent` because their pre-delist
-// filings total well under 1000).
-//
-// CommonStock wins ties: BDCs and equity REITs file both 10-K and N-2,
-// and they trade as common stock. ADRC wins ties with CommonStock when
-// a foreign issuer files both 20-F (foreign annual) and an occasional
-// 10-K, which is rare in practice.
-//
-// Returns ("", false) when:
-//   - CIK is empty/invalid
-//   - SEC has no record for the CIK (404)
-//   - No filings match a known type-signaling form
-//
-// Uses the same process-wide submissionsCache as FetchSubmissions, so a
-// CIK queried for descriptive enrichment and again for type resolution
-// hits the network only once.
+// ResolveAssetType inspects SEC submissions for the given CIK and returns the
+// asset type the entity primarily files as. Used by the Massive walk to
+// classify records that Massive returns without a type tag — common for
+// delisted pre-2010 tickers where Massive's reference data has the entity but
+// no `type` field.
 func ResolveAssetType(ctx context.Context, cik string) (data.AssetType, bool) {
 	n, err := strconv.Atoi(strings.TrimSpace(cik))
 	if err != nil || n <= 0 {
@@ -139,30 +98,11 @@ func ResolveAssetType(ctx context.Context, cik string) (data.AssetType, bool) {
 	return r.assetType, r.ok
 }
 
-// ResolveAssetTypeWithCIKCorrection runs ResolveAssetType against the
-// supplied CIK and, when no tracked type comes back, tries a single
-// remediation: search SEC by the asset's name for a different CIK
-// whose filings do resolve to a tracked type. The function returns
-// the resolved type, the CIK that produced it (the supplied CIK on a
-// direct hit; the corrected CIK on a successful remediation), and a
-// boolean indicating whether any tracked type was resolved at all.
-//
-// The remediation is intentionally narrow. It only fires when the
-// supplied CIK has no operating-company-shaped filings (the same
-// signal ResolveAssetType uses, just inverted), and a candidate is
-// accepted only when all of the following hold:
-//
-//   - The candidate CIK is different from the supplied CIK.
-//   - FindCIKByName accepts the match by its existing similarity gate.
-//   - The candidate's SEC `tickers` array is empty or contains the
-//     asset's ticker. A non-empty `tickers` array that does not
-//     include the asset's ticker is a positive conflict signal and
-//     causes the remediation to bail.
-//   - ResolveAssetType against the candidate returns a tracked type.
-//
-// year is the year the SEC name search should center its ±3-year
-// window on. Pass the asset's ValidFor year (walk-surfaced) or the
-// year of the listing era when known.
+// ResolveAssetTypeWithCIKCorrection runs ResolveAssetType against cik and, on
+// miss, tries a single remediation: search SEC by name for a different CIK
+// whose filings resolve. A candidate is rejected when its SEC `tickers` array
+// is non-empty and does not include ticker. year centers the SEC name
+// search's ±3-year window.
 func ResolveAssetTypeWithCIKCorrection(ctx context.Context, cik, ticker, name string, year int) (data.AssetType, string, bool) {
 	if at, ok := ResolveAssetType(ctx, cik); ok {
 		return at, cik, true
@@ -204,10 +144,9 @@ func ResolveAssetTypeWithCIKCorrection(ctx context.Context, cik, ticker, name st
 	return candidateType, candidateCIK, true
 }
 
-// containsTicker reports whether list contains ticker under case- and
-// whitespace-insensitive comparison. An empty ticker argument returns
-// false, which keeps the caller from inferring a match when the
-// asset itself has no ticker to test against.
+// containsTicker reports whether list contains ticker (case- and
+// whitespace-insensitive). An empty ticker returns false so a missing ticker
+// is not treated as a match.
 func containsTicker(list []string, ticker string) bool {
 	target := strings.ToUpper(strings.TrimSpace(ticker))
 	if target == "" {
@@ -224,10 +163,7 @@ func containsTicker(list []string, ticker string) bool {
 }
 
 // resolveTypeFromForms is the pure form-vote tabulation used by
-// ResolveAssetType. Split out from the network-dependent caller so
-// the form-matching rules are unit-testable without standing up a
-// stubbed SEC client. See ResolveAssetType for the form-to-type
-// mapping and tie-break rules.
+// ResolveAssetType. See ResolveAssetType for the tie-break rules.
 func resolveTypeFromForms(forms []string) (data.AssetType, bool) {
 	var csVotes, adrcVotes, cefVotes, mfVotes int
 

@@ -110,6 +110,22 @@ var _ = Describe("sanitizeWalkComposites", func() {
 		}
 	}
 
+	// Most tests use the legacy behavior where no US-evidence override
+	// fires (production wiring backs this with the EOD archive).
+	noUSEvidence := func(string) bool { return false }
+
+	usEvidenceFor := func(tickers ...string) usEvidenceChecker {
+		set := make(map[string]struct{}, len(tickers))
+		for _, t := range tickers {
+			set[t] = struct{}{}
+		}
+
+		return func(ticker string) bool {
+			_, ok := set[ticker]
+			return ok
+		}
+	}
+
 	It("drops composites OpenFIGI confirms as non-US", func() {
 		// ATVI: BBG000CVWGS6 is the real US listing; the other two are
 		// Massive substitutions for foreign-exchange composites on
@@ -124,7 +140,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG00DJ2WYN1": "EO",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, noUSEvidence)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("ATVI:BBG000CVWGS6"))
@@ -139,7 +155,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 
 		stub := confirmer(nil)
 
-		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, noUSEvidence)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("BBI:BBG_BLOCKBUSTER"))
@@ -156,7 +172,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG_SHORTUS": "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, noUSEvidence)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("FOO:BBG_LONGUS"))
@@ -174,7 +190,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG_NOCIK":   "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, noUSEvidence)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("FOO:BBG_WITHCIK"))
@@ -186,11 +202,35 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG000B9XRY4": "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub)
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, noUSEvidence)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("AAPL:BBG000B9XRY4"))
 		Expect(windows).To(HaveKey("AAPL:BBG000B9XRY4"))
+	})
+
+	It("drops a composite confirmed as non-US by OpenFIGI when the broader query reveals foreign exchange info (DAX-style)", func() {
+		// DAX: Massive returned BBG00MVW5W00 (Global X, US) on most
+		// walk dates and BBG00JS9DJC9 (Horizons foreign-exchange
+		// composite) on a few historical dates. The broader
+		// ValidateCompositeFIGI query (COMPOSITE_ID_BB_GLOBAL +
+		// includeUnlistedEquities=true) surfaces BBG00JS9DJC9 as
+		// exchCode=TH; sanitize then drops it via the standard
+		// confirmed-non-US branch.
+		addRow("DAX", "BBG00MVW5W00", "BBG00MVW5WR1", "0001432353", "2018-01-01", "2023-12-31")
+		addRow("DAX", "BBG00JS9DJC9", "BBG007DJQ2Z7", "", "2017-02-28", "2018-12-21")
+
+		stub := confirmer(map[string]string{
+			"BBG00MVW5W00": "US",
+			"BBG00JS9DJC9": "TH",
+		})
+
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, noUSEvidence)
+
+		Expect(assets).To(HaveLen(1))
+		Expect(assets).To(HaveKey("DAX:BBG00MVW5W00"))
+		Expect(assets).NotTo(HaveKey("DAX:BBG00JS9DJC9"))
+		Expect(windows).NotTo(HaveKey("DAX:BBG00JS9DJC9"))
 	})
 
 	It("consolidates a trailing CIK-only entry into the FIGI'd entry for the same lifecycle", func() {
@@ -227,7 +267,7 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG00K6RT2X7": "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, windowsByCIK, map[string]walkWindow{}, stub)
+		sanitizeWalkComposites(ctx, assets, windows, windowsByCIK, map[string]walkWindow{}, stub, noUSEvidence)
 
 		Expect(assets).To(HaveLen(1))
 		Expect(assets).To(HaveKey("MCC:BBG00K6RT2X7"))
@@ -265,11 +305,86 @@ var _ = Describe("sanitizeWalkComposites", func() {
 			"BBG_BLOCK": "US",
 		})
 
-		sanitizeWalkComposites(ctx, assets, windows, windowsByCIK, map[string]walkWindow{}, stub)
+		sanitizeWalkComposites(ctx, assets, windows, windowsByCIK, map[string]walkWindow{}, stub, noUSEvidence)
 
 		Expect(assets).To(HaveLen(2))
 		Expect(assets).To(HaveKey("BBI:BBG_BLOCK"))
 		Expect(assets).To(HaveKey("BBI:cik:0000819050"))
+	})
+
+	It("mints a synthetic FIGI when OpenFIGI says non-US but the EOD archive has US bars", func() {
+		// AVP-style case: Massive returned composite BBG0089KKP28 for
+		// ticker AVP during the walk. OpenFIGI today resolves that
+		// composite to AVPUSD on exchange code EO (non-US) — the
+		// post-acquisition foreign listing. Our (US-only) EOD archive
+		// has continuous AVP bars for 2003-2020, so the historical
+		// lifecycle was on a US exchange regardless of OpenFIGI's
+		// current verdict. Sanitize must keep the asset and replace
+		// the foreign-tainted composite with a PV synthetic so
+		// downstream stages do not overwrite it back to the foreign
+		// FIGI.
+		addRow("AVP", "BBG0089KKP28", "BBG001S5NZG5", "0000008868", "2003-09-10", "2020-01-03")
+
+		stub := confirmer(map[string]string{
+			"BBG0089KKP28": "EO",
+		})
+
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, usEvidenceFor("AVP"))
+
+		Expect(assets).To(HaveLen(1))
+		kept := assets["AVP:BBG0089KKP28"]
+		Expect(kept).NotTo(BeNil())
+		Expect(kept.Ticker).To(Equal("AVP"))
+		Expect(kept.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGIFromCIK("0000008868", "AVP")))
+		Expect(figi.IsSyntheticFIGI(kept.CompositeFigi)).To(BeTrue())
+		Expect(kept.ShareClassFigi).To(Equal(""))
+		Expect(kept.CIK).To(Equal("0000008868"))
+		Expect(windows).NotTo(HaveKey("AVP:BBG0089KKP28"))
+	})
+
+	It("mints a synthetic FIGI from ticker+name when no CIK is available", func() {
+		addRow("XYZ", "BBG_FOREIGN", "BBG_SC", "", "2003-09-10", "2010-01-03")
+		assets["XYZ:BBG_FOREIGN"].Name = "Old US Co Inc"
+
+		stub := confirmer(map[string]string{
+			"BBG_FOREIGN": "GR",
+		})
+
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, usEvidenceFor("XYZ"))
+
+		Expect(assets).To(HaveLen(1))
+		kept := assets["XYZ:BBG_FOREIGN"]
+		Expect(kept.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGI("XYZ", "Old US Co Inc")))
+		Expect(figi.IsSyntheticFIGI(kept.CompositeFigi)).To(BeTrue())
+	})
+
+	It("falls through to drop when EOD evidence exists but there is no CIK and no name to mint from", func() {
+		addRow("BARE", "BBG_FOREIGN", "BBG_SC", "", "2003-09-10", "2010-01-03")
+
+		stub := confirmer(map[string]string{
+			"BBG_FOREIGN": "GR",
+		})
+
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, usEvidenceFor("BARE"))
+
+		Expect(assets).NotTo(HaveKey("BARE:BBG_FOREIGN"))
+	})
+
+	It("still drops a non-US composite when the EOD archive has no bars for the ticker", func() {
+		// Confirms the EOD override fires only when we have direct
+		// US trading evidence. A non-US composite with no EOD bars is
+		// dropped as before so the original Massive substitution
+		// failure mode stays patched.
+		addRow("FOOF", "BBG_FOREIGNONLY", "BBG_FF_SC", "", "2020-01-02", "2020-01-02")
+
+		stub := confirmer(map[string]string{
+			"BBG_FOREIGNONLY": "GR",
+		})
+
+		sanitizeWalkComposites(ctx, assets, windows, map[string]walkWindow{}, map[string]walkWindow{}, stub, usEvidenceFor("OTHER"))
+
+		Expect(assets).NotTo(HaveKey("FOOF:BBG_FOREIGNONLY"))
+		Expect(windows).NotTo(HaveKey("FOOF:BBG_FOREIGNONLY"))
 	})
 })
 

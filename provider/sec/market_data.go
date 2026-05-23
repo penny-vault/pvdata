@@ -52,16 +52,10 @@ type enrichConfig struct {
 	siblingFigi string
 }
 
-// WithMultiClass supplies the per-class cover-page share facts (from
-// cf.ClassShares) and the sibling share class's composite FIGI for the
-// market-ratio share_factor formula:
-//
-//	share_factor = (A*A_price + B*B_price) / ((A+B) * our_price)
-//
-// A_shares and B_shares come from cf.ClassShares at the most recent filing on
-// or before f.EventDate. A_price / B_price come from lookupPrice at that same
-// filing date. When siblingFigi is empty or no class pair is found, the
-// formula falls back to the legacy WAS_d / SharesBasic ratio.
+// WithMultiClass supplies per-class cover-page shares (cf.ClassShares) and the
+// sibling share class's composite FIGI for the market-ratio share_factor
+// formula. When siblingFigi is empty or no class pair is found, the formula
+// falls back to the legacy WAS_d / SharesBasic ratio.
 func WithMultiClass(cf *CompanyFacts, siblingFigi string) EnrichOption {
 	return func(c *enrichConfig) {
 		c.cf = cf
@@ -69,24 +63,11 @@ func WithMultiClass(cf *CompanyFacts, siblingFigi string) EnrichOption {
 	}
 }
 
-// EnrichMarketData populates price-derived market-data fields on each
-// Fundamental record. It groups records by DateKey and processes them in
-// three phases:
-//
-//  1. Phase 1 (all dimensions): set Price, ShareFactor, FxUSD,
-//     MarketCapitalization, EnterpriseValue, and PB from a price lookup.
-//     Records with a zero price are skipped entirely.
-//
-//  2. Phase 2 (trailing/annual: ART, MRT, ARY, MRY): compute ratio fields
-//     PE, PS, PE1, PS1, EVtoEBIT, EVtoEBITDA, DividendYield.
-//
-//     2b. PayoutRatio (all dimensions): DPS / EPS (basic) is computed
-//     independently for every dimension (quarterly values differ from
-//     trailing values).
-//
-//  3. Phase 3 (quarterly: ARQ, MRQ): copy ratio fields (but NOT PB or
-//     PayoutRatio) from the corresponding trailing dimension within the
-//     same DateKey group.
+// EnrichMarketData populates price-derived fields on each Fundamental record.
+// Groups records by DateKey and processes three phases: (1) price-derived
+// fields for all dimensions, (2) ratio fields for trailing/annual dimensions
+// plus PayoutRatio for all dimensions, (3) copy ratios from trailing to
+// quarterly dimensions within the same DateKey group.
 func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupFn, opts ...EnrichOption) {
 	var cfg enrichConfig
 	for _, opt := range opts {
@@ -115,16 +96,13 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 		havePrev           bool
 	)
 
-	// Map of calendar-quarter date key → MRQ enterprise value. MRY copies
-	// its EV from the MRQ at the fiscal year-end, not the latest MRQ before
-	// the MRY date key. The fiscal year-end's calendar-quarter date is
-	// NormalizeEventDate(ReportPeriod, "10-Q").
+	// MRY copies its EV from the MRQ at the fiscal year-end (not the latest
+	// MRQ before the MRY date key), so we key MRQ EVs by their date.
 	mrqEVByDateKey := make(map[time.Time]int64)
 
-	// shareFactorRawByFundamental holds the unrounded share_factor for each
-	// fundamental. The stored f.ShareFactor is rounded to 3 decimals (to
-	// match Sharadar's displayed column); Phase 2 ratio fields need the
-	// unrounded value to avoid compounding rounding error.
+	// f.ShareFactor is rounded to 3 decimals to match Sharadar's displayed
+	// column; Phase 2 ratios need the unrounded value to avoid compounding
+	// rounding error.
 	shareFactorRawByFundamental := make(map[*data.Fundamental]float64)
 
 	for _, dk := range dateKeys {
@@ -143,28 +121,12 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 				continue
 			}
 
-			// Compute share_factor for multi-class share companies.
-			// When weighted-average diluted shares significantly exceed
-			// shares outstanding, the company has multiple share classes
-			// where the traded instrument represents a fraction of the
-			// total economic ownership (e.g. BRK/B: 1 Class A = 1500
-			// Class B). The share_factor bridges SharesBasic to the
-			// total equivalent shares for market cap calculation.
-			//
-			// Preferred formula (when WithMultiClass is configured and both
-			// class share counts + sibling price are available):
-			//
-			//	share_factor = (A*A_price + B*B_price) / ((A+B) * our_price)
-			//
-			// Sharadar uses this market-ratio formulation because A and B
-			// shares do NOT trade at exactly the nominal conversion ratio
-			// (e.g. 1500 for BRK); the actual A/B price ratio fluctuates a
-			// fraction of a percent and share_factor reflects that.
-			//
-			// Fallback formula (single-class or when multi-class data is
-			// unavailable): WAS_diluted / SharesBasic. This approximates
-			// the market-ratio answer by assuming A_price / B_price equals
-			// the legal conversion ratio.
+			// Multi-class share_factor bridges SharesBasic to the total
+			// economic share count. Preferred: market-ratio formula via
+			// WithMultiClass. Fallback: WAS_diluted / SharesBasic, which
+			// assumes A/B trade at the legal conversion ratio (e.g. 1500
+			// for BRK), though they actually deviate by a fraction of a
+			// percent.
 			shareFactor := 1.0
 			shareFactorRaw := 1.0
 
@@ -183,10 +145,9 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 
 			mktCap := int64(price * float64(f.SharesBasic) * shareFactorRaw)
 
-			// MR dimensions use the previous quarter's debt and cash for
-			// enterprise value. Sharadar's MR price/shares reflect the most
-			// recent filing, but the balance sheet data available at that
-			// point is from the prior quarter's filing.
+			// MR dimensions use the previous quarter's debt/cash for EV:
+			// MR price/shares reflect the most recent filing, but the
+			// balance sheet at that point is from the prior quarter.
 			debt := f.TotalDebt
 			cash := f.CashAndEquivalents
 
@@ -197,8 +158,7 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 
 			ev := mktCap + debt - cash
 
-			// MRY copies its EV from the fiscal year-end MRQ. The fiscal
-			// year-end's calendar-quarter key is the normalized report period.
+			// MRY copies its EV from the fiscal year-end MRQ.
 			if f.Dimension == "MRY" && !f.ReportPeriod.IsZero() {
 				fyEndQKey := NormalizeEventDate(f.ReportPeriod, "10-Q")
 				if fyEV, ok := mrqEVByDateKey[fyEndQKey]; ok {
@@ -214,21 +174,16 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 
 			shareFactorRawByFundamental[f] = shareFactorRaw
 
-			// For multi-class companies, WeightedAverageShares from the XBRL
-			// tag represents the combined total across all share classes
-			// (e.g. BRK/B: 2.16B B-equivalent including Class A). Sharadar
-			// instead uses the per-class shares (same as SharesBasic) for
-			// WeightedAverageShares, with share_factor bridging to the total.
-			// This gives per-share metrics denominated in the traded class.
+			// Sharadar denominates per-share metrics in the traded class:
+			// WeightedAverageShares = SharesBasic, with share_factor bridging
+			// to the multi-class total.
 			if shareFactor > 1.1 && f.SharesBasic > 0 {
 				f.WeightedAverageShares = int64(f.SharesBasic)
 			}
 
-			// For dual-class filers, per-share metrics derived off of
-			// WeightedAverageShares need to divide by the B-equivalent share
-			// count (WAS × share_factor) rather than the raw per-class count.
-			// The initial MappingDerived computation ran before share_factor
-			// was known, so rescale now with the unrounded share_factor.
+			// Per-share metrics need to divide by the B-equivalent share count
+			// (WAS × share_factor). MappingDerived ran before share_factor was
+			// known, so rescale with the unrounded value.
 			if shareFactorRaw > 1.1 && f.WeightedAverageShares > 0 {
 				was := float64(f.WeightedAverageShares)
 
@@ -254,16 +209,13 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			}
 		}
 
-		// Save the MRQ EV keyed by its date key so MRY can look up the
-		// fiscal year-end MRQ regardless of intervening quarters.
 		if mrq, ok := byDim["MRQ"]; ok && mrq.EnterpriseValue != 0 {
 			mrqEVByDateKey[dk] = mrq.EnterpriseValue
 		}
 
-		// Update previous quarter's debt/cash for the next iteration.
-		// Use a quarterly dimension (ARQ preferred) because annual
-		// dimensions (ARY/MRY) carry the fiscal year-end balance sheet
-		// which may differ from the calendar quarter's balance sheet.
+		// Update previous quarter's debt/cash for the next iteration. Use a
+		// quarterly dimension; annual dimensions carry the fiscal year-end
+		// balance sheet, which may differ from the calendar quarter's.
 		for _, dim := range []string{"ARQ", "MRQ", "ART", "MRT"} {
 			if f, ok := byDim[dim]; ok {
 				prevDebt = f.TotalDebt
@@ -298,12 +250,8 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			}
 
 			// PS1 = Price / SalesPerShare. Compute from the unrounded ratio
-			// (Price × WAS / Revenues) rather than dividing by the stored
-			// SalesPerShare — which is already rounded to 3 decimals and
-			// would compound rounding error. For dual-class filers (BRK/B),
-			// WeightedAverageShares was overridden to SharesBasic (the raw
-			// per-class count); scale by the unrounded share_factor so the
-			// denominator is the B-equivalent share count Sharadar uses.
+			// rather than the stored SalesPerShare (already rounded), and
+			// scale WAS by the unrounded share_factor for dual-class filers.
 			if f.Revenues != 0 && f.WeightedAverageShares != 0 {
 				scaledWAS := float64(f.WeightedAverageShares)
 				if sfRaw, ok := shareFactorRawByFundamental[f]; ok && sfRaw > 1.1 {
@@ -328,16 +276,15 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 			}
 		}
 
-		// PayoutRatio = DPS / EPS (basic) -- does not depend on price or
-		// market-data, so compute it for every dimension independently.
+		// PayoutRatio = DPS / EPS (basic) -- independent of market data,
+		// computed for every dimension.
 		for _, f := range group {
 			if f.EPS != 0 {
 				f.PayoutRatio = math.Round(f.DividendsPerBasicCommonShare/f.EPS*1000) / 1000
 			}
 		}
 
-		// Phase 3: copy ratio fields from trailing to quarterly dimensions.
-		// ART -> ARQ, MRT -> MRQ.
+		// Phase 3: copy ratios from trailing to quarterly (ART->ARQ, MRT->MRQ).
 		quarterlyPairs := [][2]string{
 			{"ART", "ARQ"},
 			{"MRT", "MRQ"},
@@ -370,10 +317,8 @@ func EnrichMarketData(fundamentals []*data.Fundamental, lookupPrice PriceLookupF
 }
 
 // NewEODPriceLookup returns a PriceLookupFn that queries the published EOD
-// view for the unadjusted close price nearest to and on or before the given
-// date (up to 7 days back to handle weekends and holidays). Returns 0 if no
-// price is found; this is normal for historical gaps and is not treated as an
-// error.
+// view for the unadjusted close on or before the given date (within 7 days
+// back to handle weekends and holidays). Returns 0 when no price is found.
 func NewEODPriceLookup(ctx context.Context, pool *pgxpool.Pool, eodViewName string) PriceLookupFn {
 	query := fmt.Sprintf(
 		`SELECT close FROM %s WHERE composite_figi = $1 AND event_date <= $2 AND event_date >= $3 ORDER BY event_date DESC LIMIT 1`,
@@ -401,20 +346,9 @@ func NewEODPriceLookup(ctx context.Context, pool *pgxpool.Pool, eodViewName stri
 	}
 }
 
-// computeMarketRatioShareFactor implements Sharadar's share_factor formula
-// for dual-class filers:
-//
-//	share_factor = (A*A_price + B*B_price) / ((A+B) * our_price)
-//
-// where A/B are the Class A and Class B raw cover-page share counts from the
-// most recent 10-K/10-Q on or before f.EventDate, A_price/B_price are the
-// corresponding closing prices on that filing date, and our_price is the
-// price of the class currently being processed. Returns (rawSF, roundedSF,
-// true) when all four inputs are available and positive; (0, 0, false)
-// otherwise so the caller can fall back to the legacy WAS_d / SharesBasic
-// ratio. The raw (unrounded) share_factor is what Sharadar uses internally
-// for market_capitalization; the rounded value matches the stored display
-// column (3 decimals).
+// computeMarketRatioShareFactor implements Sharadar's dual-class share_factor:
+// share_factor = (A*A_price + B*B_price) / ((A+B) * our_price). Returns
+// (rawSF, roundedSF, true) when all inputs are available.
 func computeMarketRatioShareFactor(cfg enrichConfig, f *data.Fundamental, ourPrice float64, lookupPrice PriceLookupFn) (float64, float64, bool) {
 	if cfg.cf == nil || cfg.siblingFigi == "" {
 		return 0, 0, false
@@ -435,10 +369,9 @@ func computeMarketRatioShareFactor(cfg enrichConfig, f *data.Fundamental, ourPri
 		ourPriceAtFiling = ourPrice
 	}
 
-	// Map raw class counts to "our" and "sibling" by price magnitude: the
-	// senior class trades higher (e.g. BRK.A ≈ 1500 × BRK.B), so whichever
-	// of our price vs sibling price is higher identifies the senior/junior
-	// roles independent of ticker-suffix conventions.
+	// Map class counts to "our" and "sibling" by price magnitude: the senior
+	// class trades higher (e.g. BRK.A ~ 1500 x BRK.B), independent of any
+	// ticker-suffix convention.
 	var ourShares, siblingShares float64
 
 	if ourPriceAtFiling < siblingPrice {
@@ -461,9 +394,7 @@ func computeMarketRatioShareFactor(cfg enrichConfig, f *data.Fundamental, ourPri
 	return sf, math.Round(sf*1000) / 1000, true
 }
 
-// FindEODViewName loads all published views and returns the ViewName of the
-// one whose DataTypeKey is "eod". Returns an empty string if no such view
-// exists.
+// FindEODViewName returns the ViewName of the published "eod" view, or "".
 func FindEODViewName(ctx context.Context, pool *pgxpool.Pool) string {
 	views, err := library.LoadPublishedViews(ctx, pool)
 	if err != nil {

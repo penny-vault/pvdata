@@ -143,11 +143,9 @@ func mapExchange(eodhdExchange string) data.Exchange {
 // DB asset that shares a ticker with one of the freshly fetched EODHD
 // assets. EODHD returns no FIGIs of its own, so without this we would
 // either re-query OpenFIGI or mint a new synthetic FIGI for tickers the
-// database already knows about. When multiple DB rows share a ticker
-// (e.g. a current listing plus an old delisted incarnation), the
-// active row wins; ties break on most-recently-updated.
-//
-// Returns the number of EODHD assets that picked up a FIGI from the DB.
+// database already knows about. When multiple DB rows share a ticker,
+// the active row wins; ties break on most-recently-updated. Returns
+// the number of EODHD assets that picked up a FIGI from the DB.
 func applyExistingFigis(assets []*data.Asset, dbAssets []*data.Asset) int {
 	if len(assets) == 0 || len(dbAssets) == 0 {
 		return 0

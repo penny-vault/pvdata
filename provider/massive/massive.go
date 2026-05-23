@@ -216,29 +216,15 @@ type massiveAssetFetcher struct {
 
 	// walkWindowsByFigi, walkWindowsByCIK and walkWindowsByName record
 	// the (firstSeen, lastSeen) pair for every asset observed during
-	// the historical walk. Three indexes because Massive's reference
-	// response can return any of:
-	//   - composite_figi + CIK + type        → indexed under figi (and CIK as duplicate)
-	//   - CIK + type only (no figi)          → indexed under CIK
-	//   - name only (no figi, no CIK, often no type) → indexed under
-	//     ticker:name:NAME. These are records like Mestek's 2003-2004
-	//     years where Massive's catalog is missing structured
-	//     metadata for an old delisted ticker.
-	//
-	// The name-keyed index exists so date-assignment can still find a
-	// temporal record for an asset that Massive labelled sparsely.
-	// Without it, the walk would silently lose entire historical
-	// lifetimes for any ticker Massive happens to type-tag late.
-	//
-	// All three maps are populated once by the walk under a local
-	// mutex, then published here after g.Wait(); reads from
-	// assetDetail post-processing are spawned after the publication
-	// so no further synchronization is needed. nil before / outside a
-	// historical walk.
-	//
-	// walkStart/walkEnd record the [start, end) window so the
-	// derived-date cutoff math is available alongside the per-asset
-	// windows.
+	// the historical walk; three indexes because Massive's reference
+	// response can carry composite_figi+CIK+type, CIK+type only, or
+	// name only, and the name-keyed index exists so date-assignment
+	// can still find a temporal record for an asset Massive labelled
+	// sparsely. All three maps are populated once by the walk under a
+	// local mutex, published here after g.Wait(), and are nil before
+	// or outside a historical walk. walkStart/walkEnd record the
+	// [start, end) window so the derived-date cutoff math is available
+	// alongside the per-asset windows.
 	walkWindowsByFigi map[string]walkWindow
 	walkWindowsByCIK  map[string]walkWindow
 	walkWindowsByName map[string]walkWindow
@@ -390,11 +376,6 @@ func trackedTypeSet(ctx context.Context) map[string]struct{} {
 //     tracked type the asset is promoted to that type and kept,
 //     otherwise dropped
 //   - untyped, no CIK       -> dropped with a single debug log line
-//
-// Per-asset decisions log at Debug by default; when traceAsset matches
-// (i.e. --ticker is set and the asset matches it), they elevate to
-// Info so an operator running a one-ticker test sees the resolve path
-// in real time.
 func filterToTrackedTypes(ctx context.Context, assets []*data.Asset, tracked map[string]struct{}) []*data.Asset {
 	logger := zerolog.Ctx(ctx)
 	kept := assets[:0]
@@ -617,10 +598,9 @@ func hasLowercaseLetter(s string) bool {
 }
 
 // marketIneligibleReason reports whether an asset should be dropped
-// regardless of its asset_type, and returns a short reason string for
-// logging.
-//
-// Three drop paths, in priority order so a single asset reports its
+// regardless of its asset_type, returns a short reason string for
+// logging, and returns ("", false) when the asset is eligible. Three
+// drop paths fire in priority order so a single asset reports its
 // most specific reason:
 //
 //  1. Ticker contains a lowercase letter. Massive uses lowercase
@@ -633,8 +613,6 @@ func hasLowercaseLetter(s string) bool {
 //  3. Name matches a marketIneligibleNamePatterns substring (placeholder
 //     securities Massive types as CS but flags in the display name —
 //     when-issued, ex-distribution, preferred, warrant, etc.).
-//
-// Returns ("", false) when the asset is eligible.
 func marketIneligibleReason(asset *data.Asset) (string, bool) {
 	if asset == nil {
 		return "", false
@@ -660,6 +638,259 @@ func marketIneligibleReason(asset *data.Asset) (string, bool) {
 	return "", false
 }
 
+// dropSyntheticDuplicatesOfRealFigi removes assets that carry a
+// synthetic (PV-prefixed) composite FIGI when another asset in the
+// same batch has a real OpenFIGI composite FIGI for the identical
+// (ticker, name) pair. A synthetic FIGI is minted as a last-resort
+// identifier when Massive returns a record without a CIK or FIGI;
+// when the same (ticker, name) also appears in the batch with a real
+// FIGI, the no-identifier record is a stripped-down stub of the
+// real one. Persisting both as separate rows produces a duplicate
+// that collides on the (ticker, composite_figi) upsert and creates
+// spurious all-NULL rows downstream. The function preserves a
+// synthetic-FIGI asset when no real-FIGI sibling shares its
+// (ticker, name) so legitimate predecessor entities still propagate.
+func dropSyntheticDuplicatesOfRealFigi(logger *zerolog.Logger, assets []*data.Asset) []*data.Asset {
+	realFigiByTickerName := make(map[string]string, len(assets))
+
+	for _, asset := range assets {
+		if asset.CompositeFigi == "" || figi.IsSyntheticFIGI(asset.CompositeFigi) {
+			continue
+		}
+
+		realFigiByTickerName[asset.Ticker+"|"+asset.Name] = asset.CompositeFigi
+	}
+
+	if len(realFigiByTickerName) == 0 {
+		return assets
+	}
+
+	deduped := make([]*data.Asset, 0, len(assets))
+
+	for _, asset := range assets {
+		if figi.IsSyntheticFIGI(asset.CompositeFigi) {
+			if realFigi, ok := realFigiByTickerName[asset.Ticker+"|"+asset.Name]; ok {
+				logger.Info().
+					Str("Ticker", asset.Ticker).
+					Str("Name", asset.Name).
+					Str("SyntheticFigi", asset.CompositeFigi).
+					Str("RealFigi", realFigi).
+					Str("DelistingDate", asset.DelistingDate).
+					Msg("massive: dropping synthetic-FIGI duplicate of same-name real-FIGI observation")
+
+				continue
+			}
+		}
+
+		deduped = append(deduped, asset)
+	}
+
+	return deduped
+}
+
+// dropSameCompositeFigiDuplicates collapses assets that share the
+// same (ticker, composite_figi) pair down to a single survivor. The
+// (ticker, composite_figi) primary key on the assets table means
+// such siblings would collide at upsert time anyway and the last
+// write would win nondeterministically; collapsing them here lets
+// the algorithm see one row and lets us pick the survivor on
+// information rather than write-order. Survivor selection: active
+// rows beat inactive rows; among rows of the same active state, the
+// one with a non-empty CIK wins; final tiebreak preserves caller
+// order.
+func dropSameCompositeFigiDuplicates(logger *zerolog.Logger, assets []*data.Asset) []*data.Asset {
+	byFigi := make(map[string][]*data.Asset, len(assets))
+
+	for _, asset := range assets {
+		if asset.CompositeFigi == "" {
+			continue
+		}
+
+		byFigi[asset.CompositeFigi] = append(byFigi[asset.CompositeFigi], asset)
+	}
+
+	survivors := make(map[*data.Asset]struct{}, len(assets))
+
+	for figi, siblings := range byFigi {
+		if len(siblings) < 2 {
+			survivors[siblings[0]] = struct{}{}
+			continue
+		}
+
+		winner := siblings[0]
+		for _, s := range siblings[1:] {
+			if betterSameFigiCandidate(s, winner) {
+				winner = s
+			}
+		}
+
+		survivors[winner] = struct{}{}
+
+		for _, s := range siblings {
+			if s == winner {
+				continue
+			}
+
+			logger.Info().
+				Str("Ticker", s.Ticker).
+				Str("CompositeFigi", figi).
+				Str("DroppedCIK", s.CIK).
+				Bool("DroppedActive", s.Active).
+				Str("WinnerCIK", winner.CIK).
+				Bool("WinnerActive", winner.Active).
+				Msg("massive: dropping same-composite-figi duplicate; survivor wins on active / CIK preference")
+		}
+	}
+
+	deduped := make([]*data.Asset, 0, len(assets))
+
+	for _, asset := range assets {
+		if asset.CompositeFigi == "" {
+			deduped = append(deduped, asset)
+			continue
+		}
+
+		if _, ok := survivors[asset]; ok {
+			deduped = append(deduped, asset)
+		}
+	}
+
+	return deduped
+}
+
+// betterSameFigiCandidate reports whether candidate should replace
+// the current winner among same-composite-FIGI siblings. Tiebreaks
+// in order: active beats inactive, non-empty CIK beats empty CIK,
+// more recent ValidFor beats older ValidFor (a zero ValidFor is the
+// live snapshot, treated as "now"). When every signal is equal the
+// existing winner is preserved so caller order acts as the final
+// stable tiebreak.
+func betterSameFigiCandidate(candidate, winner *data.Asset) bool {
+	if candidate.Active != winner.Active {
+		return candidate.Active
+	}
+
+	candidateHasCIK := strings.TrimSpace(candidate.CIK) != ""
+	winnerHasCIK := strings.TrimSpace(winner.CIK) != ""
+
+	if candidateHasCIK != winnerHasCIK {
+		return candidateHasCIK
+	}
+
+	candidateValidFor := candidate.ValidFor
+	if candidateValidFor.IsZero() {
+		candidateValidFor = time.Now()
+	}
+
+	winnerValidFor := winner.ValidFor
+	if winnerValidFor.IsZero() {
+		winnerValidFor = time.Now()
+	}
+
+	if !candidateValidFor.Equal(winnerValidFor) {
+		return candidateValidFor.After(winnerValidFor)
+	}
+
+	return false
+}
+
+// dropOverlappingSyntheticAgainstRealFigi enforces the no-overlap
+// rule for same-ticker rows when one row carries a synthetic FIGI
+// and the other carries a real OpenFIGI composite. The synthetic
+// FIGI is a placeholder we mint when OpenFIGI has no authoritative
+// identifier for the entity; the real-FIGI row is OpenFIGI's
+// canonical record. When their dated windows overlap, both rows
+// cannot be valid — drop the synthetic. Runs after assignDatesForGroup
+// so listing and delisting dates are available for the overlap check;
+// symmetric overlaps (both synthetic or both real) are logged but not
+// auto-resolved here.
+func dropOverlappingSyntheticAgainstRealFigi(logger *zerolog.Logger, assets []*data.Asset) []*data.Asset {
+	type windowed struct {
+		asset     *data.Asset
+		start     time.Time
+		end       time.Time
+		synthetic bool
+	}
+
+	withWindow := make([]windowed, 0, len(assets))
+
+	for _, a := range assets {
+		listed := parseISODate(a.ListingDate)
+		delisted := parseISODate(a.DelistingDate)
+
+		start := listed
+		if start.IsZero() {
+			start = time.Time{}.Add(time.Nanosecond)
+		}
+
+		end := delisted
+		if end.IsZero() {
+			end = time.Unix(1<<62, 0)
+		}
+
+		withWindow = append(withWindow, windowed{
+			asset:     a,
+			start:     start,
+			end:       end,
+			synthetic: figi.IsSyntheticFIGI(a.CompositeFigi),
+		})
+	}
+
+	drop := make(map[*data.Asset]struct{})
+
+	for i := 0; i < len(withWindow); i++ {
+		for j := i + 1; j < len(withWindow); j++ {
+			a, b := withWindow[i], withWindow[j]
+
+			if a.end.Before(b.start) || b.end.Before(a.start) {
+				continue
+			}
+
+			if a.synthetic == b.synthetic {
+				continue
+			}
+
+			loser := a.asset
+			winner := b.asset
+
+			if !a.synthetic {
+				loser = b.asset
+				winner = a.asset
+			}
+
+			drop[loser] = struct{}{}
+
+			logger.Info().
+				Str("Ticker", loser.Ticker).
+				Str("DroppedFigi", loser.CompositeFigi).
+				Str("DroppedListingDate", loser.ListingDate).
+				Str("DroppedDelistingDate", loser.DelistingDate).
+				Str("DroppedName", loser.Name).
+				Str("WinnerFigi", winner.CompositeFigi).
+				Str("WinnerListingDate", winner.ListingDate).
+				Str("WinnerDelistingDate", winner.DelistingDate).
+				Str("WinnerName", winner.Name).
+				Msg("massive: dropping same-ticker row with synthetic FIGI that overlaps a real-FIGI sibling's window")
+		}
+	}
+
+	if len(drop) == 0 {
+		return assets
+	}
+
+	survivors := make([]*data.Asset, 0, len(assets))
+
+	for _, a := range assets {
+		if _, dropped := drop[a]; dropped {
+			continue
+		}
+
+		survivors = append(survivors, a)
+	}
+
+	return survivors
+}
+
 // shortDelistedDurationDays is the minimum allowed duration for a
 // delisted security whose listed-to-delisted window has no
 // corresponding EOD archive coverage. Records shorter than this with
@@ -673,21 +904,22 @@ func marketIneligibleReason(asset *data.Asset) (string, bool) {
 const shortDelistedDurationDays = 180
 
 // shortDelistedNoCoverageReason reports whether a delisted asset
-// should be dropped at publish time. The check applies only to
-// already-delisted records (Active=false with DelistingDate set);
-// currently-trading assets are never dropped by this rule, so a
-// freshly-listed stock with only a few days of history publishes
-// normally.
-//
-// The two gates that must both fire for a drop:
+// should be dropped at publish time, and returns ("", false) when
+// the asset should publish. The check applies only to already-delisted
+// records (Active=false with DelistingDate set); currently-trading
+// assets are never dropped by this rule. Two gates must both fire
+// for a drop:
 //
 //  1. The (DelistingDate - ListingDate) duration is shorter than
-//     shortDelistedDurationDays.
+//     shortDelistedDurationDays. An empty ListingDate is treated as
+//     zero duration — a Massive-emitted stub with a delisting boundary
+//     but no listing evidence is the strongest phantom signal we have.
 //  2. The EOD archive has no range overlapping the asset's
 //     [ListingDate, DelistingDate] window — we have no trade-data
-//     evidence the security actually existed for that window.
-//
-// Returns ("", false) when the asset should publish.
+//     evidence the security actually existed for that window. When
+//     ListingDate is empty the overlap check uses the delisting date
+//     as the upper edge of the window; any archive range that starts
+//     on or before delisting counts as evidence.
 func (api *massiveAssetFetcher) shortDelistedNoCoverageReason(asset *data.Asset) (string, bool) {
 	if asset == nil || asset.Active {
 		return "", false
@@ -696,13 +928,16 @@ func (api *massiveAssetFetcher) shortDelistedNoCoverageReason(asset *data.Asset)
 	listed := parseISODate(asset.ListingDate)
 	delisted := parseISODate(asset.DelistingDate)
 
-	if listed.IsZero() || delisted.IsZero() {
+	if delisted.IsZero() {
 		return "", false
 	}
 
-	durationDays := int(delisted.Sub(listed) / (24 * time.Hour))
-	if durationDays >= shortDelistedDurationDays {
-		return "", false
+	durationDays := 0
+	if !listed.IsZero() {
+		durationDays = int(delisted.Sub(listed) / (24 * time.Hour))
+		if durationDays >= shortDelistedDurationDays {
+			return "", false
+		}
 	}
 
 	archive := api.eodArchiveForRun()
@@ -712,9 +947,15 @@ func (api *massiveAssetFetcher) shortDelistedNoCoverageReason(asset *data.Asset)
 
 	ranges := archive.Ranges(asset.Ticker)
 	for _, r := range ranges {
-		if !r.End.Before(listed) && !r.Start.After(delisted) {
-			return "", false
+		if !listed.IsZero() && r.End.Before(listed) {
+			continue
 		}
+
+		if r.Start.After(delisted) {
+			continue
+		}
+
+		return "", false
 	}
 
 	return fmt.Sprintf("duration=%dd_no_eod_coverage", durationDays), true
@@ -1168,6 +1409,12 @@ func (api *massiveAssetFetcher) enrichForPublish(ctx context.Context, asset *dat
 				Msg("trace: enrichForPublish figi.Enrich result")
 		}
 	}
+
+	// Apply the (ticker, CIK) FIGI override late, after assetDetail
+	// has potentially overwritten the FIGI with what Massive returned.
+	// The override is the authoritative final FIGI assignment for
+	// known-misattribution cases like AA's Alcoa Inc.
+	applyFigiOverride(logger, asset)
 
 	if asset.OrganizationPermID == "" || asset.InstrumentPermID == "" {
 		logger.Debug().Str("Ticker", asset.Ticker).Msg("enrichForPublish: calling permid.Enrich")
@@ -1633,18 +1880,13 @@ func traceAsset(ctx context.Context, ticker string) bool {
 // asset. Asset.ID() is "ticker:composite_figi" which collides on
 // "ticker:" whenever composite is empty — and Massive does serve
 // empty-composite rows occasionally, sometimes for distinct entities
-// reusing the same ticker (e.g. 2009-06-15 BBI=Blockbuster CIK
-// 0001085734, vs 2019-09-24 BBI=Brickell Biotech with both
-// composite_figi and cik null). Without disambiguation the
+// reusing the same ticker. Without disambiguation the
 // keep-newest-by-ValidFor invariant lets the later anomalous row
 // overwrite the earlier predecessor, and the predecessor never reaches
-// figi.Enrich to be minted as a synthetic.
-//
-// Disambiguation precedence: composite > CIK > name. The CIK fallback
-// distinguishes different entities under the same ticker; the name
-// fallback catches the truly identifier-less Massive anomalies so they
-// at least don't collide with each other, but also makes them visible
-// so they can be triaged later if they ever turn out to be real.
+// figi.Enrich to be minted as a synthetic. Disambiguation precedence is
+// composite > CIK > name: the CIK fallback distinguishes different
+// entities under the same ticker, and the name fallback keeps the
+// truly identifier-less anomalies from colliding with each other.
 func walkHistoricalKey(a *data.Asset) string {
 	if a.CompositeFigi != "" {
 		return a.Ticker + ":" + a.CompositeFigi
@@ -1678,10 +1920,26 @@ func updateWalkWindow(idx map[string]walkWindow, key string, date time.Time) {
 // touching the production OpenFIGI client.
 type compositeConfirmer func(ctx context.Context, figis []string) map[string]*figi.OpenFigiAsset
 
+// usEvidenceChecker reports whether our (US-only) EOD archive has any
+// bars for ticker. Injected so the pure sanitizer can be unit-tested
+// without loading a real EOD archive. The production wiring backs it
+// with the run's EODArchive.
+type usEvidenceChecker func(ticker string) bool
+
 // sanitizeWalkComposites is the api-bound entry point that wires the
-// production OpenFIGI confirmer into the pure-logic sanitizer below.
+// production OpenFIGI confirmer and EOD-archive US-evidence check
+// into the pure-logic sanitizer below.
 func (api *massiveAssetFetcher) sanitizeWalkComposites(ctx context.Context, historicalMap map[string]*data.Asset) {
-	sanitizeWalkComposites(ctx, historicalMap, api.walkWindowsByFigi, api.walkWindowsByCIK, api.walkWindowsByName, figi.LookupCompositesByFIGI)
+	hasUSEvidence := func(ticker string) bool {
+		archive := api.eodArchiveForRun()
+		if archive == nil {
+			return false
+		}
+
+		return len(archive.Ranges(ticker)) > 0
+	}
+
+	sanitizeWalkComposites(ctx, historicalMap, api.walkWindowsByFigi, api.walkWindowsByCIK, api.walkWindowsByName, figi.ValidateCompositeFIGI, hasUSEvidence)
 }
 
 // sanitizeWalkComposites scrubs dirty composite_figis the historical
@@ -1689,21 +1947,19 @@ func (api *massiveAssetFetcher) sanitizeWalkComposites(ctx context.Context, hist
 // Massive's reference dataset occasionally substitutes a foreign-
 // exchange composite for a US ticker on isolated dates and still
 // labels primary_exchange as XNAS; without this step every such day
-// becomes a duplicate row under the same ticker.
-//
-// Three passes:
+// becomes a duplicate row under the same ticker. Three passes run,
+// and all passes remove the dropped IDs from the walk-window indexes
+// so downstream applyWalkDerivedDates does not key into ghost rows:
 //
 //  1. OpenFIGI cross-check. Every distinct composite observed in the
 //     walk is resolved against OpenFIGI by ID_BB_GLOBAL. Any composite
 //     OpenFIGI confirms as non-US (ExchangeCode != "US") is dropped.
 //     Composites OpenFIGI does not know about (delisted / evicted) are
 //     kept — the walk vote is the best signal available.
-//
 //  2. (ticker, share_class_figi) dedup. Among rows that survive step 1,
 //     any group that still has multiple composites collapses to the
 //     one with the longest walk-window span; non-empty CIK and
 //     lexicographic order are deterministic tiebreakers.
-//
 //  3. Trailing-tail consolidation. When a ticker has a BBG-FIGI entry
 //     and a separate FIGI-less entry (keyed by cik or by name) whose
 //     walk window starts where the FIGI entry's ends and whose name
@@ -1711,13 +1967,7 @@ func (api *massiveAssetFetcher) sanitizeWalkComposites(ctx context.Context, hist
 //     trimming Massive's display suffixes), the FIGI-less entry is
 //     the same lifecycle continuing after Massive dropped the FIGI on
 //     their record. Fold the tail's lastSeen into the FIGI entry and
-//     drop the tail. Without this step, Medley Capital Corporation's
-//     2020-07-28 → 2021-01-01 observations (Massive drops the FIGI
-//     and changes the CIK on the same lifecycle) get published as a
-//     separate row from the rest of Medley's history.
-//
-// All passes remove the dropped IDs from the walk-window indexes so
-// downstream applyWalkDerivedDates does not key into ghost rows.
+//     drop the tail.
 func sanitizeWalkComposites(
 	ctx context.Context,
 	historicalMap map[string]*data.Asset,
@@ -1725,6 +1975,7 @@ func sanitizeWalkComposites(
 	walkWindowsByCIK map[string]walkWindow,
 	walkWindowsByName map[string]walkWindow,
 	confirm compositeConfirmer,
+	hasUSEvidence usEvidenceChecker,
 ) {
 	logger := zerolog.Ctx(ctx)
 
@@ -1755,6 +2006,7 @@ func sanitizeWalkComposites(
 	confirmed := confirm(ctx, figisToConfirm)
 
 	droppedNonUS := 0
+	keptViaUSEvidence := 0
 
 	for id, asset := range historicalMap {
 		openFigi, ok := confirmed[asset.CompositeFigi]
@@ -1764,6 +2016,61 @@ func sanitizeWalkComposites(
 
 		if openFigi.ExchangeCode == "US" {
 			continue
+		}
+
+		// OpenFIGI says the composite is non-US today. Before dropping,
+		// check our EOD archive (US-only) for bars under this ticker.
+		// If bars exist, the historical lifecycle was on a US exchange
+		// regardless of OpenFIGI's current verdict — keep the asset
+		// but mint a synthetic FIGI for the historical lifecycle right
+		// here. We do not trust the original non-US composite (Massive
+		// is documented to substitute foreign composites for US
+		// tickers; that is the reason this sanitize exists) and we do
+		// not leave CompositeFigi empty because downstream stages
+		// (figi.Enrich's OpenFIGI lookup, then assetDetail's per-
+		// ticker re-query) would each repaint it back to the foreign
+		// value. Minting here locks the historical lifecycle to a PV
+		// synthetic that distinguishes it from any later foreign
+		// lifecycle that may take the same ticker.
+		if hasUSEvidence != nil && hasUSEvidence(asset.Ticker) {
+			synthetic := ""
+			source := ""
+
+			switch {
+			case asset.CIK != "":
+				synthetic = figi.GenerateSyntheticFIGIFromCIK(asset.CIK, asset.Ticker)
+				source = "cik+ticker"
+			case asset.Name != "":
+				synthetic = figi.GenerateSyntheticFIGI(asset.Ticker, asset.Name)
+				source = "ticker+name"
+			}
+
+			if synthetic == "" {
+				logger.Warn().
+					Str("Ticker", asset.Ticker).
+					Str("DiscardedCompositeFigi", asset.CompositeFigi).
+					Str("OpenFigiExchCode", openFigi.ExchangeCode).
+					Msg("sanitize: ticker has US EOD bars but no CIK or name; cannot mint synthetic, falling through to drop")
+			} else {
+				logger.Info().
+					Str("Ticker", asset.Ticker).
+					Str("DiscardedCompositeFigi", asset.CompositeFigi).
+					Str("DiscardedShareClassFigi", asset.ShareClassFigi).
+					Str("OpenFigiExchCode", openFigi.ExchangeCode).
+					Str("OpenFigiTicker", openFigi.Ticker).
+					Str("SyntheticCompositeFigi", synthetic).
+					Str("SyntheticSource", source).
+					Msg("keeping walk-observed ticker with non-US composite because EOD archive has US bars; minted synthetic FIGI for historical lifecycle")
+
+				delete(walkWindowsByFigi, id)
+
+				asset.CompositeFigi = synthetic
+				asset.ShareClassFigi = ""
+
+				keptViaUSEvidence++
+
+				continue
+			}
 		}
 
 		logger.Info().
@@ -1778,6 +2085,12 @@ func sanitizeWalkComposites(
 		delete(walkWindowsByFigi, id)
 
 		droppedNonUS++
+	}
+
+	if keptViaUSEvidence > 0 {
+		logger.Info().
+			Int("Count", keptViaUSEvidence).
+			Msg("sanitizeWalkComposites: kept historical US lifecycles via EOD-archive override")
 	}
 
 	// Step 2: dedup (ticker, share_class_figi) groups remaining.
@@ -2193,10 +2506,9 @@ func (api *massiveAssetFetcher) assets(ctx context.Context, assetType string, as
 	// targeted backfill doesn't fetch thousands of irrelevant rows
 	// per snapshot date. The post-walk security filter still runs as
 	// a defence-in-depth check; this is purely a server-side prune.
-	//
 	// Massive uses `.` notation for class-share tickers (BF.A) while
-	// the rest of pvdata uses `/` (BF/A). Convert back before the API
-	// call so class-share filters actually match.
+	// the rest of pvdata uses `/` (BF/A), so convert back before the
+	// API call.
 	tickerFilter, _ := provider.SecurityFilterFromContext(ctx)
 	if tickerFilter != "" {
 		req = req.SetQueryParam("ticker", pvTicker2MassiveTicker(tickerFilter))
@@ -2525,6 +2837,33 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 	return assetDetail, nil
 }
 
+// lastEODBarDelisting returns a delisting date string ("YYYY-MM-DD")
+// derived from the latest EOD bar for ticker in the run's EOD archive,
+// plus one calendar day. The convention matches chooseDelistingDate's
+// massive_eod_archive_last_bar candidate: the asset's last observed
+// trading day is the day before its delisting. Returns ("", false)
+// when the archive is unavailable or has no bars for ticker. Used by
+// delistedAssets to fill DelistingDate from a trading-evidence signal
+// instead of a metadata timestamp.
+func lastEODBarDelisting(api *massiveAssetFetcher, ticker string) (string, bool) {
+	archive := api.eodArchiveForRun()
+	if archive == nil {
+		return "", false
+	}
+
+	ranges := archive.Ranges(ticker)
+	if len(ranges) == 0 {
+		return "", false
+	}
+
+	last := ranges[len(ranges)-1].End
+	if last.IsZero() {
+		return "", false
+	}
+
+	return last.AddDate(0, 0, 1).Format("2006-01-02"), true
+}
+
 func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*data.Asset) error {
 	logger := zerolog.Ctx(ctx)
 
@@ -2706,6 +3045,35 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 			lastUpdated = lastUpdated.In(nyc)
 
 			inactiveAsset.DelistingDate = strings.Split(raw.DelistDate, "T")[0]
+
+			// active=false implies delisted must be set. Massive
+			// returned this asset on the inactive endpoint but
+			// occasionally without a delisted_utc; fall back to the
+			// last EOD bar we have for the ticker (+1 calendar day).
+			// last_updated_utc is metadata mtime — when Massive
+			// touched the record, not when trading stopped — so it
+			// is not a valid delisting signal.
+			if inactiveAsset.DelistingDate == "" {
+				if d, ok := lastEODBarDelisting(api, inactiveAsset.Ticker); ok {
+					inactiveAsset.DelistingDate = d
+				} else {
+					// No trading evidence for a delisting date. The
+					// active=false-implies-delisted-set invariant is
+					// strict: we cannot flip Active without a date,
+					// so we leave the existing DB row untouched and
+					// surface the conflict for operator review. A
+					// subsequent run after EOD coverage catches up
+					// (or after Massive populates delisted_utc) will
+					// resolve it.
+					logger.Error().
+						Str("Ticker", inactiveAsset.Ticker).
+						Str("CompositeFigi", inactiveAsset.CompositeFigi).
+						Msg("massive: Massive reports inactive but provided no delisted_utc and EOD archive has no bars; leaving DB row untouched to preserve the active=false-implies-delisted invariant")
+
+					continue
+				}
+			}
+
 			inactiveAsset.LastUpdated = lastUpdated
 			inactiveAsset.Active = false
 			deactivated[asset.ID()] = inactiveAsset
@@ -2738,14 +3106,20 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 		}
 	}
 
-	// find the disjoint set of Assets that are possibly inactive and those
-	// that were deactivated. Assets can only appear in the aforementioned set
-	// for a limited period of time before we mark them as inactive.
-	//
-	// When the stale row had no DelistingDate, publish() / assignDates
-	// will pull it from the walk window (lastSeen + 1 trading day) so
-	// the asset never lands with active=false and a missing delisting
-	// date.
+	// find the disjoint set of Assets that are possibly inactive and
+	// those that were deactivated. Assets can only appear in the
+	// aforementioned set for a limited period of time before we mark
+	// them as inactive. The stale-14-days path runs in both daily and
+	// lookback contexts, so we set DelistingDate here from the EOD
+	// archive's last bar for the ticker rather than relying on the
+	// date-assignment chain (which only runs during lookbacks). The
+	// EOD last bar is the right trading-evidence signal — it is when
+	// the asset actually stopped trading, not a metadata mtime. The
+	// active=false-implies-delisted-set invariant is strict, so when
+	// the EOD archive has no bars for the ticker we do NOT flip
+	// Active; we leave the row untouched and log an error.
+	now := time.Now().In(nyc)
+
 	for _, possibleInactiveAsset := range inactiveMap {
 		if _, ok := deactivated[possibleInactiveAsset.ID()]; !ok {
 			// asset was not de-activated ... check to see how old it is
@@ -2753,7 +3127,22 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 			if timeSinceLastUpdate > 14*24*time.Hour {
 				// if asset hasn't been updated in the last 14 days mark as
 				// inactive
-				possibleInactiveAsset.LastUpdated = time.Now().In(nyc)
+				if possibleInactiveAsset.DelistingDate == "" {
+					d, ok := lastEODBarDelisting(api, possibleInactiveAsset.Ticker)
+					if !ok {
+						logger.Error().
+							Str("Ticker", possibleInactiveAsset.Ticker).
+							Str("CompositeFigi", possibleInactiveAsset.CompositeFigi).
+							Time("LastUpdated", possibleInactiveAsset.LastUpdated).
+							Msg("massive: stale-14-days asset has no EOD archive bars; leaving DB row active to preserve the active=false-implies-delisted invariant")
+
+						continue
+					}
+
+					possibleInactiveAsset.DelistingDate = d
+				}
+
+				possibleInactiveAsset.LastUpdated = now
 				possibleInactiveAsset.Active = false
 
 				api.publish(ctx, possibleInactiveAsset)
@@ -2864,8 +3253,14 @@ func (api *massiveAssetFetcher) assetDetails(ctx context.Context, assets []*data
 		Int("TickerGroups", len(groups)).
 		Msg("asset-details Phase 1 complete; starting date assignment and publish")
 
-	for _, group := range groups {
+	for ticker, group := range groups {
+		group = dropSyntheticDuplicatesOfRealFigi(logger, group)
+		group = dropSameCompositeFigiDuplicates(logger, group)
+
 		api.assignDatesForGroup(ctx, group)
+
+		group = dropOverlappingSyntheticAgainstRealFigi(logger, group)
+		groups[ticker] = group
 
 		for _, a := range group {
 			api.publish(ctx, a)
@@ -2992,7 +3387,7 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 	// the snapshot transition and overlaps the successor's listed
 	// window (e.g. AA: snapshot shows Alcoa Inc through 2016-10-31 but
 	// Alcoa Corp's list_date is 2016-10-18, the real split date).
-	successorDelistDate := api.lookupSuccessorBoundary(ctx, asset.Ticker, massiveAsset.CIK, massiveAsset.CompositeFIGI, asset.ValidFor)
+	successorDelistDate := api.lookupSuccessorBoundary(ctx, asset.Ticker, massiveAsset.CIK, massiveAsset.CompositeFIGI, massiveAsset.ListDate, asset.ValidFor)
 
 	location := ""
 	if massiveAsset.Address.City != "" {
@@ -3099,10 +3494,46 @@ func (api *massiveAssetFetcher) assetDetail(ctx context.Context, asset *data.Ass
 		active = false
 	}
 
+	// Preserve the caller's resolved FIGI when Massive's historical
+	// response omits one. Sparse historical observations (the older
+	// "ASA LTD" record for ticker ASA, for example) routinely come
+	// back without composite_figi from Massive's per-ticker endpoint
+	// even though OpenFIGI already resolved the composite for the
+	// same ticker before we made the historical query. Without this
+	// preservation the constructed asset would have an empty FIGI,
+	// the synthetic-FIGI mint downstream in figi.Enrich would fire,
+	// and a phantom synthetic row would be persisted alongside the
+	// real entity. Mirror the same logic for share_class_figi.
+	//
+	// Also preserve the caller's FIGI when it is already a PV
+	// synthetic. sanitizeWalkComposites mints synthetics for tickers
+	// where OpenFIGI confirmed the Massive-supplied composite as
+	// non-US but our EOD archive has US bars; letting Massive's per-
+	// ticker re-query overwrite that synthetic would resurrect the
+	// foreign-tainted FIGI and undo the sanitize.
+	compositeFIGI := strings.TrimSpace(massiveAsset.CompositeFIGI)
+	if compositeFIGI == "" || figi.IsSyntheticFIGI(strings.TrimSpace(asset.CompositeFigi)) {
+		compositeFIGI = strings.TrimSpace(asset.CompositeFigi)
+	}
+
+	// Share class follows composite. When the composite is synthetic
+	// (sanitizeWalkComposites minted it for a historical US lifecycle
+	// whose Massive composite was non-US), the matching real share-
+	// class FIGI does not apply — clear it so the row's identifier
+	// pair is consistent. Otherwise prefer Massive's value and only
+	// fall back to the caller's when Massive returned blank.
+	shareClassFIGI := ""
+	if !figi.IsSyntheticFIGI(compositeFIGI) {
+		shareClassFIGI = strings.TrimSpace(massiveAsset.ShareClassFIGI)
+		if shareClassFIGI == "" {
+			shareClassFIGI = strings.TrimSpace(asset.ShareClassFigi)
+		}
+	}
+
 	assetDetail := &data.Asset{
 		Ticker:               pvTicker,
-		CompositeFigi:        massiveAsset.CompositeFIGI,
-		ShareClassFigi:       massiveAsset.ShareClassFIGI,
+		CompositeFigi:        compositeFIGI,
+		ShareClassFigi:       shareClassFIGI,
 		Name:                 massiveAsset.Name,
 		Description:          massiveAsset.Description,
 		Active:               active,
@@ -3165,15 +3596,12 @@ func pickValidFor(walkValidFor time.Time, successorDelistDate string) time.Time 
 // successor entity when the predecessor at predecessorCIK has been
 // superseded under the same ticker symbol. Returns "" when the input
 // does not look like a predecessor query, when the current-entity
-// lookup fails, or when no distinct successor exists.
-//
-// Predecessor detection: the historical detail returned no composite
-// FIGI and the caller queried a non-zero ValidFor in the past. A
+// lookup fails, or when no distinct successor exists. Predecessor
+// detection requires that the historical detail returned no composite
+// FIGI and the caller queried a non-zero ValidFor in the past; the
 // "successor" is the entity returned by the current /tickers/{ticker}
-// endpoint (no date) whose CIK differs from predecessorCIK; its
-// list_date is by construction the boundary at which the new entity
-// took over the ticker, and therefore the predecessor's delisted.
-func (api *massiveAssetFetcher) lookupSuccessorBoundary(ctx context.Context, ticker, predecessorCIK, predecessorComposite string, validFor time.Time) string {
+// endpoint whose CIK differs from predecessorCIK.
+func (api *massiveAssetFetcher) lookupSuccessorBoundary(ctx context.Context, ticker, predecessorCIK, predecessorComposite, predecessorListDate string, validFor time.Time) string {
 	if validFor.IsZero() || predecessorComposite != "" {
 		return ""
 	}
@@ -3221,6 +3649,33 @@ func (api *massiveAssetFetcher) lookupSuccessorBoundary(ctx context.Context, tic
 		return ""
 	}
 
+	// Same-origin gate: when the predecessor and the supposed-
+	// successor share a list_date (or the successor's date predates
+	// the predecessor's), the two records describe the same
+	// continuously-listed entity at different CIK assignments rather
+	// than a real predecessor / successor pair. MSA is the canonical
+	// example: both CIKs report list_date 1988-09-26 even though one
+	// is the historical CIK and one is the current CIK. Synthesizing
+	// a predecessor delisting from the shared date would stamp a
+	// bogus 1988-09-23 onto the historical row and poison the
+	// listed-date upper bound for every other candidate.
+	if predecessorParsed, err := time.Parse("2006-01-02", strings.TrimSpace(predecessorListDate)); err == nil && !parsed.After(predecessorParsed) {
+		if traceAsset(ctx, ticker) {
+			logger.Info().
+				Str("Stage", "lookupSuccessorBoundary-same-origin").
+				Str("Ticker", ticker).
+				Str("PredecessorListDate", predecessorListDate).
+				Str("SuccessorListDate", listDate).
+				Msg("trace: rejecting successor boundary; predecessor and supposed-successor share an origin date")
+		}
+
+		return ""
+	}
+
+	if !api.successorIsContinuous(ctx, ticker, parsed) {
+		return ""
+	}
+
 	predecessorDelisted := api.previousTradingDay(ctx, parsed)
 	if predecessorDelisted == "" {
 		return ""
@@ -3238,6 +3693,91 @@ func (api *massiveAssetFetcher) lookupSuccessorBoundary(ctx context.Context, tic
 	}
 
 	return predecessorDelisted
+}
+
+// successorContinuityGapDays is the maximum gap between the
+// predecessor's last EOD lifecycle end and the supposed-successor's
+// list_date before we treat the two as a continuous predecessor /
+// successor pair. Real predecessor-to-successor transitions happen
+// within days (a merger closing Friday, the new ticker starting
+// Monday); a multi-month gap means the ticker was vacant and an
+// unrelated entity reused it later, not that one entity succeeded
+// the other. JATT is the canonical example: the JATT SPAC renamed
+// to Zura on 2023-03-21 and the JATT ticker sat unused until a new
+// JATT II SPAC took it on 2026-04-17, three years later.
+const successorContinuityGapDays = 30
+
+// successorIsContinuous reports whether the EOD archive shows the
+// predecessor's most recent lifecycle ended close enough to the
+// supposed-successor's list_date for the two to be a continuous
+// predecessor / successor pair. Returns true when no EOD archive is
+// available, when no ranges exist for the ticker, or when no
+// lifecycle ends before successorListDate — those are abstain cases
+// that preserve the prior behavior of always applying the successor
+// boundary. Returns false only when EOD evidence affirmatively shows
+// the gap is too wide.
+func (api *massiveAssetFetcher) successorIsContinuous(ctx context.Context, ticker string, successorListDate time.Time) bool {
+	archive := api.eodArchiveForRun()
+	if archive == nil {
+		return true
+	}
+
+	ranges := archive.Ranges(ticker)
+	if len(ranges) == 0 {
+		return true
+	}
+
+	var predecessorEnd time.Time
+
+	for _, r := range ranges {
+		if !r.End.Before(successorListDate) {
+			continue
+		}
+
+		if predecessorEnd.IsZero() || r.End.After(predecessorEnd) {
+			predecessorEnd = r.End
+		}
+	}
+
+	if predecessorEnd.IsZero() {
+		// EOD shows ranges for this ticker but none ended before the
+		// supposed-successor's list_date. That means the ticker has
+		// been trading through (or after) the claimed transition with
+		// no observable break — the supposed-successor is the same
+		// entity our existing lifecycle covers, just possibly under a
+		// new CIK or name. ASA is the canonical case: list_date is
+		// 1958-12-08 but our single continuous lifecycle is
+		// 2003-09-10..today, so no transition occurred in our data.
+		// Reject rather than synthesize a boundary that has no
+		// observable break in trading to anchor on.
+		if traceAsset(ctx, ticker) {
+			zerolog.Ctx(ctx).Info().
+				Str("Stage", "successorIsContinuous-reject").
+				Str("Ticker", ticker).
+				Time("SuccessorListDate", successorListDate).
+				Int("EODLifecycleCount", len(ranges)).
+				Msg("trace: rejecting successor boundary; no EOD lifecycle ends before the supposed-successor's listing so there is no observable break in trading")
+		}
+
+		return false
+	}
+
+	gap := successorListDate.Sub(predecessorEnd)
+	if gap <= time.Duration(successorContinuityGapDays)*24*time.Hour {
+		return true
+	}
+
+	if traceAsset(ctx, ticker) {
+		zerolog.Ctx(ctx).Info().
+			Str("Stage", "successorIsContinuous-reject").
+			Str("Ticker", ticker).
+			Time("PredecessorLifecycleEnd", predecessorEnd).
+			Time("SuccessorListDate", successorListDate).
+			Dur("Gap", gap).
+			Msg("trace: rejecting successor boundary; predecessor lifecycle ended too far before supposed-successor's listing")
+	}
+
+	return false
 }
 
 // previousTradingDay returns the trading day immediately before t,
@@ -3281,12 +3821,10 @@ func (api *massiveAssetFetcher) previousTradingDay(ctx context.Context, t time.T
 // returning list_date=2016-10-18 with cik=0000004281, describing
 // Alcoa Inc rather than Alcoa Corp). Without this guard the bad
 // list_date overwrites applyWalkDerivedDates' fallback and predecessor
-// bars before list_date drop from FIGIAt lookups.
-//
-// Invariant: a list_date cannot be later than the date the walk first
-// observed this asset in snapshots. CIK is preferred over composite
-// FIGI because the snapshot endpoint populates CIK consistently while
-// composite FIGI is sometimes absent on historical rows.
+// bars before list_date drop from FIGIAt lookups. Invariant: a
+// list_date cannot be later than the date the walk first observed this
+// asset in snapshots; CIK is preferred over composite FIGI as the key
+// because the snapshot endpoint populates CIK consistently.
 // massiveListDateSentinels are values Massive returns as a stand-in
 // for "list_date unknown" rather than a real first-trading day. They
 // are rejected before the walk-window check so they neither pollute

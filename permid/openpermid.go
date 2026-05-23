@@ -111,17 +111,10 @@ type LookupResult struct {
 
 // sharedRateLimiter is the process-wide rate limiter for every
 // outbound Refinitiv PermID request. The Refinitiv public-tier cap is
-// 4 req/s (observed via the x-ratelimit-limit-second response header).
-// Allocating a fresh limiter per Enrich call would defeat the cap: a
-// run with the massive provider's 32-worker publish() fan-out would
-// otherwise have 32 independent 4-req/s limiters and burst to ~128
-// req/s aggregate. One package-level limiter coordinates every caller.
-//
-// The tier also enforces a 5,000-request DAILY ceiling
-// (x-ratelimit-limit-day). This limiter does not cap on the daily
-// budget; permid.Enrich.WithAPIBudget handles that side. Once the
-// daily quota is exhausted Refinitiv returns 429 and Enrich logs a
-// warning per asset.
+// 4 req/s; allocating a fresh limiter per Enrich call would defeat the
+// cap under the massive provider's 32-worker publish() fan-out, so one
+// package-level limiter coordinates every caller. The 5,000-request
+// daily ceiling is enforced separately via permid.Enrich.WithAPIBudget.
 var sharedRateLimiter = rate.NewLimiter(rate.Every(time.Second/4), 4)
 
 // RateLimit returns the shared Refinitiv PermID rate limiter. All
@@ -183,11 +176,8 @@ func Search(ctx context.Context, query string) (*SearchResponse, error) {
 
 // LookupByCIK returns the Organization PermID for a SEC CIK, or "" when
 // the PermID Open Data set has no record. CIK is zero-padded to 10
-// digits before the query (Refinitiv only accepts the padded form).
-//
-// CIK is a deterministic key — Refinitiv assigns one Organization
-// PermID per SEC entity — so no name-similarity gate is needed on the
-// result.
+// digits before the query (Refinitiv only accepts the padded form) and
+// is treated as deterministic, so no name-similarity gate is applied.
 func LookupByCIK(ctx context.Context, cik string, limiter *rate.Limiter) (string, error) {
 	cik = NormalizeCIK(cik)
 	if cik == "" {

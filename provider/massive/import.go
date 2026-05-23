@@ -61,7 +61,6 @@ var backupFilenameRE = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})\.parquet$`)
 // "EOD" (joins each row against splits/dividends loaded from the
 // colocated <base>/splits/<YYYY>.parquet and <base>/dividends/
 // <YYYY>.parquet files) and "1-Minute Bars". Other datasets fail fast.
-//
 // Arguments may be either individual daily parquet files or directories
 // containing the standard <base>/<YYYY>/<YYYY-MM-DD>.parquet layout;
 // directories are walked recursively and the corporate-actions

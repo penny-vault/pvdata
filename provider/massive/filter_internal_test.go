@@ -15,10 +15,14 @@
 package massive
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/rs/zerolog"
 
 	"github.com/penny-vault/pvdata/data"
+	"github.com/penny-vault/pvdata/figi"
 )
 
 var _ = Describe("marketIneligibleReason", func() {
@@ -178,9 +182,180 @@ var _ = Describe("shortDelistedNoCoverageReason", func() {
 		Expect(drop).To(BeFalse())
 	})
 
-	It("does not drop when ListingDate or DelistingDate is empty", func() {
-		Expect(reasonDropShort(api, &data.Asset{Active: false, ListingDate: "", DelistingDate: "2020-01-31"})).To(BeFalse())
-		Expect(reasonDropShort(api, &data.Asset{Active: false, ListingDate: "2020-01-30", DelistingDate: ""})).To(BeFalse())
+	It("drops a delisted phantom row with empty ListingDate when no EOD coverage exists", func() {
+		// JATT-style: Massive returns a residual stub after the
+		// asset is delisted, with delisting set, listing stripped,
+		// and CIK stripped. No EOD bars exist for the ticker. The
+		// stub should be dropped at publish so it cannot collide
+		// with the real same-FIGI rows on the (ticker, composite_figi)
+		// upsert and erase their already-correct listing date.
+		Expect(reasonDropShort(api, &data.Asset{Ticker: "PHANTOM", Active: false, ListingDate: "", DelistingDate: "2020-01-31"})).To(BeTrue())
+	})
+
+	It("does not drop when DelistingDate is empty (no delisting boundary to evaluate)", func() {
+		Expect(reasonDropShort(api, &data.Asset{Ticker: "GHOST", Active: false, ListingDate: "2020-01-30", DelistingDate: ""})).To(BeFalse())
+	})
+
+	It("does not drop a delisted phantom row when EOD coverage exists for its ticker", func() {
+		// BBI's archive covers [2003-09-10..2010-07-06]. A phantom
+		// row with empty listing but a delisting inside that window
+		// has trade-data evidence the security existed; the filter
+		// must not drop it just because Massive omitted the listing.
+		Expect(reasonDropShort(api, &data.Asset{Ticker: "BBI", Active: false, ListingDate: "", DelistingDate: "2010-06-30"})).To(BeFalse())
+	})
+})
+
+var _ = Describe("dropSyntheticDuplicatesOfRealFigi", func() {
+	silent := func() *zerolog.Logger {
+		l := zerolog.Nop()
+		return &l
+	}
+
+	It("drops a synthetic-FIGI asset when a same-(ticker, name) real-FIGI sibling exists in the batch", func() {
+		realFigi := "BBG020ZK3PR6"
+		syntheticFigi := figi.GenerateSyntheticFIGI("JATT", "JATT II Acquisition Corp Ordinary Shares")
+
+		assets := []*data.Asset{
+			{Ticker: "JATT", Name: "JATT II Acquisition Corp Ordinary Shares", CompositeFigi: realFigi, CIK: "0002112446"},
+			{Ticker: "JATT", Name: "JATT II Acquisition Corp Ordinary Shares", CompositeFigi: syntheticFigi, DelistingDate: "2026-04-16"},
+		}
+
+		got := dropSyntheticDuplicatesOfRealFigi(silent(), assets)
+
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].CompositeFigi).To(Equal(realFigi))
+	})
+
+	It("preserves a synthetic-FIGI asset when no same-(ticker, name) real-FIGI sibling exists", func() {
+		predecessor := &data.Asset{
+			Ticker:        "BBI",
+			Name:          "Blockbuster Inc",
+			CompositeFigi: figi.GenerateSyntheticFIGIFromCIK("0001085734", "BBI"),
+			DelistingDate: "2010-07-06",
+		}
+		successor := &data.Asset{
+			Ticker:        "BBI",
+			Name:          "Brickell Biotech Inc",
+			CompositeFigi: "BBG00R4MBNH6",
+		}
+
+		got := dropSyntheticDuplicatesOfRealFigi(silent(), []*data.Asset{predecessor, successor})
+
+		Expect(got).To(HaveLen(2))
+	})
+
+	It("returns the input unchanged when no real-FIGI assets are present", func() {
+		assets := []*data.Asset{
+			{Ticker: "FOO", Name: "Foo Inc", CompositeFigi: figi.GenerateSyntheticFIGI("FOO", "Foo Inc")},
+		}
+
+		got := dropSyntheticDuplicatesOfRealFigi(silent(), assets)
+
+		Expect(got).To(HaveLen(1))
+	})
+})
+
+var _ = Describe("dropSameCompositeFigiDuplicates", func() {
+	silent := func() *zerolog.Logger {
+		l := zerolog.Nop()
+		return &l
+	}
+
+	It("drops the inactive sibling when two assets share the same (ticker, composite FIGI)", func() {
+		active := &data.Asset{Ticker: "MSA", CompositeFigi: "BBG000BPDXF8", CIK: "0000066570", Active: true, Name: "Mine Safety Incorporated"}
+		inactive := &data.Asset{Ticker: "MSA", CompositeFigi: "BBG000BPDXF8", CIK: "0000932691", Active: false, Name: "MINE SAFETY APPLIANCES"}
+
+		got := dropSameCompositeFigiDuplicates(silent(), []*data.Asset{inactive, active})
+
+		Expect(got).To(HaveLen(1))
+		Expect(got[0]).To(Equal(active))
+	})
+
+	It("prefers a non-empty CIK among same-active-state siblings", func() {
+		hasCIK := &data.Asset{Ticker: "X", CompositeFigi: "BBG000X", CIK: "0001234567", Active: true}
+		noCIK := &data.Asset{Ticker: "X", CompositeFigi: "BBG000X", CIK: "", Active: true}
+
+		got := dropSameCompositeFigiDuplicates(silent(), []*data.Asset{noCIK, hasCIK})
+
+		Expect(got).To(HaveLen(1))
+		Expect(got[0]).To(Equal(hasCIK))
+	})
+
+	It("preserves assets that do not share a composite FIGI with anyone else", func() {
+		a := &data.Asset{Ticker: "BBI", CompositeFigi: "BBG000A", Active: true}
+		b := &data.Asset{Ticker: "BBI", CompositeFigi: "BBG000B", Active: false}
+
+		got := dropSameCompositeFigiDuplicates(silent(), []*data.Asset{a, b})
+
+		Expect(got).To(HaveLen(2))
+	})
+
+	It("preserves caller order on the survivors", func() {
+		a1 := &data.Asset{Ticker: "X", CompositeFigi: "BBG000A", Active: true}
+		b := &data.Asset{Ticker: "X", CompositeFigi: "BBG000B", Active: true}
+		a2 := &data.Asset{Ticker: "X", CompositeFigi: "BBG000A", Active: false}
+
+		got := dropSameCompositeFigiDuplicates(silent(), []*data.Asset{a1, b, a2})
+
+		Expect(got).To(HaveLen(2))
+		Expect(got[0]).To(Equal(a1))
+		Expect(got[1]).To(Equal(b))
+	})
+
+	It("drops a synthetic-FIGI row whose window overlaps a real-FIGI sibling on the same ticker", func() {
+		// DAX-style: Global X carries a real OpenFIGI composite and
+		// is currently active. A Recon Capital synthetic-FIGI row
+		// surfaced from a name-only walk observation, listed one
+		// day later. Their windows overlap; the synthetic must yield
+		// to the real-FIGI authoritative record.
+		real := &data.Asset{Ticker: "DAX", CompositeFigi: "BBG00MVW5W00", Active: true, ListingDate: "2014-10-22", Name: "Global X Funds Global X DAX Germany ETF"}
+		synthetic := &data.Asset{Ticker: "DAX", CompositeFigi: "PVG76XCGMSN7", Active: false, ListingDate: "2014-10-23", DelistingDate: "2017-02-28", Name: "Recon Capital Series Trust Recon Capital DAX Germany ETF"}
+
+		got := dropOverlappingSyntheticAgainstRealFigi(silent(), []*data.Asset{real, synthetic})
+
+		Expect(got).To(HaveLen(1))
+		Expect(got[0]).To(Equal(real))
+	})
+
+	It("does not drop a synthetic-FIGI row whose window does not overlap any real-FIGI sibling", func() {
+		// BBI shape: Blockbuster (synthetic) ended 2010, Brickell
+		// (real) started 2019. Disjoint windows — both survive.
+		blockbuster := &data.Asset{Ticker: "BBI", CompositeFigi: "PVGMD46KH1G1", Active: false, ListingDate: "1999-05-06", DelistingDate: "2010-07-07"}
+		brickell := &data.Asset{Ticker: "BBI", CompositeFigi: "BBG000BGN354", Active: false, ListingDate: "2019-09-03", DelistingDate: "2022-09-08"}
+
+		got := dropOverlappingSyntheticAgainstRealFigi(silent(), []*data.Asset{blockbuster, brickell})
+
+		Expect(got).To(HaveLen(2))
+	})
+
+	It("prefers the live snapshot (ValidFor zero) over a historical observation when active and CIK match", func() {
+		// MSA-style: Massive returns the same composite FIGI twice,
+		// once for the historical CIK observation pinned to a past
+		// date and once for the current CIK as the live snapshot
+		// (ValidFor zero). Both rows are active and carry a CIK; we
+		// want the live snapshot to survive so the persisted row's
+		// CIK, name, and branding reflect today's entity rather than
+		// last decade's.
+		historical := &data.Asset{
+			Ticker:        "MSA",
+			CompositeFigi: "BBG000BPDXF8",
+			CIK:           "0000932691",
+			Active:        true,
+			Name:          "MINE SAFETY APPLIANCES",
+			ValidFor:      time.Date(2014, 3, 10, 0, 0, 0, 0, time.UTC),
+		}
+		live := &data.Asset{
+			Ticker:        "MSA",
+			CompositeFigi: "BBG000BPDXF8",
+			CIK:           "0000066570",
+			Active:        true,
+			Name:          "Mine Safety Incorporated",
+		}
+
+		got := dropSameCompositeFigiDuplicates(silent(), []*data.Asset{historical, live})
+
+		Expect(got).To(HaveLen(1))
+		Expect(got[0]).To(Equal(live))
 	})
 })
 

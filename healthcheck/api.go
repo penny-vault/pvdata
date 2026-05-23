@@ -238,9 +238,8 @@ const (
 
 // Ping records a run state on healthchecks.io. The body is shown in the
 // dashboard as the ping's log; pass a short human-readable summary.
-//
-// Failures to reach healthchecks.io are returned to the caller; subscription
-// runs treat them as warnings rather than fatal errors.
+// Failures to reach healthchecks.io are returned to the caller;
+// subscription runs treat them as warnings rather than fatal errors.
 func Ping(id string, kind PingKind, body string) error {
 	if id == "" {
 		return nil
