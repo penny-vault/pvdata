@@ -139,7 +139,7 @@ var _ = Describe("AssetBuilder.finalize", func() {
 		Expect(asset).NotTo(BeNil())
 		Expect(figi.IsSyntheticFIGI(asset.CompositeFigi)).To(BeTrue(),
 			"composite must be a synthetic PVG-prefixed FIGI when OpenFIGI says non-US")
-		Expect(asset.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGIFromCIK("0000008868", "AVP")))
+		Expect(asset.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGIFromCIKLifecycle("0000008868", "AVP", "2008-03-01")))
 		Expect(asset.ShareClassFigi).To(BeEmpty(),
 			"share-class must clear when the composite is rewritten to a synthetic")
 	})
@@ -165,7 +165,7 @@ var _ = Describe("AssetBuilder.finalize", func() {
 
 		Expect(asset).NotTo(BeNil())
 		Expect(figi.IsSyntheticFIGI(asset.CompositeFigi)).To(BeTrue())
-		Expect(asset.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGIFromCIK("0000027904", "DAL")))
+		Expect(asset.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGIFromCIKLifecycle("0000027904", "DAL", "2003-11-01")))
 		Expect(asset.ShareClassFigi).To(BeEmpty())
 	})
 
@@ -187,7 +187,7 @@ var _ = Describe("AssetBuilder.finalize", func() {
 		asset := b.finalize(context.Background(), p, nil)
 
 		Expect(asset).NotTo(BeNil())
-		Expect(asset.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGI("OLDTKR", "Old Company Inc")))
+		Expect(asset.CompositeFigi).To(Equal(figi.GenerateSyntheticFIGILifecycle("OLDTKR", "Old Company Inc", "1999-01-01")))
 	})
 
 	It("drops the lifecycle when no synthetic mint is possible (no CIK, no name)", func() {
@@ -533,6 +533,30 @@ var _ = Describe("AssetBuilder.finalize asset-type filter", func() {
 			Expect(asset).NotTo(BeNil())
 			Expect(asset.Ticker).To(Equal("AAPL"))
 		})
+
+		It("promotes Massive type=FUND to CEF because the lifecycle came from the EOD archive", func() {
+			// AFB (AllianceBernstein National Municipal Income Fund) is a
+			// closed-end fund: it trades intraday on NYSE and has
+			// continuous EOD bars from 2003-09-10 onward. Massive types
+			// it FUND today, but reaching finalize means EOD bars exist,
+			// which is the defining signal of a CEF vs an open-end mutual.
+			p := &proposedAsset{
+				ticker: "AFB",
+				rng:    dateRange{Start: d("2003-09-10"), End: d("2026-05-22")},
+				isLast: true,
+				record: massiveStock{
+					Ticker:        "AFB",
+					Name:          "AllianceBernstein National Municipal Income Fund",
+					CompositeFIGI: "BBG000000020",
+					Type:          "FUND",
+					CIK:           "0001162027",
+				},
+			}
+
+			asset := builder().finalize(context.Background(), p, nil)
+			Expect(asset).NotTo(BeNil())
+			Expect(asset.AssetType).To(Equal(data.CEF))
+		})
 	})
 
 	Context("when Massive's type field is empty (the heuristic fallback path)", func() {
@@ -646,24 +670,58 @@ var _ = Describe("parseMassiveListDate", func() {
 	})
 })
 
+var _ = Describe("scoreMassiveRecord", func() {
+	DescribeTable("ranks records by classification completeness",
+		func(rec massiveStock, want int) {
+			Expect(scoreMassiveRecord(rec)).To(Equal(want))
+		},
+		Entry("type and CIK present is the complete score (3)",
+			massiveStock{Type: "CS", CIK: "0000320193"}, massiveRecordCompleteScore),
+		Entry("type only is worth 2",
+			massiveStock{Type: "CS"}, 2),
+		Entry("CIK only is worth 1",
+			massiveStock{CIK: "0000320193"}, 1),
+		Entry("neither type nor CIK is worth 0 (the ABCW lifecycle-start shape)",
+			massiveStock{Name: "ANCHOR BANCORP WISC INC"}, 0),
+		Entry("whitespace-only type is treated as empty",
+			massiveStock{Type: "  ", CIK: "0000320193"}, 1),
+		Entry("whitespace-only CIK is treated as empty",
+			massiveStock{Type: "CS", CIK: "  "}, 2),
+	)
+})
+
 var _ = Describe("mintBuilderSynthetic", func() {
-	It("returns the CIK-keyed synthetic when CIK is non-empty", func() {
-		got := mintBuilderSynthetic("0000001234", "FOO", "Foo Inc")
-		Expect(got).To(Equal(figi.GenerateSyntheticFIGIFromCIK("0000001234", "FOO")))
+	start := d("2003-09-10")
+
+	It("returns the CIK+lifecycle-keyed synthetic when CIK is non-empty", func() {
+		got := mintBuilderSynthetic("0000001234", "FOO", "Foo Inc", start)
+		Expect(got).To(Equal(figi.GenerateSyntheticFIGIFromCIKLifecycle("0000001234", "FOO", "2003-09-10")))
 	})
 
-	It("falls back to (ticker, name) when CIK is empty but ticker and name are set", func() {
-		got := mintBuilderSynthetic("", "FOO", "Foo Inc")
-		Expect(got).To(Equal(figi.GenerateSyntheticFIGI("FOO", "Foo Inc")))
+	It("falls back to (ticker, name, lifecycle-start) when CIK is empty but ticker and name are set", func() {
+		got := mintBuilderSynthetic("", "FOO", "Foo Inc", start)
+		Expect(got).To(Equal(figi.GenerateSyntheticFIGILifecycle("FOO", "Foo Inc", "2003-09-10")))
 	})
 
 	It("returns empty string when neither CIK nor name is available", func() {
-		Expect(mintBuilderSynthetic("", "FOO", "")).To(BeEmpty())
-		Expect(mintBuilderSynthetic("", "", "Foo Inc")).To(BeEmpty())
+		Expect(mintBuilderSynthetic("", "FOO", "", start)).To(BeEmpty())
+		Expect(mintBuilderSynthetic("", "", "Foo Inc", start)).To(BeEmpty())
 	})
 
 	It("treats whitespace-only inputs as empty", func() {
-		Expect(mintBuilderSynthetic("   ", "FOO", "  ")).To(BeEmpty())
+		Expect(mintBuilderSynthetic("   ", "FOO", "  ", start)).To(BeEmpty())
+	})
+
+	It("produces distinct FIGIs for adjacent lifecycles of the same entity", func() {
+		// The PILL / ProxyMed scenario: two same-(CIK, ticker, name)
+		// lifecycles separated by a real trading gap must get different
+		// synthetic FIGIs so they survive the (ticker, composite_figi)
+		// upsert without one overwriting the other.
+		first := mintBuilderSynthetic("0000906337", "PILL", "PROXYMED INC NEW", d("2003-09-10"))
+		second := mintBuilderSynthetic("0000906337", "PILL", "PROXYMED INC NEW", d("2004-12-22"))
+		Expect(first).NotTo(BeEmpty())
+		Expect(second).NotTo(BeEmpty())
+		Expect(first).NotTo(Equal(second))
 	})
 })
 

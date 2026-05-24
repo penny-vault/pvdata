@@ -190,6 +190,94 @@ var _ = Describe("EODArchive lifecycle gap splitting", func() {
 	})
 })
 
+var _ = Describe("EODArchive.TrackableRanges", func() {
+	It("drops a historical range whose duration is below the asset-creation minimum", func() {
+		root := GinkgoT().TempDir()
+
+		// A 1-day historical fragment (Oct 22-23) followed by a 61-day
+		// gap and then a long run with bars at most 60 days apart so the
+		// run stays one range. The fragment is the ABV.C noise we want
+		// filtered; the long run is what survives.
+		writeArchiveDayFile(root, time.Date(2003, 10, 22, 0, 0, 0, 0, time.UTC), []string{"ABV/C"})
+		writeArchiveDayFile(root, time.Date(2003, 10, 23, 0, 0, 0, 0, time.UTC), []string{"ABV/C"})
+		writeArchiveDayFile(root, time.Date(2003, 12, 23, 0, 0, 0, 0, time.UTC), []string{"ABV/C"})
+		writeArchiveDayFile(root, time.Date(2004, 2, 21, 0, 0, 0, 0, time.UTC), []string{"ABV/C"})
+		writeArchiveDayFile(root, time.Date(2004, 4, 21, 0, 0, 0, 0, time.UTC), []string{"ABV/C"})
+		writeArchiveDayFile(root, time.Date(2004, 6, 20, 0, 0, 0, 0, time.UTC), []string{"ABV/C"})
+		// A later bar for a different ticker pushes coverage end past
+		// the long-run end, so the long run qualifies on duration
+		// alone rather than being tail-protected.
+		writeArchiveDayFile(root, time.Date(2010, 1, 4, 0, 0, 0, 0, time.UTC), []string{"OTHER"})
+
+		archive, err := LoadEODArchive(root)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Raw Ranges sees both: the 1-day fragment and the long run.
+		raw := archive.Ranges("ABV/C")
+		Expect(raw).To(HaveLen(2))
+
+		// TrackableRanges drops the 1-day fragment and keeps the long run.
+		got := archive.TrackableRanges("ABV/C")
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Start).To(Equal(time.Date(2003, 12, 23, 0, 0, 0, 0, time.UTC)))
+		Expect(got[0].End).To(Equal(time.Date(2004, 6, 20, 0, 0, 0, 0, time.UTC)))
+	})
+
+	It("keeps a short range whose End matches the archive's coverage end (new-listing tail)", func() {
+		root := GinkgoT().TempDir()
+
+		// A long historical range for one ticker establishes the
+		// archive's coverage end on 2020-06-30. A second ticker first
+		// trades on 2020-06-15 and is still trading on coverage end —
+		// 16 days, well under the 60-day minimum, but tail-protected.
+		writeArchiveDayFile(root, time.Date(2010, 1, 4, 0, 0, 0, 0, time.UTC), []string{"OLD"})
+		writeArchiveDayFile(root, time.Date(2020, 6, 30, 0, 0, 0, 0, time.UTC), []string{"OLD", "NEW"})
+		writeArchiveDayFile(root, time.Date(2020, 6, 15, 0, 0, 0, 0, time.UTC), []string{"NEW"})
+
+		archive, err := LoadEODArchive(root)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := archive.TrackableRanges("NEW")
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Start).To(Equal(time.Date(2020, 6, 15, 0, 0, 0, 0, time.UTC)))
+		Expect(got[0].End).To(Equal(time.Date(2020, 6, 30, 0, 0, 0, 0, time.UTC)))
+	})
+
+	It("keeps a historical range whose duration meets the minimum", func() {
+		root := GinkgoT().TempDir()
+
+		// A historical range with internal bars at most 60 days apart
+		// (Jan 1 → Feb 25 → Mar 6 = 64-day single range), followed by a
+		// 10-year gap that opens a second range. Both qualify: the
+		// first on duration alone, the second is tail-protected
+		// because its End matches the archive's coverage end.
+		writeArchiveDayFile(root, time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), []string{"OK"})
+		writeArchiveDayFile(root, time.Date(2010, 2, 25, 0, 0, 0, 0, time.UTC), []string{"OK"})
+		writeArchiveDayFile(root, time.Date(2010, 3, 6, 0, 0, 0, 0, time.UTC), []string{"OK"})
+		writeArchiveDayFile(root, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), []string{"OK"})
+
+		archive, err := LoadEODArchive(root)
+		Expect(err).NotTo(HaveOccurred())
+
+		got := archive.TrackableRanges("OK")
+		Expect(got).To(HaveLen(2))
+		Expect(got[0].Start).To(Equal(time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)))
+		Expect(got[0].End).To(Equal(time.Date(2010, 3, 6, 0, 0, 0, 0, time.UTC)))
+		Expect(got[1].End).To(Equal(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)))
+	})
+
+	It("returns nil for a ticker the archive has no bars for", func() {
+		root := GinkgoT().TempDir()
+
+		writeArchiveDayFile(root, time.Date(2020, 5, 22, 0, 0, 0, 0, time.UTC), []string{"AAPL"})
+
+		archive, err := LoadEODArchive(root)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(archive.TrackableRanges("ZZZ")).To(BeNil())
+	})
+})
+
 var _ = Describe("EODArchive index sidecar", func() {
 	It("writes the parquet index file at the archive root after a successful scan", func() {
 		root := GinkgoT().TempDir()
@@ -198,7 +286,7 @@ var _ = Describe("EODArchive index sidecar", func() {
 		_, err := LoadEODArchive(root)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, statErr := os.Stat(filepath.Join(root, "_pvdata_eod_index.parquet"))
+		_, statErr := os.Stat(filepath.Join(root, "eod_date_index.parquet"))
 		Expect(statErr).NotTo(HaveOccurred())
 	})
 
@@ -236,7 +324,7 @@ var _ = Describe("EODArchive index sidecar", func() {
 
 		// Plant a corrupt index ahead of time (not a valid parquet file).
 		bogus := []byte("not a parquet file")
-		Expect(os.WriteFile(filepath.Join(root, "_pvdata_eod_index.parquet"), bogus, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "eod_date_index.parquet"), bogus, 0o644)).To(Succeed())
 
 		archive, err := LoadEODArchive(root)
 		Expect(err).NotTo(HaveOccurred())

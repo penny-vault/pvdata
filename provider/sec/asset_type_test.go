@@ -77,6 +77,46 @@ var _ = Describe("resolveTypeFromForms", func() {
 	)
 })
 
+var _ = Describe("classifyExclusivelyOperating", func() {
+	DescribeTable("only fires when operating-company forms exist and zero fund forms appear",
+		func(forms []string, wantType data.AssetType, wantOK bool) {
+			gotType, gotOK := classifyExclusivelyOperating(forms)
+			Expect(gotOK).To(Equal(wantOK))
+			Expect(gotType).To(Equal(wantType))
+		},
+		Entry("ProxyMed pattern — exclusively CS-issuer forms (PILL historical lifecycle)",
+			[]string{"4", "8-K", "3", "SC 13D/A", "10-Q", "DEF 14A", "S-3", "10-K"},
+			data.CommonStock, true),
+		Entry("ADRC pattern — foreign-issuer forms only, no N-series",
+			[]string{"20-F", "6-K", "SC 13G", "20-F/A"},
+			data.ADRC, true),
+		Entry("BDC pattern — any N-2 filing aborts the override even with 10-Ks present",
+			[]string{"10-K", "10-Q", "N-2"},
+			data.AssetType(""), false),
+		Entry("CEF pattern — N-CSR alone aborts the override",
+			[]string{"N-CSR", "DEF 14A", "4"},
+			data.AssetType(""), false),
+		Entry("MF pattern — N-1A aborts the override",
+			[]string{"N-1A", "N-1A/A"},
+			data.AssetType(""), false),
+		Entry("modern fund-reporting NPORT-P aborts the override (CIK files NPORT instead of legacy N-Q)",
+			[]string{"10-K", "NPORT-P", "DEF 14A"},
+			data.AssetType(""), false),
+		Entry("no operating-form votes returns false (insider-only history)",
+			[]string{"4", "3", "SC 13G", "DEF 14A"},
+			data.AssetType(""), false),
+		Entry("empty form list returns false",
+			[]string{},
+			data.AssetType(""), false),
+		Entry("CS-prevalent (more CS than ADRC) returns CS",
+			[]string{"10-K", "10-Q", "10-Q", "20-F"},
+			data.CommonStock, true),
+		Entry("ADRC-prevalent (more 20-F than 10-K) returns ADRC",
+			[]string{"20-F", "20-F", "10-K"},
+			data.ADRC, true),
+	)
+})
+
 var _ = Describe("containsTicker", func() {
 	It("returns true when the ticker is in the list", func() {
 		Expect(containsTicker([]string{"AAPL", "MSFT"}, "AAPL")).To(BeTrue())

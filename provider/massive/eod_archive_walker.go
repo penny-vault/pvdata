@@ -36,7 +36,7 @@ import (
 // in the archive root alongside the per-year parquet subdirectories.
 // It caches the per-ticker date ranges so a re-run does not have to
 // re-parse every per-day parquet from scratch.
-const archiveIndexFilename = "_pvdata_eod_index.parquet"
+const archiveIndexFilename = "eod_date_index.parquet"
 
 // archiveIndexMetaKey* are the keys we attach to the parquet file's
 // key-value metadata so file-level facts (schema version, coverage
@@ -56,9 +56,22 @@ const archiveIndexSchemaVersion = 1
 // archiveLifecycleGapDays splits a ticker's observed-date history
 // into separate lifecycle ranges whenever consecutive observations
 // are more than this many calendar days apart. A gap that wide is
-// strong evidence of a delisting followed by a same-ticker reissue
-// (see Alcoa-style cases) rather than a normal weekend / holiday.
-const archiveLifecycleGapDays = 20
+// evidence of either a delisting followed by a same-ticker reissue
+// (Alcoa-style) or a major suspension; short gaps inside a single
+// trading lifetime (illiquid OTC names with sporadic bars,
+// delinquency-suffix periods, etc.) are absorbed into one range and
+// surface to backtesters as no-bar days within the lifecycle instead
+// of as separate assets.
+const archiveLifecycleGapDays = 60
+
+// archiveLifecycleMinDurationDays is the minimum range duration (in
+// calendar days) that produces an asset row in the catalog. Historical
+// ranges shorter than this are dropped as too brief to be meaningful
+// trading lifetimes — most are sparse-bar fragments separated from
+// the next real run by a 60+ day gap. A range whose End equals the
+// archive's most recent observed date is always kept (a brand-new
+// listing whose run so far is short still becomes an asset).
+const archiveLifecycleMinDurationDays = 60
 
 // archiveScanProgressInterval is how many per-day parquet files we
 // process between progress log lines while scanning the archive. A
@@ -524,6 +537,33 @@ func (a *EODArchive) Ranges(ticker string) []dateRange {
 	sort.Slice(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
 
 	return out
+}
+
+// TrackableRanges returns the subset of Ranges that should produce
+// asset rows: every range whose duration meets
+// archiveLifecycleMinDurationDays, plus any range whose End is the
+// archive's most-recent observed date (so a brand-new listing with a
+// short run-so-far still becomes an asset). Used by the asset builder
+// in place of Ranges so sparse-bar historical fragments are dropped
+// before the per-ticker reference fetch is even issued.
+func (a *EODArchive) TrackableRanges(ticker string) []dateRange {
+	all := a.Ranges(ticker)
+	if len(all) == 0 {
+		return nil
+	}
+
+	minDur := time.Duration(archiveLifecycleMinDurationDays) * 24 * time.Hour
+	_, coverageEnd := a.Coverage()
+
+	kept := make([]dateRange, 0, len(all))
+
+	for _, r := range all {
+		if r.End.Equal(coverageEnd) || r.End.Sub(r.Start) >= minDur {
+			kept = append(kept, r)
+		}
+	}
+
+	return kept
 }
 
 // eodArchiveMu / eodArchiveCache memoize the loaded archive keyed by

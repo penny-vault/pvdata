@@ -247,7 +247,7 @@ func (b *AssetBuilder) discoverProposals(ctx context.Context, tickers []string) 
 	totalJobs := 0
 
 	for _, ticker := range tickers {
-		totalJobs += len(b.archive.Ranges(ticker))
+		totalJobs += len(b.archive.TrackableRanges(ticker))
 	}
 
 	jobs := make(chan job, builderFetchWorkerCount()*4)
@@ -372,7 +372,7 @@ func (b *AssetBuilder) discoverProposals(ctx context.Context, tickers []string) 
 		defer close(jobs)
 
 		for _, ticker := range tickers {
-			ranges := b.archive.Ranges(ticker)
+			ranges := b.archive.TrackableRanges(ticker)
 			if len(ranges) == 0 {
 				continue
 			}
@@ -410,40 +410,71 @@ func (b *AssetBuilder) discoverProposals(ctx context.Context, tickers []string) 
 
 // fetchWithFallback resolves one (ticker, lifecycle) into a Massive
 // per-ticker reference record. The endpoint requires a date= parameter
-// for delisted tickers; without it the API returns NOT_FOUND. The
-// algorithm tries the range bookends first (most likely to resolve)
-// and then binary-searches inward for very-historical lifecycles
-// where Massive's reference data may be sparse mid-range. Returns
-// errBuilderNoResolvingDate when no probed date resolves.
+// for delisted tickers; without it the API returns NOT_FOUND.
+//
+// The algorithm probes the lifecycle Start first because each EOD
+// lifecycle is bounded to a single entity, and the Start anchors the
+// historical entity: for a reused ticker the Start of an old lifecycle
+// is in the original entity's era, while the End may abut a reuse
+// boundary. Start-first prevents the modern entity's type/CIK from
+// leaking into a historical lifecycle. If the Start probe returns an
+// incomplete record (missing type or CIK), the End probe and a
+// bounded binary search inward fill in the gaps. Records are scored by
+// completeness ((type ? 2 : 0) + (cik ? 1 : 0)); the search short-
+// circuits on a complete (score 3) record and otherwise returns the
+// best-scoring record seen. Returns errBuilderNoResolvingDate when no
+// probed date resolves at all.
 func (b *AssetBuilder) fetchWithFallback(ctx context.Context, ticker string, r dateRange) (time.Time, massiveStock, error) {
 	tried := make(map[string]struct{}, builderBinarySearchMaxIterations+2)
 
-	probe := func(at time.Time) (time.Time, massiveStock, bool, error) {
+	var (
+		bestAt     time.Time
+		bestRecord massiveStock
+		bestScore  = -1
+	)
+
+	// probe issues one fetch (skipping dates already tried), updates the
+	// best-seen record, and reports whether the result is "complete"
+	// (has both type and CIK). The caller short-circuits on a complete
+	// result; otherwise it keeps probing in case a later date returns a
+	// stronger record.
+	probe := func(at time.Time) (bool, error) {
 		key := at.Format("2006-01-02")
 		if _, seen := tried[key]; seen {
-			return at, massiveStock{}, false, nil
+			return false, nil
 		}
 
 		tried[key] = struct{}{}
 
 		record, found, err := b.fetchAt(ctx, ticker, at)
 		if err != nil {
-			return at, massiveStock{}, false, err
+			return false, err
 		}
 
-		return at, record, found, nil
+		if !found {
+			return false, nil
+		}
+
+		score := scoreMassiveRecord(record)
+		if score > bestScore {
+			bestAt = at
+			bestRecord = record
+			bestScore = score
+		}
+
+		return score == massiveRecordCompleteScore, nil
 	}
 
-	if probedAt, record, ok, err := probe(r.End); err != nil {
+	if complete, err := probe(r.Start); err != nil {
 		return time.Time{}, massiveStock{}, err
-	} else if ok {
-		return probedAt, record, nil
+	} else if complete {
+		return bestAt, bestRecord, nil
 	}
 
-	if probedAt, record, ok, err := probe(r.Start); err != nil {
+	if complete, err := probe(r.End); err != nil {
 		return time.Time{}, massiveStock{}, err
-	} else if ok {
-		return probedAt, record, nil
+	} else if complete {
+		return bestAt, bestRecord, nil
 	}
 
 	type window struct{ lo, hi time.Time }
@@ -461,19 +492,47 @@ func (b *AssetBuilder) fetchWithFallback(ctx context.Context, ticker string, r d
 		midDays := int(w.hi.Sub(w.lo)/(24*time.Hour)) / 2
 		mid := w.lo.AddDate(0, 0, midDays)
 
-		probedAt, record, ok, err := probe(mid)
+		complete, err := probe(mid)
 		if err != nil {
 			return time.Time{}, massiveStock{}, err
 		}
 
-		if ok {
-			return probedAt, record, nil
+		if complete {
+			return bestAt, bestRecord, nil
 		}
 
 		queue = append(queue, window{lo: w.lo, hi: mid}, window{lo: mid, hi: w.hi})
 	}
 
-	return time.Time{}, massiveStock{}, errBuilderNoResolvingDate
+	if bestScore < 0 {
+		return time.Time{}, massiveStock{}, errBuilderNoResolvingDate
+	}
+
+	return bestAt, bestRecord, nil
+}
+
+// massiveRecordCompleteScore is the score a Massive per-ticker record
+// earns when both `type` and `cik` are populated. The search in
+// fetchWithFallback short-circuits as soon as a probe returns a record
+// with this score.
+const massiveRecordCompleteScore = 3
+
+// scoreMassiveRecord ranks a Massive per-ticker record by how much
+// useful classification information it carries. Type is worth more than
+// CIK because finalize uses type directly while CIK only enables a
+// downstream SEC lookup.
+func scoreMassiveRecord(r massiveStock) int {
+	score := 0
+
+	if strings.TrimSpace(r.Type) != "" {
+		score += 2
+	}
+
+	if strings.TrimSpace(r.CIK) != "" {
+		score++
+	}
+
+	return score
 }
 
 // fetchAt issues one GET /v3/reference/tickers/{ticker}?date=at and
@@ -636,6 +695,47 @@ func (b *AssetBuilder) finalize(ctx context.Context, p *proposedAsset, nonUSFigi
 		}
 	}
 
+	// SEC override: Massive's `type` is keyed off the ticker rather than
+	// the entity, so reused tickers leak the modern entity's type back
+	// onto a historical lifecycle (PILL was ProxyMed CS in 2004; today
+	// PILL belongs to a Direxion ETF — Massive returns ETF at every
+	// historical date). When Massive classifies a lifecycle as an
+	// investment vehicle but SEC's submissions for the historical CIK
+	// show exclusively operating-company forms (10-K/10-Q/20-F/40-F with
+	// zero N-series filings), trust SEC. Narrowly scoped: any fund-form
+	// evidence aborts the override, so real CEFs/ETFs/MFs whose SEC
+	// filings include N-CSR/N-2/N-1A/NPORT pass through untouched.
+	switch assetType {
+	case data.ETF, data.MutualFund, data.CEF, "FUND":
+		if cik := strings.TrimSpace(p.record.CIK); cik != "" {
+			if overrideType, ok := sec.OverrideTypeIfExclusivelyOperating(ctx, cik); ok {
+				logger.Debug().
+					Str("Ticker", p.ticker).
+					Str("MassiveType", string(assetType)).
+					Str("SECType", string(overrideType)).
+					Str("CIK", cik).
+					Time("RangeStart", p.rng.Start).
+					Time("RangeEnd", p.rng.End).
+					Msg("massive builder: SEC submissions show exclusively operating-company forms; overriding Massive's investment-vehicle type")
+
+				assetType = overrideType
+			}
+		}
+	}
+
+	// Massive's per-ticker reference returns type=FUND for both
+	// closed-end funds (which trade intraday on exchanges) and open-end
+	// mutual funds (which only price at daily NAV close). The lifecycle
+	// reaching finalize originated in the EOD archive, so by construction
+	// there are exchange-traded bars in its range — that is a CEF, not an
+	// open-end mutual. Promote the label before the tracked-types gate.
+	// Runs after the SEC override so a FUND-typed operating-company
+	// override to CS happens first; only genuine FUND-typed entities
+	// (whose SEC filings have N-series forms) reach this promotion.
+	if assetType == "FUND" {
+		assetType = data.CEF
+	}
+
 	if _, ok := b.tracked[string(assetType)]; !ok {
 		logger.Debug().
 			Str("Ticker", p.ticker).
@@ -662,7 +762,7 @@ func (b *AssetBuilder) finalize(ctx context.Context, p *proposedAsset, nonUSFigi
 		// Massive returned no composite_figi (the DAL historical shape
 		// for pre-bankruptcy lifecycles). Mint a synthetic and clear
 		// share-class so the identifier pair stays consistent.
-		composite, shareClass = mintBuilderSynthetic(cik, p.ticker, p.record.Name), ""
+		composite, shareClass = mintBuilderSynthetic(cik, p.ticker, p.record.Name, p.rng.Start), ""
 		syntheticReason = "massive_returned_empty_composite_figi"
 
 		logger.Info().
@@ -684,7 +784,7 @@ func (b *AssetBuilder) finalize(ctx context.Context, p *proposedAsset, nonUSFigi
 			Str("DiscardedShareClass", shareClass).
 			Msg("massive builder: composite_figi is non-US per OpenFIGI; minting synthetic for the US lifecycle")
 
-		composite, shareClass = mintBuilderSynthetic(cik, p.ticker, p.record.Name), ""
+		composite, shareClass = mintBuilderSynthetic(cik, p.ticker, p.record.Name, p.rng.Start), ""
 		syntheticReason = "openfigi_says_non_us"
 	}
 
@@ -848,19 +948,24 @@ func parseMassiveListDate(raw string) time.Time {
 }
 
 // mintBuilderSynthetic mints a deterministic synthetic FIGI for the
-// (cik, ticker) pair when CIK is available, falling back to (ticker,
-// name) when not. Returns "" only when both fallbacks are unusable —
-// the caller is expected to drop the lifecycle in that case.
-func mintBuilderSynthetic(cik, ticker, name string) string {
+// (cik, ticker, lifecycle-start) tuple when CIK is available, falling
+// back to (ticker, name, lifecycle-start) when not. The lifecycle start
+// date is part of the seed so adjacent lifecycles for the same entity
+// (e.g., a relisting after a delinquency-suffix period) receive distinct
+// FIGIs and don't collide on the (ticker, composite_figi) primary key.
+// Returns "" only when both fallbacks are unusable — the caller is
+// expected to drop the lifecycle in that case.
+func mintBuilderSynthetic(cik, ticker, name string, lifecycleStart time.Time) string {
 	cik = strings.TrimSpace(cik)
 	ticker = strings.TrimSpace(ticker)
 	name = strings.TrimSpace(name)
+	start := lifecycleStart.UTC().Format("2006-01-02")
 
 	switch {
 	case cik != "":
-		return figi.GenerateSyntheticFIGIFromCIK(cik, ticker)
+		return figi.GenerateSyntheticFIGIFromCIKLifecycle(cik, ticker, start)
 	case ticker != "" && name != "":
-		return figi.GenerateSyntheticFIGI(ticker, name)
+		return figi.GenerateSyntheticFIGILifecycle(ticker, name, start)
 	default:
 		return ""
 	}

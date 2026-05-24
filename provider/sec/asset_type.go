@@ -162,6 +162,67 @@ func containsTicker(list []string, ticker string) bool {
 	return false
 }
 
+// OverrideTypeIfExclusivelyOperating inspects SEC submissions for the
+// given CIK and returns (CommonStock or ADRC, true) only when the
+// entity's filings include common-stock issuer forms (10-K, 10-Q,
+// 20-F, 40-F) and zero registered-investment-company forms (any
+// N-series or NPORT filing). Used by the Massive asset builder to
+// narrowly override Massive's `type` field when it reports an
+// ETF/FUND/MF/CEF type for an entity SEC unambiguously classifies as
+// operating — typically a reused ticker whose modern entity is a fund
+// but whose historical lifecycle belonged to an operating company.
+// Returns ("", false) when SEC's evidence is ambiguous, mixed with any
+// fund forms, or unavailable; callers must then leave Massive's type
+// alone.
+func OverrideTypeIfExclusivelyOperating(ctx context.Context, cik string) (data.AssetType, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(cik))
+	if err != nil || n <= 0 {
+		return "", false
+	}
+
+	sub, err := FetchSubmissions(ctx, n)
+	if err != nil || sub == nil {
+		return "", false
+	}
+
+	return classifyExclusivelyOperating(sub.Filings.Recent.Form)
+}
+
+// classifyExclusivelyOperating is the pure form classifier used by
+// OverrideTypeIfExclusivelyOperating. The override fires only when
+// there is at least one operating-company filing and zero fund
+// filings; any N-series form (N-1A, N-2, N-CSR, N-Q, N-PX, N-CEN,
+// ...) or NPORT filing aborts the override because the entity is at
+// least partly an investment company.
+func classifyExclusivelyOperating(forms []string) (data.AssetType, bool) {
+	var csVotes, adrcVotes int
+
+	for _, form := range forms {
+		upper := strings.ToUpper(strings.TrimSpace(form))
+
+		switch {
+		case strings.HasPrefix(upper, "10-K"), strings.HasPrefix(upper, "10K"),
+			strings.HasPrefix(upper, "10-Q"), strings.HasPrefix(upper, "10Q"):
+			csVotes++
+		case strings.HasPrefix(upper, "20-F"), strings.HasPrefix(upper, "20F"),
+			strings.HasPrefix(upper, "40-F"), strings.HasPrefix(upper, "40F"):
+			adrcVotes++
+		case strings.HasPrefix(upper, "N-"), strings.HasPrefix(upper, "NPORT"):
+			return "", false
+		}
+	}
+
+	if csVotes == 0 && adrcVotes == 0 {
+		return "", false
+	}
+
+	if adrcVotes > csVotes {
+		return data.ADRC, true
+	}
+
+	return data.CommonStock, true
+}
+
 // resolveTypeFromForms is the pure form-vote tabulation used by
 // ResolveAssetType. See ResolveAssetType for the tie-break rules.
 func resolveTypeFromForms(forms []string) (data.AssetType, bool) {
