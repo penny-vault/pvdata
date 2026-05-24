@@ -1,0 +1,4 @@
+-- PostgreSQL does not support removing enum values.
+-- To reverse, the assettype enum would need to be recreated and every
+-- column referencing it migrated. UNK should have existed from the
+-- start; this down migration is intentionally a no-op.

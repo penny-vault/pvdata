@@ -70,9 +70,8 @@ const archiveScanProgressInterval = 250
 // backups that the EOD walker writes under `parquet_backup_dir`. For
 // every ticker it records one or more (start, end) date ranges; for
 // the archive as a whole it records the earliest and latest dates
-// observed across every file scanned. The ranges feed the
-// MassiveEODArchive fields on DateCandidates so the date-assignment
-// algorithm can use real trading observations as one of its sources.
+// observed across every file scanned. AssetBuilder consumes the
+// per-ticker ranges as the source of truth for asset lifecycles.
 type EODArchive struct {
 	tickers       map[string][]dateRange
 	coverageStart time.Time
@@ -91,23 +90,6 @@ type EODArchive struct {
 type dateRange struct {
 	Start time.Time
 	End   time.Time
-}
-
-// formatDateRanges renders a slice of dateRange values as a compact
-// "[start..end,start..end]" string for log lines that want to show
-// every lifecycle the archive knows for a ticker in one field. Dates
-// are printed in YYYY-MM-DD form; an empty slice renders as "[]".
-func formatDateRanges(ranges []dateRange) string {
-	if len(ranges) == 0 {
-		return "[]"
-	}
-
-	parts := make([]string, len(ranges))
-	for i, r := range ranges {
-		parts[i] = r.Start.Format("2006-01-02") + ".." + r.End.Format("2006-01-02")
-	}
-
-	return "[" + strings.Join(parts, ",") + "]"
 }
 
 // archiveIndexRow is the on-disk row shape of the parquet sidecar
@@ -503,6 +485,24 @@ func (a *EODArchive) Lookup(ticker string) (first, last time.Time, ok bool) {
 	}
 
 	return first, last, true
+}
+
+// AllTickers returns every ticker the archive has at least one bar
+// for, sorted ascending. Returned slice is owned by the caller; the
+// archive's internal map is not exposed.
+func (a *EODArchive) AllTickers() []string {
+	if a == nil {
+		return nil
+	}
+
+	tickers := make([]string, 0, len(a.tickers))
+	for t := range a.tickers {
+		tickers = append(tickers, t)
+	}
+
+	sort.Strings(tickers)
+
+	return tickers
 }
 
 // Ranges returns the per-lifecycle (Start, End) spans for ticker,

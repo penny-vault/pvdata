@@ -57,7 +57,7 @@ const (
 	FRED         AssetType = "FRED"
 	SYNTH        AssetType = "SYNTH"
 	INDEX        AssetType = "INDEX"
-	UnknownAsset AssetType = "Unknown"
+	UnknownAsset AssetType = "UNK"
 )
 
 type Exchange string
