@@ -66,4 +66,55 @@ var _ = Describe("ComputeAdjustedClose", func() {
 		// Third row: adjustFactor=1.0 (reset), AdjClose = 9.0/1.0 = 9.0
 		Expect(result[2].AdjClose).To(BeNumerically("~", 9.0, 0.01))
 	})
+
+	It("combines a split and a dividend on the same date", func() {
+		// Row 1 is both a 2:1 split and a 2.0 cash dividend on the same
+		// ex-date. The CRSP formula multiplies the dividend ratio by the
+		// split factor in the same step:
+		//   adjustFactor = 1.0 * (1 + 2/102) * 2.0 = 208/102
+		// So the oldest row's adj_close = 101 / (208/102) = 10302/208
+		//   = 49.52884615...
+		rows := []EodRow{
+			{Close: 50.0, Dividend: 0, SplitFactor: 1.0},
+			{Close: 102.0, Dividend: 2.0, SplitFactor: 2.0},
+			{Close: 101.0, Dividend: 0, SplitFactor: 1.0},
+		}
+		result := ComputeAdjustedClose(rows)
+		Expect(result[0].AdjClose).To(BeNumerically("~", 50.0, 0.0001))
+		Expect(result[1].AdjClose).To(BeNumerically("~", 102.0, 0.0001))
+		Expect(result[2].AdjClose).To(BeNumerically("~", 49.5288, 0.0001))
+	})
+
+	It("stacks multiple splits multiplicatively over time", func() {
+		// Two 2:1 splits at different dates compound to a 4x adjustment
+		// for prices older than both.
+		rows := []EodRow{
+			{Close: 25.0, Dividend: 0, SplitFactor: 1.0},  // newest
+			{Close: 50.0, Dividend: 0, SplitFactor: 2.0},  // 2nd split
+			{Close: 100.0, Dividend: 0, SplitFactor: 2.0}, // 1st split
+			{Close: 99.0, Dividend: 0, SplitFactor: 1.0},  // oldest
+		}
+		result := ComputeAdjustedClose(rows)
+		Expect(result[0].AdjClose).To(BeNumerically("~", 25.0, 0.0001))
+		Expect(result[1].AdjClose).To(BeNumerically("~", 50.0, 0.0001))
+		Expect(result[2].AdjClose).To(BeNumerically("~", 50.0, 0.0001))
+		Expect(result[3].AdjClose).To(BeNumerically("~", 24.75, 0.0001))
+	})
+
+	It("returns an empty slice unchanged", func() {
+		var rows []EodRow
+		Expect(ComputeAdjustedClose(rows)).To(BeEmpty())
+	})
+
+	It("leaves a single row's adj_close equal to its close even when it carries a corporate action", func() {
+		// The newest row's adj_close is always close, because the
+		// adjustment from its own dividend/split applies only to rows
+		// older than it.
+		rows := []EodRow{
+			{Close: 100.0, Dividend: 5.0, SplitFactor: 2.0},
+		}
+		result := ComputeAdjustedClose(rows)
+		Expect(result).To(HaveLen(1))
+		Expect(result[0].AdjClose).To(BeNumerically("~", 100.0, 0.0001))
+	})
 })

@@ -17,11 +17,14 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
@@ -90,8 +93,92 @@ func PurgeExpiredData(ctx context.Context, subscription *library.Subscription) e
 	return nil
 }
 
+// adjustEodWorkerCount returns the parallelism used by AdjustEodPrices.
+// Override via db.adjust_workers. Default 8 — comfortably under the
+// 25-conn pool default so other queries are not starved.
+func adjustEodWorkerCount() int {
+	n := viper.GetInt("db.adjust_workers")
+	if n <= 0 {
+		return 8
+	}
+
+	return n
+}
+
+// adjustEodFigi runs the CRSP adjustment for a single figi: SELECT every
+// row in reverse chronological order, compute, and write the adj_close
+// values back via a single UNNEST update. Each call acquires its own
+// pool connection so callers may invoke it concurrently.
+func adjustEodFigi(ctx context.Context, lib *library.Library, tableName, figi string) error {
+	conn, err := lib.AcquireWithTimeout(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection for %s: %w", figi, err)
+	}
+	defer conn.Release()
+
+	rows, err := conn.Query(ctx,
+		fmt.Sprintf("SELECT event_date, close, dividend, split_factor FROM %s WHERE composite_figi = $1 ORDER BY event_date DESC", tableName), figi)
+	if err != nil {
+		return fmt.Errorf("query eod for %s: %w", figi, err)
+	}
+
+	type eodWithDate struct {
+		EventDate time.Time
+		EodRow
+	}
+
+	var records []eodWithDate
+
+	for rows.Next() {
+		var r eodWithDate
+		if err := rows.Scan(&r.EventDate, &r.Close, &r.Dividend, &r.SplitFactor); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan eod row for %s: %w", figi, err)
+		}
+
+		records = append(records, r)
+	}
+
+	rows.Close()
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate eod rows for %s: %w", figi, err)
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	eodRows := make([]EodRow, len(records))
+	for i, r := range records {
+		eodRows[i] = r.EodRow
+	}
+
+	ComputeAdjustedClose(eodRows)
+
+	dates := make([]time.Time, len(records))
+	adjs := make([]float64, len(records))
+
+	for i, r := range records {
+		dates[i] = r.EventDate
+		adjs[i] = eodRows[i].AdjClose
+	}
+
+	if _, err := conn.Exec(ctx,
+		fmt.Sprintf(`UPDATE %s SET adj_close = u.adj
+		FROM unnest($1::date[], $2::float8[]) AS u(d, adj)
+		WHERE composite_figi = $3 AND event_date = u.d`, tableName),
+		dates, adjs, figi); err != nil {
+		return fmt.Errorf("batch update adj_close for %s: %w", figi, err)
+	}
+
+	return nil
+}
+
 // AdjustEodPrices is a PostFetch hook that computes adjusted close prices
-// for all assets in the subscription's EOD table.
+// for all assets in the subscription's EOD table. Figis are processed
+// concurrently by a worker pool; each worker takes its own pool
+// connection. Worker count is configurable via db.adjust_workers.
 func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) error {
 	tableName := subscription.DataTablesMap[data.EODKey]
 	if tableName == "" {
@@ -100,128 +187,81 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 
 	log.Info().Str("Table", tableName).Msg("adjusting EOD prices")
 
-	conn, err := subscription.Library.AcquireWithTimeout(ctx)
+	figis, err := loadDistinctFigis(ctx, subscription.Library, tableName)
 	if err != nil {
-		return fmt.Errorf("acquire connection for eod adjust: %w", err)
-	}
-	defer conn.Release()
-
-	// Get distinct composite_figis
-	figiRows, err := conn.Query(ctx, fmt.Sprintf("SELECT DISTINCT composite_figi FROM %s", tableName))
-	if err != nil {
-		return fmt.Errorf("query distinct figis: %w", err)
+		return err
 	}
 
-	var figis []string
-
-	for figiRows.Next() {
-		var figi string
-		if err := figiRows.Scan(&figi); err != nil {
-			figiRows.Close()
-			return err
-		}
-
-		figis = append(figis, figi)
+	if len(figis) == 0 {
+		log.Info().Str("Table", tableName).Msg("no figis to adjust")
+		return nil
 	}
 
-	figiRows.Close()
+	workers := min(adjustEodWorkerCount(), len(figis))
 
-	if err := figiRows.Err(); err != nil {
-		return fmt.Errorf("iterate figis: %w", err)
-	}
-
-	log.Info().Str("Table", tableName).Int("Assets", len(figis)).Msg("starting EOD price adjustment loop")
+	log.Info().
+		Str("Table", tableName).
+		Int("Assets", len(figis)).
+		Int("Workers", workers).
+		Msg("starting EOD price adjustment")
 
 	started := time.Now()
 	heartbeat := rate.Sometimes{Interval: 15 * time.Second}
 
-	for idx, figi := range figis {
-		heartbeat.Do(func() {
-			elapsed := time.Since(started)
-			processed := idx + 1
-			pct := float64(processed) / float64(len(figis)) * 100
+	var processed atomic.Int64
 
-			var eta time.Duration
-			if processed > 0 {
-				eta = time.Duration(float64(elapsed) * float64(len(figis)-processed) / float64(processed))
+	jobs := make(chan string)
+	g, gctx := errgroup.WithContext(ctx)
+
+	for range workers {
+		g.Go(func() error {
+			for figi := range jobs {
+				if err := adjustEodFigi(gctx, subscription.Library, tableName, figi); err != nil {
+					return err
+				}
+
+				done := processed.Add(1)
+
+				heartbeat.Do(func() {
+					elapsed := time.Since(started)
+					pct := float64(done) / float64(len(figis)) * 100
+
+					var eta time.Duration
+					if done > 0 {
+						eta = time.Duration(float64(elapsed) * float64(int64(len(figis))-done) / float64(done))
+					}
+
+					log.Info().
+						Str("Table", tableName).
+						Int64("processed", done).
+						Int("total", len(figis)).
+						Str("progress", fmt.Sprintf("%.1f%%", pct)).
+						Str("elapsed", elapsed.Round(time.Second).String()).
+						Str("eta", eta.Round(time.Second).String()).
+						Msg("EOD price adjustment in progress")
+				})
 			}
 
-			log.Info().
-				Str("Table", tableName).
-				Int("processed", processed).
-				Int("total", len(figis)).
-				Str("progress", fmt.Sprintf("%.1f%%", pct)).
-				Str("elapsed", elapsed.Round(time.Second).String()).
-				Str("eta", eta.Round(time.Second).String()).
-				Msg("EOD price adjustment in progress")
+			return nil
 		})
+	}
 
-		rows, err := conn.Query(ctx,
-			fmt.Sprintf("SELECT event_date, close, dividend, split_factor FROM %s WHERE composite_figi = $1 ORDER BY event_date DESC", tableName), figi)
-		if err != nil {
-			log.Error().Err(err).Str("FIGI", figi).Msg("query eod for adjustment failed")
-			continue
-		}
+	g.Go(func() error {
+		defer close(jobs)
 
-		type eodWithDate struct {
-			EventDate any
-			EodRow
-		}
-
-		var records []eodWithDate
-
-		for rows.Next() {
-			var r eodWithDate
-			if err := rows.Scan(&r.EventDate, &r.Close, &r.Dividend, &r.SplitFactor); err != nil {
-				rows.Close()
-				return err
+		for _, figi := range figis {
+			select {
+			case <-gctx.Done():
+				return gctx.Err()
+			case jobs <- figi:
 			}
-
-			records = append(records, r)
 		}
 
-		rows.Close()
+		return nil
+	})
 
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate eod rows for %s: %w", figi, err)
-		}
-
-		if len(records) == 0 {
-			continue
-		}
-
-		// Extract EodRows for computation
-		eodRows := make([]EodRow, len(records))
-		for i, r := range records {
-			eodRows[i] = r.EodRow
-		}
-
-		ComputeAdjustedClose(eodRows)
-
-		// Batch update: one round-trip per figi via UNNEST instead of
-		// one round-trip per row. dates and adjs stay aligned by
-		// index because we walk the same records slice that fed
-		// ComputeAdjustedClose, in the same order.
-		dates := make([]time.Time, len(records))
-		adjs := make([]float64, len(records))
-
-		for i, r := range records {
-			t, ok := r.EventDate.(time.Time)
-			if !ok {
-				return fmt.Errorf("event_date for %s row %d was not a time.Time (got %T)", figi, i, r.EventDate)
-			}
-
-			dates[i] = t
-			adjs[i] = eodRows[i].AdjClose
-		}
-
-		if _, err := conn.Exec(ctx,
-			fmt.Sprintf(`UPDATE %s SET adj_close = u.adj
-			FROM unnest($1::date[], $2::float8[]) AS u(d, adj)
-			WHERE composite_figi = $3 AND event_date = u.d`, tableName),
-			dates, adjs, figi); err != nil {
-			return fmt.Errorf("batch update adj_close for %s: %w", figi, err)
-		}
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("eod price adjustment: %w", err)
 	}
 
 	log.Info().
@@ -231,4 +271,37 @@ func AdjustEodPrices(ctx context.Context, subscription *library.Subscription) er
 		Msg("EOD price adjustment complete")
 
 	return nil
+}
+
+// loadDistinctFigis returns the set of composite_figis present in
+// tableName, used to drive the per-figi adjustment loop.
+func loadDistinctFigis(ctx context.Context, lib *library.Library, tableName string) ([]string, error) {
+	conn, err := lib.AcquireWithTimeout(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire connection for figi list: %w", err)
+	}
+	defer conn.Release()
+
+	rows, err := conn.Query(ctx, fmt.Sprintf("SELECT DISTINCT composite_figi FROM %s", tableName))
+	if err != nil {
+		return nil, fmt.Errorf("query distinct figis: %w", err)
+	}
+	defer rows.Close()
+
+	var figis []string
+
+	for rows.Next() {
+		var figi string
+		if err := rows.Scan(&figi); err != nil {
+			return nil, fmt.Errorf("scan figi: %w", err)
+		}
+
+		figis = append(figis, figi)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate figis: %w", err)
+	}
+
+	return figis, nil
 }
