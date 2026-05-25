@@ -1,9 +1,23 @@
 # Asset builder migration: edge-case handlers to preserve
 
-Each entry below is a behavior currently produced by the existing
-`historicalMap → sanitize → assetDetails → assignDates → publish` flow.
-The new asset builder must produce the same behavior (or a deliberately
-different one, documented here) when it replaces this pipeline.
+> **Status**: historical record. The migration was completed by the
+> EOD-driven asset builder (now in `provider/catalog/`). The handlers
+> catalogued below were the responsibility of the pre-builder
+> `historicalMap → sanitize → assetDetails → assignDates → publish`
+> flow in `provider/massive/`. After the provider split, the live
+> Stock Tickers path was restored to its v0.6.0 baseline, which puts
+> many of these handlers (`sanitizeWalkComposites`,
+> `filterAssetsByLastUpdated`, `delistedAssets`, the date-assignment
+> chain, etc.) back into `provider/massive/` for the live daily flow.
+> The catalog builder produces the same outcomes for the historical
+> backfill without invoking them — see `asset_builder_design.md` for
+> how the three-phase builder absorbs them inline. File:line references
+> in this document point at the legacy locations and are kept here as a
+> historical map of "what behavior had to survive the rewrite."
+
+Each entry below is a behavior produced by the pre-builder flow that
+the EOD-driven builder must produce (or deliberately differ from,
+documented here).
 
 Format: `handler @ file:line` — failure mode it addresses — concrete example.
 

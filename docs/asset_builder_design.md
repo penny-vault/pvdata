@@ -1,20 +1,33 @@
 # Asset builder: historical backfill design
 
+> **Current home: `provider/catalog/`** (the Historical Asset Catalog
+> provider). This document was originally written when the builder lived
+> alongside the live Stock Tickers fetch in `provider/massive/`. After
+> the split, the live Stock Tickers path was restored to its v0.6.0
+> shape in `provider/massive/` and the EOD-driven builder moved to a
+> new independent provider at `provider/catalog/`. The two providers
+> share no Go-level state. File paths quoted below as
+> `provider/massive/...` should be read as `provider/catalog/...` for
+> the builder cluster; the originals were either deleted from
+> `provider/massive/` or replaced by the restored live code.
+
 This document captures the design for a new asset builder that replaces
 the historical backfill side of the existing `historicalWalk → sanitize
 → historicalMap → assetDetails → assignDatesForGroup → publish`
-pipeline in `provider/massive/`.
+pipeline.
 
 ## Scope
 
-- **In scope**: the historical backfill that populates
-  `massive_stock_tickers_asset_description_59f5d` with all historical
-  lifecycles of tickers we have EOD coverage for.
-- **Out of scope (for now)**: the daily flow (today's snapshot,
-  `delistedAssets`, the active=true paginated bulk call). Daily stays
-  on the existing path and updates the rows the backfill produced.
-
-Both flows write to the same asset-description table.
+- **In scope**: the historical backfill that produces one asset row per
+  (ticker, EOD lifecycle range) for every ticker present in the EOD
+  parquet archive. Lives in `provider/catalog/` and writes to its own
+  per-subscription asset-description table.
+- **Out of scope**: the daily flow (today's snapshot, `delistedAssets`,
+  the active=true paginated bulk call, per-ticker reference fetches,
+  `enrichForPublish` with figi/permid/sec/zacks). That flow stays in
+  `provider/massive/` Stock Tickers and writes to its own per-
+  subscription table. The operator unions the two via `pvdata publish`
+  if a combined view is desired.
 
 ## Context
 
@@ -267,7 +280,7 @@ CIK is present, else `GenerateSyntheticFIGI(ticker, name)`.
 
 1. The builder is a new component, alongside the existing pipeline,
    not replacing it in place. Expected location:
-   `provider/massive/asset_builder.go` with a sibling test file.
+   `provider/catalog/asset_builder.go` with a sibling test file.
 2. The existing flow continues to run. The builder is invocable via
    a new CLI subcommand (something like `pvdata rebuild` or a flag on
    `pvdata run`) that drives a one-time-or-on-demand backfill against
