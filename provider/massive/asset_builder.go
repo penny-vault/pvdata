@@ -637,15 +637,14 @@ func (b *AssetBuilder) identifyNonUSFigis(ctx context.Context, proposals []*prop
 func (b *AssetBuilder) finalize(ctx context.Context, p *proposedAsset, nonUSFigis map[string]struct{}) *data.Asset {
 	logger := zerolog.Ctx(ctx)
 
-	// Name-pattern check always runs. Massive types its own test
-	// symbols (IPOO "IPOO Test Symbol") and rebadged preferred /
-	// warrant placeholders as CS, so the name is the only signal that
-	// distinguishes them from real common stock. Drop on any of the
-	// patterns in marketIneligibleNamePatterns regardless of type.
-	if reason, drop := nameSaysNonTradable(&data.Asset{Name: p.record.Name}); drop {
+	// Type-aware name filter: skips "preferred"/"pfd" patterns for
+	// fund/ADR types (CEFs and ADRs often describe holdings or the
+	// underlying), keeps all other patterns for every type.
+	if reason, drop := nameSaysNonTradableForType(p.record.Name, p.record.Type); drop {
 		logger.Debug().
 			Str("Ticker", p.ticker).
 			Str("Name", p.record.Name).
+			Str("MassiveType", p.record.Type).
 			Str("Reason", reason).
 			Msg("massive builder: dropping lifecycle by name pattern (test symbol, warrant, preferred, when-issued, etc.)")
 

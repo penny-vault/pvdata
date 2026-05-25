@@ -587,6 +587,45 @@ func nameSaysNonTradable(asset *data.Asset) (string, bool) {
 	return "", false
 }
 
+// csRebadgeNamePatterns are the marketIneligibleNamePatterns entries
+// that only catch CS-rebadged placeholders; they false-positive on
+// fund/ADR names that describe holdings or the underlying security.
+var csRebadgeNamePatterns = map[string]struct{}{
+	"preferred": {},
+	" pfd":      {},
+	"pfd ":      {},
+}
+
+var fundOrADRTypes = map[string]struct{}{
+	"FUND":                  {},
+	string(data.ETF):        {},
+	string(data.CEF):        {},
+	string(data.ADRC):       {},
+	string(data.MutualFund): {},
+	string(data.ETN):        {},
+}
+
+// nameSaysNonTradableForType skips csRebadgeNamePatterns when the
+// Massive type is a fund or ADR class.
+func nameSaysNonTradableForType(name, assetType string) (string, bool) {
+	lowerName := strings.ToLower(name)
+	_, typeExempt := fundOrADRTypes[strings.TrimSpace(assetType)]
+
+	for _, pat := range marketIneligibleNamePatterns {
+		if typeExempt {
+			if _, skip := csRebadgeNamePatterns[pat]; skip {
+				continue
+			}
+		}
+
+		if strings.Contains(lowerName, pat) {
+			return "name_contains=" + strings.TrimSpace(pat), true
+		}
+	}
+
+	return "", false
+}
+
 // tickerSaysNonTradable looks at the ticker symbol and returns true
 // when its shape marks the record as non-tradable: a lowercase
 // placeholder marker (Massive uses lowercase letters as when-issued /

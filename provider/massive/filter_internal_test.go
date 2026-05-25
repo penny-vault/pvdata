@@ -124,6 +124,65 @@ var _ = Describe("marketIneligibleReason", func() {
 	})
 })
 
+var _ = Describe("nameSaysNonTradableForType", func() {
+	DescribeTable("keeps fund and ADR records whose names mention preferred holdings",
+		func(assetType, name string) {
+			_, drop := nameSaysNonTradableForType(name, assetType)
+			Expect(drop).To(BeFalse(),
+				"expected type=%q name=%q to pass the type-aware filter", assetType, name)
+		},
+		Entry("CEF — Flaherty & Crumrine Preferred Income",
+			"FUND", "Flaherty & Crumrine Preferred and Income Fund Incorporated"),
+		Entry("CEF — John Hancock Preferred Income II",
+			"FUND", "John Hancock Preferred Income Fund II"),
+		Entry("ETF — iShares Preferred Stock",
+			"ETF", "iShares Preferred and Income Securities ETF"),
+		Entry("CEF type explicit",
+			"CEF", "Nuveen Preferred & Income Opportunities Fund"),
+		Entry("ADRC — Banco Bradesco PFD ADR",
+			"ADRC", "Banco Bradesco S.A. American Depositary Shares (Each representing one Preferred Shares)"),
+		Entry("ADRC — Companhia Bebida 1 PFD SH",
+			"ADRC", "COMPANHIA BEBIDA ADS EACH REPSTG 1 PFD SH"),
+		Entry("MutualFund — preferred-income fund",
+			"MF", "Some Preferred Income Mutual Fund"),
+		Entry("ETN — preferred-linked note",
+			"ETN", "Preferred Equity Linked ETN"),
+	)
+
+	DescribeTable("still drops fund and ADR records that match the type-independent patterns",
+		func(assetType, name, expectedReasonContains string) {
+			reason, drop := nameSaysNonTradableForType(name, assetType)
+			Expect(drop).To(BeTrue(),
+				"expected type=%q name=%q to drop", assetType, name)
+			Expect(reason).To(ContainSubstring(expectedReasonContains))
+		},
+		Entry("FUND — test symbol",
+			"FUND", "ACME Fund Test Symbol", "test symbol"),
+		Entry("ETF — when issued",
+			"ETF", "Vanguard New Sector ETF When-Issued", "when-issued"),
+		Entry("CEF — warrant in name",
+			"CEF", "Some Fund warrant tranche", "warrant"),
+		Entry("ADRC — ex-distribution",
+			"ADRC", "Foreign Co ADS Ex-distribution", "ex-distribution"),
+	)
+
+	DescribeTable("keeps CS-rebadge patterns active for CS / empty / PFD types",
+		func(assetType, name string) {
+			_, drop := nameSaysNonTradableForType(name, assetType)
+			Expect(drop).To(BeTrue(),
+				"expected type=%q name=%q to drop", assetType, name)
+		},
+		Entry("CS — placeholder preferred series",
+			"CS", "American Finance Trust 7.375% Series C Cumulative Redeemable Preferred Stock"),
+		Entry("CS — PFD suffix in name",
+			"CS", "ARCH COAL INC 5% PERPETUAL CUM CONV PFD"),
+		Entry("empty type — preferred",
+			"", "Some Preferred Series A"),
+		Entry("PFD type — preferred",
+			"PFD", "Foo Preferred Trust"),
+	)
+})
+
 var _ = Describe("shortDelistedNoCoverageReason", func() {
 	var api *massiveAssetFetcher
 
