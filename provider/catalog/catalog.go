@@ -16,7 +16,12 @@ package catalog
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/rs/zerolog"
+	"golang.org/x/time/rate"
 
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
@@ -65,18 +70,133 @@ func (c *Catalog) Datasets() map[string]provider.Dataset {
 	}
 }
 
-// downloadHistoricalAssetCatalog is the Historical Asset Catalog Fetch.
-// Step 1 of the catalog migration lands this skeleton; the EOD-driven
-// asset builder and its supporting code are moved into this package in
-// step 2.
-func downloadHistoricalAssetCatalog(_ context.Context, subscription *library.Subscription, _ chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
-	now := time.Now()
-	exitNotification <- data.RunSummary{
-		StartTime:        now,
-		EndTime:          now,
+// downloadHistoricalAssetCatalog fetches today's Massive active=true
+// snapshot, then walks the EOD parquet archive to build one asset row
+// per (ticker, lifecycle) span. Lifecycle metadata is filled from
+// Massive's per-ticker reference endpoint with SEC and OpenFIGI used
+// for CIK correction and FIGI validation. Unlike the live Massive
+// Stock Tickers fetch, this provider does not run a delisted-detection
+// pass — that remains a live-data concern owned by provider/massive.
+func downloadHistoricalAssetCatalog(ctx context.Context, subscription *library.Subscription, out chan<- *data.Observation, exitNotification chan<- data.RunSummary) {
+	logger := zerolog.Ctx(ctx)
+
+	runSummary := data.RunSummary{
+		StartTime:        time.Now(),
 		SubscriptionID:   subscription.ID,
 		SubscriptionName: subscription.Name,
-		Status:           data.RunSuccess,
-		NumObservations:  0,
 	}
+
+	iconLogoLimit, missingBrandingCap, err := parseIconLogoLimit(subscription.Config["iconLogoLimit"])
+	if err != nil {
+		logger.Error().Err(err).Str("iconLogoLimit", subscription.Config["iconLogoLimit"]).Msg("could not convert iconLogoLimit configuration parameter to an integer")
+
+		runSummary.Status = data.RunFailed
+
+		runSummary.EndTime = time.Now()
+		exitNotification <- runSummary
+
+		return
+	}
+
+	api := &massiveAssetFetcher{
+		subscription:       subscription,
+		publishChan:        out,
+		branding:           NewBrandingBudget(iconLogoLimit),
+		missingBrandingCap: missingBrandingCap,
+	}
+
+	defer func() {
+		runSummary.EndTime = time.Now()
+
+		runSummary.NumObservations = int(api.numPublished.Load())
+		if runSummary.Status != data.RunFailed {
+			runSummary.Status = data.RunSuccess
+		}
+
+		exitNotification <- runSummary
+	}()
+
+	rateLimit, err := strconv.Atoi(subscription.Config["rateLimit"])
+	if err != nil {
+		logger.Error().Err(err).Str("configRateLimit", subscription.Config["rateLimit"]).Msg("could not convert rateLimit configuration parameter to an integer")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	if rateLimit <= 0 {
+		rateLimit = defaultRateLimit
+	}
+
+	api.client = newMassiveRESTClient(subscription.Config["apiKey"])
+	api.limiter = rate.NewLimiter(rate.Limit(float64(rateLimit)/float64(61)), 1)
+
+	tracked := trackedTypeSet(ctx)
+
+	logger.Info().Msg("stage: fetching today's snapshot (active=true, no type filter)")
+
+	snapStart := time.Now()
+
+	todayRaw, err := api.assets(ctx, "", time.Time{})
+	if err != nil {
+		logger.Error().Err(err).Msg("error getting ticker information")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	logger.Info().
+		Int("Raw", len(todayRaw)).
+		Dur("Elapsed", time.Since(snapStart).Round(time.Millisecond)).
+		Msg("stage: today's snapshot fetched; running tracked-type filter (SEC for untyped)")
+
+	filterStart := time.Now()
+	todayUniverse := filterToTrackedTypes(ctx, todayRaw, tracked)
+
+	// Apply --ticker / --figi filters to today's snapshot so the
+	// active-set gate matches the scoped universe the builder honors
+	// via the ctx-derived security filter.
+	tickerFilter, figiFilter := provider.SecurityFilterFromContext(ctx)
+	if tickerFilter != "" || figiFilter != "" {
+		filtered := todayUniverse[:0]
+
+		for _, a := range todayUniverse {
+			switch {
+			case tickerFilter != "" && strings.EqualFold(a.Ticker, tickerFilter):
+				filtered = append(filtered, a)
+			case figiFilter != "" && a.CompositeFigi == figiFilter:
+				filtered = append(filtered, a)
+			}
+		}
+
+		todayUniverse = filtered
+	}
+
+	todayActive := make(map[string]struct{}, len(todayUniverse))
+	for _, a := range todayUniverse {
+		todayActive[a.Ticker] = struct{}{}
+	}
+
+	logger.Info().
+		Int("Raw", len(todayRaw)).
+		Int("Kept", len(todayUniverse)).
+		Int("ActiveTickers", len(todayActive)).
+		Dur("Elapsed", time.Since(filterStart).Round(time.Millisecond)).
+		Msg("stage: today's snapshot filtered; starting EOD-driven asset builder")
+
+	builder := NewAssetBuilder(api, tracked, todayActive)
+
+	if err := builder.BuildAll(ctx); err != nil {
+		logger.Error().Err(err).Msg("catalog: asset builder aborted")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	logger.Info().
+		Int64("NumPublished", api.numPublished.Load()).
+		Msg("stage: Historical Asset Catalog run complete")
 }
