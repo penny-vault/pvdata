@@ -594,11 +594,15 @@ func (myLibrary *Library) SweepRunLogs(ctx context.Context, retention time.Durat
 	return tag.RowsAffected(), nil
 }
 
-// AvgSuccessfulRunDuration returns the average wall-clock duration of the
-// last `limit` successful runs for the given subscription. The boolean is
-// false when no qualifying runs were found, signalling the caller to fall
-// back to a declared expected duration.
-func (myLibrary *Library) AvgSuccessfulRunDuration(ctx context.Context, subscriptionID string, limit int) (time.Duration, bool, error) {
+// MaxSuccessfulRunDuration returns the longest wall-clock duration among
+// the last `limit` successful runs for the given subscription. The
+// boolean is false when no qualifying runs were found, signalling the
+// caller to fall back to a declared expected duration. MAX rather than
+// AVG so a single slow-but-successful run lifts the healthcheck grace
+// instead of being smoothed away — averaging high-variance runs leaves
+// the grace too tight on tail runs and produces premature failure
+// alerts even though the run eventually succeeds.
+func (myLibrary *Library) MaxSuccessfulRunDuration(ctx context.Context, subscriptionID string, limit int) (time.Duration, bool, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -609,10 +613,10 @@ func (myLibrary *Library) AvgSuccessfulRunDuration(ctx context.Context, subscrip
 	}
 	defer conn.Release()
 
-	var avgSeconds *float64
+	var maxSeconds *float64
 
 	err = conn.QueryRow(ctx,
-		`SELECT AVG(EXTRACT(EPOCH FROM (end_time - start_time)))
+		`SELECT MAX(EXTRACT(EPOCH FROM (end_time - start_time)))
 		 FROM (
 			SELECT end_time, start_time
 			FROM run_history
@@ -622,16 +626,16 @@ func (myLibrary *Library) AvgSuccessfulRunDuration(ctx context.Context, subscrip
 			LIMIT $2
 		 ) t`,
 		subscriptionID, limit,
-	).Scan(&avgSeconds)
+	).Scan(&maxSeconds)
 	if err != nil {
 		return 0, false, err
 	}
 
-	if avgSeconds == nil || *avgSeconds <= 0 {
+	if maxSeconds == nil || *maxSeconds <= 0 {
 		return 0, false, nil
 	}
 
-	return time.Duration(*avgSeconds * float64(time.Second)), true, nil
+	return time.Duration(*maxSeconds * float64(time.Second)), true, nil
 }
 
 // RunHistorySparkline returns daily aggregated observation counts for the last 30 days.

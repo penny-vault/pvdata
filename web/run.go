@@ -310,13 +310,6 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		summary.Status = data.RunCancelled
 	}
 
-	// FinalizeRun is conditional on status='running' so a force-cancel that
-	// already wrote 'cancelled' is preserved. Use a background context so
-	// the write still happens even if the run's context was cancelled.
-	if err := lib.FinalizeRun(context.Background(), runID, summary); err != nil {
-		logger.Error().Err(err).Msg("failed to finalise run history")
-	}
-
 	logQualitySummary(ctx, lib, sub, summary)
 
 	if summary.Status == data.RunSuccess && len(subDataset.PostFetch) > 0 {
@@ -339,6 +332,23 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		} else if resolved > 0 {
 			logger.Info().Int("count", resolved).Msg("permid backfill resolved missing PermIDs")
 		}
+	}
+
+	// Overwrite the provider's reported EndTime with the orchestrator's
+	// wall-clock end so the persisted duration covers every stage that
+	// runs before the healthcheck ping — save drain, PostFetch hooks
+	// (e.g. Massive EOD's adj_close recomputation), and the PermID
+	// backfill — not just the Fetch goroutine's exit time. Without
+	// this, the grace baseline derived from run_history under-measures
+	// the true run length and healthchecks.io alerts before the
+	// success ping arrives.
+	summary.EndTime = time.Now()
+
+	// FinalizeRun is conditional on status='running' so a force-cancel that
+	// already wrote 'cancelled' is preserved. Use a background context so
+	// the write still happens even if the run's context was cancelled.
+	if err := lib.FinalizeRun(context.Background(), runID, summary); err != nil {
+		logger.Error().Err(err).Msg("failed to finalise run history")
 	}
 
 	duration := summary.EndTime.Sub(summary.StartTime).Round(time.Second)
@@ -455,28 +465,28 @@ func emitFinal(run *activeRun, _ *library.Subscription, count int, success bool,
 }
 
 // graceHistoryWindow bounds how many recent successful runs feed the
-// rolling average used to retune the healthcheck grace. Small enough
-// to adapt to genuine workload changes; large enough to smooth one-off
-// fast or slow runs.
+// MAX used to retune the healthcheck grace. Small enough to adapt to
+// genuine workload changes; large enough that one short run does not
+// shrink the window past the next slow run.
 const graceHistoryWindow = 10
 
-// updateHealthcheckGrace recomputes the healthcheck grace period from the
-// average of the last graceHistoryWindow successful runs (or falls back to
-// the dataset's declared expected duration when history is too thin) and
-// pushes the result to healthchecks.io. Errors are logged as warnings; a
-// failed grace update never aborts the surrounding run.
+// updateHealthcheckGrace recomputes the healthcheck grace period from
+// the longest of the last graceHistoryWindow successful runs (or falls
+// back to the dataset's declared expected duration when history is too
+// thin) and pushes the result to healthchecks.io. Errors are logged as
+// warnings; a failed grace update never aborts the surrounding run.
 func updateHealthcheckGrace(ctx context.Context, lib *library.Library, sub *library.Subscription, expected time.Duration, logger zerolog.Logger) {
 	if sub.HealthCheckID == "" {
 		return
 	}
 
-	avg, ok, err := lib.AvgSuccessfulRunDuration(ctx, sub.ID.String(), graceHistoryWindow)
+	maxDur, ok, err := lib.MaxSuccessfulRunDuration(ctx, sub.ID.String(), graceHistoryWindow)
 	if err != nil {
-		logger.Warn().Err(err).Msg("could not compute average run duration for healthcheck grace update")
+		logger.Warn().Err(err).Msg("could not compute max run duration for healthcheck grace update")
 		return
 	}
 
-	baseline := avg
+	baseline := maxDur
 	if !ok {
 		baseline = expected
 	}
