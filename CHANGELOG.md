@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-28
+
+### Added
+
+- New `catalog` provider with a `Historical Asset Catalog` dataset. It reconstructs per-ticker asset lifecycles from the EOD parquet archive and enriches each lifecycle with reference metadata from Massive, SEC, and OpenFIGI. The live Massive `Stock Tickers` feed continues to own today's snapshot and the daily delisted-detection pass; subscribe to `catalog/Historical Asset Catalog` alongside it to maintain a definitive cross-source asset catalog. Requires `parquet_backup_dir` to be set so the EOD archive is available.
+- Sharadar TICKERS backstop for the Historical Asset Catalog. Point `sharadarTickersDir` on the catalog subscription at a directory containing Sharadar TICKERS `*.csv.zst` files and, when a lifecycle's first EOD bar sits on the archive's coverage start and Massive's `list_date` is unusable, Sharadar's `first_price_date` is consulted as a second-tier reference. Leave the field blank to disable.
+
+### Changed
+
+- Massive market holidays are now stored under the canonical `market='us'` label. Previously the download wrote one row per `NYSE` and `NASDAQ` exchange, which conflicted with the `market='us'` filter the trading-day calendar already used. **Note:** existing `market_holidays` rows with `market='NYSE'` or `'NASDAQ'` will be orphaned until the next holiday subscription run refreshes them. The `missing_eod` audit check switches to the new label automatically.
+- Massive EOD adjusted-close recomputation parallelizes across composite FIGIs through a worker pool. The math, query shape, and UNNEST update are unchanged; large multi-decade post-fetch passes now finish in a fraction of the previous wall time. Tune via `db.adjust_workers` (default 8).
+
+### Fixed
+
+- Healthchecks.io no longer fires premature failure alerts on runs that go on to succeed. The grace baseline now reflects true wall-clock duration — including the save drain, post-fetch hooks (notably Massive EOD's adjusted-close recomputation), and the PermID backfill — and is tuned off the maximum of the last ten successful runs rather than the average, so a single slow tail run lifts the grace for the next schedule instead of being smoothed away.
+- Historical Asset Catalog drops bond and exchange-traded note rows by name shape, catching both the compact `coupon%maturity` stamp (e.g. `7.15%38`, `10.25%2029`) and the verbose `<coupon>% ... Notes Due <YYYY>` form Massive uses for exchange-traded debt. Bond ETFs whose names contain `Bond` or `Notes` as descriptive tokens are kept.
+- Historical Asset Catalog name-pattern filter no longer drops closed-end funds (Flaherty & Crumrine, John Hancock Preferred Income, Cohen & Steers REIT and Preferred Income) or Latin American ADRs (Banco Bradesco, Ambev, Itaú) whose names describe preferred holdings or the underlying foreign security.
+- OpenFIGI rate limiting is coordinated across every worker in a run through a shared limiter and a fleet-wide 429 backoff, so the parallel asset-detail fan-out stops tripping the published cap and producing the cascading throttling that drove repeated retries.
+
 ## [0.6.0] - 2026-05-15
 
 ### Added
@@ -192,7 +211,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `pvdata run` respects the `--lookback` flag for SEC imports.
 - SEC fundamentals accuracy improvements across many filer types.
 
-[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/penny-vault/pvdata/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/penny-vault/pvdata/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/penny-vault/pvdata/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/penny-vault/pvdata/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/penny-vault/pvdata/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/penny-vault/pvdata/compare/v0.5.0...v0.5.1
