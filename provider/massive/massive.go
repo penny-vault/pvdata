@@ -55,6 +55,13 @@ var (
 		"XASE": data.NYSEMktExchange,
 		"XNYS": data.NYSEExchange,
 	}
+	// massiveHolidayMarketMap collapses massive's per-exchange holiday rows
+	// into pvdata's canonical market label. NYSE and NASDAQ holidays describe
+	// the same US trading calendar, so both map to "us".
+	massiveHolidayMarketMap = map[string]string{
+		"NYSE":   "us",
+		"NASDAQ": "us",
+	}
 )
 
 type Massive struct {
@@ -661,7 +668,49 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 		return
 	}
 
-	for _, holiday := range respContent {
+	holidays, err := translateMassiveHolidays(ctx, respContent, nyc)
+	if err != nil {
+		logger.Error().Err(err).Msg("could not translate massive holiday response")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	for _, marketHoliday := range holidays {
+		out <- &data.Observation{
+			MarketHoliday:    marketHoliday,
+			ObservationDate:  time.Now(),
+			SubscriptionID:   subscription.ID,
+			SubscriptionName: subscription.Name,
+		}
+
+		numObs++
+	}
+}
+
+// translateMassiveHolidays converts massive's per-exchange holiday rows into
+// MarketHoliday records using pvdata's canonical "us" market label. NYSE and
+// NASDAQ entries describe the same US trading calendar, so duplicates from the
+// API collapse to a single record per date. Holidays for unrecognized exchanges
+// are skipped with a warning.
+func translateMassiveHolidays(ctx context.Context, raw []*massiveHoliday, nyc *time.Location) ([]*data.MarketHoliday, error) {
+	logger := zerolog.Ctx(ctx)
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]*data.MarketHoliday, 0, len(raw))
+
+	for _, holiday := range raw {
+		market, ok := massiveHolidayMarketMap[holiday.Exchange]
+		if !ok {
+			logger.Warn().
+				Str("exchange", holiday.Exchange).
+				Str("date", holiday.Date).
+				Str("name", holiday.Name).
+				Msg("skipping massive holiday with unrecognized exchange")
+
+			continue
+		}
+
 		massiveDate, err := time.Parse("2006-01-02", holiday.Date)
 		if err != nil {
 			logger.Error().Err(err).Str("massiveDate", holiday.Date).Msg("could not parse date from massive object")
@@ -674,33 +723,29 @@ func downloadMassiveMarketHolidays(ctx context.Context, subscription *library.Su
 		if holiday.Close != "" {
 			closeTime, err = time.Parse(time.RFC3339Nano, holiday.Close)
 			if err != nil {
-				logger.Error().Err(err).Str("massiveClose", holiday.Close).Msg("could not parse close date from massive object")
-
-				runSummary.Status = data.RunFailed
-
-				return
+				return nil, fmt.Errorf("could not parse close date %q from massive object: %w", holiday.Close, err)
 			}
 
 			closeTime = closeTime.In(nyc)
 		}
 
-		marketHoliday := &data.MarketHoliday{
+		key := holiday.Date + "|" + market
+		if _, dup := seen[key]; dup {
+			continue
+		}
+
+		seen[key] = struct{}{}
+
+		out = append(out, &data.MarketHoliday{
 			Name:       holiday.Name,
 			EventDate:  eventDate,
-			Market:     holiday.Exchange,
+			Market:     market,
 			EarlyClose: holiday.Status == "early-close",
 			CloseTime:  closeTime,
-		}
-
-		out <- &data.Observation{
-			MarketHoliday:    marketHoliday,
-			ObservationDate:  time.Now(),
-			SubscriptionID:   subscription.ID,
-			SubscriptionName: subscription.Name,
-		}
-
-		numObs++
+		})
 	}
+
+	return out, nil
 }
 
 func (api *massiveAssetFetcher) publish(ctx context.Context, asset *data.Asset) {

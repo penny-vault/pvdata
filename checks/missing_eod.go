@@ -53,7 +53,7 @@ const missingEODMaxFindings = 1000
 // holidayMarket is the canonical market label for US-equity calendar
 // lookups in market_holidays. Subscriptions that ingest holidays use
 // this label.
-const holidayMarket = "NYSE"
+const holidayMarket = "us"
 
 func (c *MissingEOD) Audit(ctx context.Context, pool *pgxpool.Pool, table string, _ *time.Time, lookback *time.Duration) ([]CheckResult, error) {
 	conn, err := pool.Acquire(ctx)
