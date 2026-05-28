@@ -110,6 +110,7 @@ type AssetBuilder struct {
 	archive  *EODArchive
 	tracked  map[string]struct{}
 	todayIDs map[string]struct{}
+	sharadar *sharadarTickerIndex // nil disables Sharadar enrichment
 }
 
 // NewAssetBuilder returns an AssetBuilder bound to the given fetcher.
@@ -117,12 +118,14 @@ type AssetBuilder struct {
 // indirectly (through figi.ValidateCompositeFIGI), and the publish
 // channel SaveObservations drains. The fetcher must have a usable
 // EOD archive (parquet_backup_dir configured); BuildAll returns an
-// error when the archive is missing.
-func NewAssetBuilder(api *massiveAssetFetcher, tracked map[string]struct{}, todayActive map[string]struct{}) *AssetBuilder {
+// error when the archive is missing. A nil sharadar index disables
+// Sharadar backstop enrichment.
+func NewAssetBuilder(api *massiveAssetFetcher, tracked map[string]struct{}, todayActive map[string]struct{}, sharadar *sharadarTickerIndex) *AssetBuilder {
 	return &AssetBuilder{
 		api:      api,
 		tracked:  tracked,
 		todayIDs: todayActive,
+		sharadar: sharadar,
 	}
 }
 
@@ -797,37 +800,17 @@ func (b *AssetBuilder) finalize(ctx context.Context, p *proposedAsset, nonUSFigi
 		return nil
 	}
 
+	var sharadarRec *sharadarRecord
+	if b.sharadar != nil {
+		sharadarRec = b.sharadar.lookupByLifecycle(p.ticker, p.rng)
+	}
+
+	listed, listedSource := b.chooseListingDate(ctx, p, sharadarRec)
+
 	var (
-		listed       = p.rng.Start
-		listedSource = "eod_range_start"
 		delistedDate time.Time
 		active       bool
 	)
-
-	// Left-edge override: when this lifecycle's first EOD bar coincides
-	// with the archive's overall coverage Start, we have no way to tell
-	// from EOD alone whether the asset actually began trading on that
-	// day or earlier (our coverage just doesn't reach further back).
-	// Prefer Massive's per-ticker reference `list_date` in that case so
-	// the row reflects a real listing event rather than the date pvdata
-	// started recording bars. The known-sentinel filter rejects the
-	// "list_date unknown" placeholders Massive sprinkles across the
-	// catalog (1899-12-30 Excel epoch, 1972-06-01 batch tag). Massive's
-	// value must also precede the EOD range Start; a list_date inside
-	// or after the bars contradicts trading evidence and is discarded.
-	if coverageStart, _ := b.archive.Coverage(); !coverageStart.IsZero() && coverageStart.Equal(p.rng.Start) {
-		if listDate := parseMassiveListDate(p.record.ListDate); !listDate.IsZero() && listDate.Before(p.rng.Start) {
-			logger.Info().
-				Str("Ticker", p.ticker).
-				Time("EODRangeStart", p.rng.Start).
-				Time("CoverageStart", coverageStart).
-				Time("MassiveListDate", listDate).
-				Msg("massive builder: lifecycle sits on left edge of EOD coverage; using Massive list_date as listed")
-
-			listed = listDate
-			listedSource = "massive_list_date_left_edge_override"
-		}
-	}
 
 	// `active=true only if last range AND ticker is in today's
 	// snapshot.` Any other case is a closed lifecycle: delisted is the
@@ -872,7 +855,7 @@ func (b *AssetBuilder) finalize(ctx context.Context, p *proposedAsset, nonUSFigi
 
 	publishLog.Msg("massive builder: built asset row")
 
-	return &data.Asset{
+	asset := &data.Asset{
 		Ticker:               p.ticker,
 		CompositeFigi:        composite,
 		ShareClassFigi:       shareClass,
@@ -894,6 +877,62 @@ func (b *AssetBuilder) finalize(ctx context.Context, p *proposedAsset, nonUSFigi
 		// active state.
 		ValidFor: p.rng.End,
 	}
+
+	if sharadarRec != nil {
+		applySharadarEnrichment(ctx, asset, sharadarRec)
+	}
+
+	return asset
+}
+
+// chooseListingDate returns the listed date and a source label for
+// the proposal. The default is the EOD lifecycle's Start. When that
+// Start coincides with the archive's overall coverage Start (the
+// left edge), we cannot tell from EOD alone whether the asset began
+// trading on that day or earlier — coverage just doesn't reach
+// further back. Reference sources are consulted in priority order:
+//
+//  1. Massive's per-ticker reference list_date, when present, non-
+//     sentinel, and strictly before the EOD Start.
+//  2. Sharadar's FirstPriceDate, under the same conditions plus
+//     rejection of Sharadar's 1986-01-01 data-start stamp.
+//
+// Both candidates must precede the EOD Start; a reference date inside
+// or after the bars contradicts trading evidence and is discarded.
+func (b *AssetBuilder) chooseListingDate(ctx context.Context, p *proposedAsset, sharadarRec *sharadarRecord) (time.Time, string) {
+	logger := zerolog.Ctx(ctx)
+
+	coverageStart, _ := b.archive.Coverage()
+	onLeftEdge := !coverageStart.IsZero() && coverageStart.Equal(p.rng.Start)
+
+	if !onLeftEdge {
+		return p.rng.Start, "eod_range_start"
+	}
+
+	massiveListDate := parseMassiveListDate(p.record.ListDate)
+	if !massiveListDate.IsZero() && massiveListDate.Before(p.rng.Start) {
+		logger.Info().
+			Str("Ticker", p.ticker).
+			Time("EODRangeStart", p.rng.Start).
+			Time("CoverageStart", coverageStart).
+			Time("MassiveListDate", massiveListDate).
+			Msg("catalog builder: lifecycle sits on left edge of EOD coverage; using Massive list_date as listed")
+
+		return massiveListDate, "massive_list_date_left_edge_override"
+	}
+
+	if sharadarRec != nil && sharadarListDateUsable(sharadarRec.FirstPriceDate, p.rng.Start) {
+		logger.Info().
+			Str("Ticker", p.ticker).
+			Time("EODRangeStart", p.rng.Start).
+			Time("CoverageStart", coverageStart).
+			Time("SharadarFirstPriceDate", sharadarRec.FirstPriceDate).
+			Msg("catalog builder: lifecycle sits on left edge of EOD coverage; Massive list_date unusable, using Sharadar first_price_date as listed")
+
+		return sharadarRec.FirstPriceDate, "sharadar_first_price_date_left_edge_override"
+	}
+
+	return p.rng.Start, "eod_range_start"
 }
 
 // tickerActiveToday reports whether the builder's caller said this

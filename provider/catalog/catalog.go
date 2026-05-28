@@ -62,8 +62,9 @@ func (c *Catalog) Datasets() map[string]provider.Dataset {
 				return time.Date(1949, 4, 19, 0, 0, 0, 0, time.UTC), time.Now().UTC()
 			},
 			ConfigDescription: map[string]string{
-				"apiKey":    "Enter your Massive API key:",
-				"rateLimit": "What is the maximum number of requests per minute?",
+				"apiKey":             "Enter your Massive API key:",
+				"rateLimit":          "What is the maximum number of requests per minute?",
+				"sharadarTickersDir": "Directory containing Sharadar TICKERS *.csv.zst files (leave blank to disable Sharadar enrichment):",
 			},
 			Fetch: downloadHistoricalAssetCatalog,
 		},
@@ -186,7 +187,16 @@ func downloadHistoricalAssetCatalog(ctx context.Context, subscription *library.S
 		Dur("Elapsed", time.Since(filterStart).Round(time.Millisecond)).
 		Msg("stage: today's snapshot filtered; starting EOD-driven asset builder")
 
-	builder := NewAssetBuilder(api, tracked, todayActive)
+	sharadarIdx, err := loadSharadarTickerIndex(ctx, subscription.Config["sharadarTickersDir"])
+	if err != nil {
+		logger.Error().Err(err).Msg("catalog: sharadar ticker index load failed")
+
+		runSummary.Status = data.RunFailed
+
+		return
+	}
+
+	builder := NewAssetBuilder(api, tracked, todayActive, sharadarIdx)
 
 	if err := builder.BuildAll(ctx); err != nil {
 		logger.Error().Err(err).Msg("catalog: asset builder aborted")
