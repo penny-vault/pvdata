@@ -13,7 +13,7 @@ require (
 	github.com/adrg/strutil v0.3.1
 	github.com/alphadose/haxmap v1.4.1
 	github.com/aws/aws-sdk-go-v2 v1.41.7
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.16
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.17
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.101.0
 	github.com/aws/smithy-go v1.25.1
 	github.com/charmbracelet/x/term v0.2.2
@@ -26,14 +26,14 @@ require (
 	github.com/klauspost/compress v1.18.6
 	github.com/kothar/go-backblaze v0.0.0-20210124194846-35409b867216
 	github.com/massive-com/client-go/v3 v3.3.0
-	github.com/parquet-go/parquet-go v0.29.0
+	github.com/parquet-go/parquet-go v0.30.1
 	github.com/tidwall/gjson v1.19.0
 	github.com/xitongsys/parquet-go v1.6.2
 	golang.org/x/time v0.15.0
 )
 
 require (
-	github.com/ClickHouse/ch-go v0.71.0 // indirect
+	github.com/ClickHouse/ch-go v0.72.0 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.24.1 // indirect
@@ -55,7 +55,7 @@ require (
 	github.com/charmbracelet/ultraviolet v0.0.0-20260511121909-c840852527f3 // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
-	github.com/charmbracelet/x/exp/slice v0.0.0-20260511125431-fe5d686e0c99 // indirect
+	github.com/charmbracelet/x/exp/slice v0.0.0-20260524005558-961435f30453 // indirect
 	github.com/charmbracelet/x/exp/strings v0.1.0 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
@@ -111,7 +111,7 @@ require (
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/georgysavva/scany/v2 v2.1.4
-	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
+	github.com/gocarina/gocsv v0.0.0-20260523204920-c264028e67ea
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gosimple/slug v1.15.0
@@ -145,9 +145,9 @@ require (
 	github.com/yuin/goldmark v1.8.2 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
-	golang.org/x/net v0.54.0
+	golang.org/x/net v0.55.0
 	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0
 	google.golang.org/protobuf v1.36.11
 )
