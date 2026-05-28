@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,6 +241,35 @@ var marketIneligibleNamePatterns = []string{
 	" w.d.",
 }
 
+// bondCouponMaturityPattern matches the coupon-and-maturity stamp
+// that compact bond names carry — a percent rate immediately followed
+// by a 2- or 4-digit maturity year (e.g. "7.15%38", "5%26",
+// "10.25%2029"). Real equities and funds essentially never contain
+// this shape.
+//
+// Caught examples from observed Massive reference rows:
+//
+//	VIRGINIA ELEC&PWR 98 A 7.15%38
+//	GTE FLORIDA INC 1ST MTG 5.70%23
+//	PUB SVC ELEC&GAS 1ST&REF MTG SR YY 7%24
+var bondCouponMaturityPattern = regexp.MustCompile(`\b\d+(\.\d+)?%\d{2,4}\b`)
+
+// bondNotesDuePattern matches the verbose "<coupon>% [Senior |Sub |...]
+// Notes [D]ue <YYYY>" form Massive uses for exchange-traded debt
+// instruments. The required "due YYYY" anchor keeps the regex from
+// false-positiving on bond ETFs whose names contain "Bond" or "Notes"
+// as descriptive tokens (e.g. "iShares Aggregate Bond Fund").
+//
+// Caught examples from observed catalog rows:
+//
+//	Abacus Global Management, Inc. 9.875% Fixed Rate Senior Notes due 2028
+//	Adamas Trust, Inc. 9.125% Senior Notes Due 2030
+//	Atlas Financial Holdings, Inc. 6.625% Senior Unsecured Notes Due 2022
+//	Argo Group International Holdings, Ltd. 6.5% Senior Notes Due 2042
+//	Atlas Corp. 7.125% Notes due 2027
+//	eBay Inc. 6.0% Notes Due 2056
+var bondNotesDuePattern = regexp.MustCompile(`(?i)\bnotes?\s+due\s+\d{4}\b`)
+
 // csRebadgeNamePatterns are the marketIneligibleNamePatterns entries
 // that only catch CS-rebadged placeholders; they false-positive on
 // fund/ADR names that describe holdings or the underlying security.
@@ -277,6 +307,14 @@ func nameSaysNonTradable(asset *data.Asset) (string, bool) {
 		return "", false
 	}
 
+	if bondCouponMaturityPattern.MatchString(asset.Name) {
+		return "name_matches_bond_coupon_maturity", true
+	}
+
+	if bondNotesDuePattern.MatchString(asset.Name) {
+		return "name_matches_bond_notes_due", true
+	}
+
 	lowerName := strings.ToLower(asset.Name)
 	for _, pat := range marketIneligibleNamePatterns {
 		if strings.Contains(lowerName, pat) {
@@ -288,8 +326,19 @@ func nameSaysNonTradable(asset *data.Asset) (string, bool) {
 }
 
 // nameSaysNonTradableForType skips csRebadgeNamePatterns when the
-// Massive type is a fund or ADR class.
+// Massive type is a fund or ADR class. The bond coupon-maturity
+// regex fires unconditionally — funds and ADRs never carry that
+// shape in their own name, so it is safe to keep even on the
+// fund/ADR exempt path.
 func nameSaysNonTradableForType(name, assetType string) (string, bool) {
+	if bondCouponMaturityPattern.MatchString(name) {
+		return "name_matches_bond_coupon_maturity", true
+	}
+
+	if bondNotesDuePattern.MatchString(name) {
+		return "name_matches_bond_notes_due", true
+	}
+
 	lowerName := strings.ToLower(name)
 	_, typeExempt := fundOrADRTypes[strings.TrimSpace(assetType)]
 

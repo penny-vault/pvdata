@@ -166,6 +166,74 @@ var _ = Describe("nameSaysNonTradableForType", func() {
 			"ADRC", "Foreign Co ADS Ex-distribution", "ex-distribution"),
 	)
 
+	DescribeTable("drops bond-shaped names (coupon% followed by maturity year) on every type",
+		func(assetType, name string) {
+			reason, drop := nameSaysNonTradableForType(name, assetType)
+			Expect(drop).To(BeTrue(),
+				"expected type=%q name=%q to drop as bond", assetType, name)
+			Expect(reason).To(Equal("name_matches_bond_coupon_maturity"))
+		},
+		Entry("CS — utility bond with decimal coupon and 2-digit maturity",
+			"CS", "VIRGINIA ELEC&PWR 98 A 7.15%38"),
+		Entry("empty type — integer coupon, 2-digit maturity",
+			"", "PUB SVC ELEC&GAS 1ST&REF MTG SR YY 7%24"),
+		Entry("empty type — first-mortgage bond",
+			"", "GTE FLORIDA INC 1ST MTG 5.70%23"),
+		Entry("CS — 4-digit maturity year",
+			"CS", "ACME CORP 5.25%2030 SUB NTS"),
+	)
+
+	DescribeTable("drops exchange-traded notes whose name carries a 'Notes Due YYYY' anchor",
+		func(assetType, name string) {
+			reason, drop := nameSaysNonTradableForType(name, assetType)
+			Expect(drop).To(BeTrue(),
+				"expected type=%q name=%q to drop as notes-due", assetType, name)
+			Expect(reason).To(Equal("name_matches_bond_notes_due"))
+		},
+		Entry("CS — senior notes due 4-digit year",
+			"CS", "Abacus Global Management, Inc. 9.875% Fixed Rate Senior Notes due 2028"),
+		Entry("CS — senior unsecured notes",
+			"CS", "Atlas Financial Holdings, Inc. 6.625% Senior Unsecured Notes Due 2022"),
+		Entry("UNK — senior notes",
+			"UNK", "Argo Group International Holdings, Ltd. 6.5% Senior Notes Due 2042"),
+		Entry("CS — bare notes due (no senior/sub qualifier)",
+			"CS", "Atlas Corp. 7.125% Notes due 2027"),
+		Entry("CS — eBay notes",
+			"CS", "eBay Inc. 6.0% Notes Due 2056"),
+		Entry("ADRC — atlas notes",
+			"ADRC", "Atlas Corp. 7.125% Notes due 2027"),
+	)
+
+	DescribeTable("keeps bond ETFs and funds whose names contain bond/notes tokens but no 'Notes Due YYYY' anchor",
+		func(assetType, name string) {
+			_, drop := nameSaysNonTradableForType(name, assetType)
+			Expect(drop).To(BeFalse(),
+				"expected type=%q name=%q to pass the bond filter (bond ETF)", assetType, name)
+		},
+		Entry("ETF — aggregate bond fund",
+			"ETF", "ISHARES LEHMAN U.S. AGGR BOND FUND"),
+		Entry("ETF — CLO bond ETF",
+			"ETF", "Alternative Access First Priority CLO Bond ETF"),
+		Entry("ETF — flexible bond leaders",
+			"ETF", "Abacus Flexible Bond Leaders ETF"),
+		Entry("ETF — disciplined bond",
+			"ETF", "Harbor Disciplined Bond ETF"),
+		Entry("ETF — convertible bond",
+			"ETF", "Advent Convertible Bond ETF"),
+	)
+
+	It("does not flag a coupon-like percent that is not immediately followed by a maturity year", func() {
+		// "7.375% Series" — the digits after the percent are part of a
+		// word, not a maturity year. The bond regex requires
+		// %\d{2,4}\b so this passes the bond gate. (The existing
+		// preferred-pattern filter still drops this name; we verify
+		// only the bond regex here.)
+		Expect(bondCouponMaturityPattern.MatchString("American Finance Trust 7.375% Series C Cumulative Redeemable Preferred Stock")).To(BeFalse())
+		Expect(bondCouponMaturityPattern.MatchString("ARCH COAL INC 5% PERPETUAL CUM CONV PFD")).To(BeFalse())
+		Expect(bondCouponMaturityPattern.MatchString("Apple Inc.")).To(BeFalse())
+		Expect(bondCouponMaturityPattern.MatchString("SPDR S&P 500 ETF")).To(BeFalse())
+	})
+
 	DescribeTable("keeps CS-rebadge patterns active for CS / empty / PFD types",
 		func(assetType, name string) {
 			_, drop := nameSaysNonTradableForType(name, assetType)
