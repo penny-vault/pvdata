@@ -1553,13 +1553,23 @@ func (api *massiveAssetFetcher) filterAssetsByLastUpdated(ctx context.Context, a
 	}
 
 	missingSQL := fmt.Sprintf(`SELECT
-			ticker, composite_figi, share_class_figi, primary_exchange,
-			asset_type, active, name, description, corporate_url, sector,
-			industry, sic_code, cik, cusips, isins, other_identifiers,
+			ticker, composite_figi,
+			coalesce(share_class_figi, '') as share_class_figi,
+			coalesce(primary_exchange, '') as primary_exchange,
+			coalesce(asset_type::text, '') as asset_type,
+			active,
+			coalesce(name, '') as name,
+			coalesce(description, '') as description,
+			coalesce(corporate_url, '') as corporate_url,
+			coalesce(sector, '') as sector,
+			coalesce(industry, '') as industry,
+			sic_code,
+			coalesce(cik, '') as cik,
+			cusips, isins, other_identifiers,
 			similar_tickers, tags,
 			coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
 			coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
-			last_updated
+			coalesce(last_updated, '0001-01-01'::timestamp) as last_updated
 		FROM %s
 		WHERE active = true
 		  AND (icon_url IS NULL OR logo_url IS NULL)
