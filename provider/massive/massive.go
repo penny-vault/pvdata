@@ -1622,17 +1622,17 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 	rows, err := pool.Query(ctx, fmt.Sprintf(`SELECT
 		ticker,
 		composite_figi,
-		share_class_figi,
-		primary_exchange,
-		asset_type,
+		coalesce(share_class_figi, '') as share_class_figi,
+		coalesce(primary_exchange, '') as primary_exchange,
+		coalesce(asset_type::text, '') as asset_type,
 		active,
-		name,
-		description,
-		corporate_url,
-		sector,
-		industry,
+		coalesce(name, '') as name,
+		coalesce(description, '') as description,
+		coalesce(corporate_url, '') as corporate_url,
+		coalesce(sector, '') as sector,
+		coalesce(industry, '') as industry,
 		sic_code,
-		cik,
+		coalesce(cik, '') as cik,
 		cusips,
 		isins,
 		other_identifiers,
@@ -1640,7 +1640,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 		tags,
 		coalesce(to_char(listed, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as listed,
 		coalesce(to_char(delisted, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '') as delisted,
-		last_updated
+		coalesce(last_updated, '0001-01-01'::timestamp) as last_updated
 	FROM %s WHERE active=true`, api.subscription.DataTablesMap[data.AssetKey]))
 	if err != nil {
 		logger.Error().Err(err).Msg("error when querying database for active tickers")
@@ -1652,6 +1652,7 @@ func (api *massiveAssetFetcher) delistedAssets(ctx context.Context, assets []*da
 	err = pgxscan.ScanAll(&dbActiveAssets, rows)
 	if err != nil {
 		logger.Error().Err(err).Msg("error when scanning values into dbActiveAssets")
+		return err
 	}
 
 	// for all active database assets that are not in the response

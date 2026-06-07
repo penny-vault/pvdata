@@ -112,13 +112,13 @@ func Enrich(ctx context.Context, assets ...*data.Asset) {
 
 	remaining := apiBudgetFromContext(ctx)
 	if remaining.Load() <= 0 {
-		// Budget==0 is the --no-permid path (or end-of-quota), and is
-		// expected; log it at Info once per Enrich call so an operator
-		// running with --no-permid sees the path is being short-circuited
-		// rather than wondering why descriptive fields stay empty.
+		// Budget==0 means --no-permid or end-of-quota, and is expected;
+		// log it at Info once per Enrich call so an operator sees the
+		// path is being short-circuited rather than wondering why
+		// descriptive fields stay empty.
 		logger.Info().
 			Int("Assets", len(assets)).
-			Msg("permid: API budget exhausted (likely --no-permid); skipping PermID API resolution")
+			Msg("permid: API budget exhausted; skipping PermID API resolution")
 
 		return
 	}

@@ -67,7 +67,7 @@ func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, e
 	// req/s cap, which was exactly the silent stall the operator hit
 	// before this guard was added.
 	if remaining := apiBudgetFromContext(ctx); remaining.Load() <= 0 {
-		logger.Info().Msg("permid: API budget is 0 (likely --no-permid); skipping backfill")
+		logger.Info().Msg("permid: API budget is 0; skipping backfill")
 		return 0, nil
 	}
 
