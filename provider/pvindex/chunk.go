@@ -132,6 +132,14 @@ func computeUniverseForDate(in perDayInput) universeResult {
 	candidates := make([]candidate, 0, len(in.Assets))
 
 	for _, a := range in.Assets {
+		// Respect the asset's listing/delisting dates: a name cannot be a
+		// candidate before it was listed or on/after it delisted. This is the
+		// same alive-on-D check used during hard removal, applied here so the
+		// entry path doesn't rely solely on data availability.
+		if !assetAliveOn(a, in.Date) {
+			continue
+		}
+
 		st := statsByFigi[a.CompositeFigi]
 
 		mcap, hasMcap := in.MarketCapByFigi[a.CompositeFigi]
