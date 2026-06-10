@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- PermID backfill now runs only during asset runs, performed by each asset provider (Massive `Stock Tickers`, EODHD `Stock Tickers`, Sharadar `Tickers`, Tiingo `Stock Tickers`, iShares holdings) for the asset table it owns. Previously a blanket backfill ran after every successful subscription run, so EOD, fundamentals, ratings, and other non-asset runs spent Refinitiv PermID API quota for no reason. Those runs no longer touch the PermID API.
+
 ## [0.7.1] - 2026-06-07
 
 ### Fixed

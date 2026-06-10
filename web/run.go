@@ -322,18 +322,6 @@ func RunSubscription(ctx context.Context, lib *library.Library, sub *library.Sub
 		}
 	}
 
-	// Chip away at PermID coverage after each successful run.
-	// Capped at DefaultBackfillLimit (250 assets, ~500 API calls)
-	// so many scheduled runs per day stay under the Refinitiv
-	// free-tier 5K quota.
-	if summary.Status == data.RunSuccess {
-		if resolved, err := permid.BackfillEmpty(ctx, lib, permid.DefaultBackfillLimit); err != nil {
-			logger.Warn().Err(err).Msg("permid backfill failed; continuing")
-		} else if resolved > 0 {
-			logger.Info().Int("count", resolved).Msg("permid backfill resolved missing PermIDs")
-		}
-	}
-
 	// Overwrite the provider's reported EndTime with the orchestrator's
 	// wall-clock end so the persisted duration covers every stage that
 	// runs before the healthcheck ping — save drain, PostFetch hooks

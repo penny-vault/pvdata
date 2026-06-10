@@ -217,16 +217,6 @@ provided then each subscription will execute sequentially.`,
 				os.Exit(1)
 			}
 		}
-
-		// Chip away at PermID coverage after each run. Capped at
-		// DefaultBackfillLimit (250 assets, ~500 API calls) so the
-		// daily 5K Refinitiv quota survives many runs per day. No-op
-		// when permid.apikey is unset.
-		if resolved, err := permid.BackfillEmpty(ctx, myLibrary, permid.DefaultBackfillLimit); err != nil {
-			log.Warn().Err(err).Msg("permid backfill failed; continuing")
-		} else if resolved > 0 {
-			log.Info().Int("count", resolved).Msg("permid backfill resolved missing PermIDs")
-		}
 	},
 }
 

@@ -35,20 +35,15 @@ import (
 // via ErrRateLimited.
 const DefaultBackfillLimit = 2000
 
-// backfillCandidate pairs an asset that needs resolution with the
-// source table it lives in, so the UPDATE after resolution can
-// write back to exactly the row we read.
-type backfillCandidate struct {
-	asset *data.Asset
-	table string
-}
-
-// BackfillEmpty scans every asset_description table for rows missing
-// OrganizationPermID or InstrumentPermID, resolves up to `limit` of
-// them via Enrich, and writes the resolved values back to the source
-// table. Pass limit = DefaultBackfillLimit for the standard cadence;
-// pass 0 to no-op. Skips silently when no permid.apikey is configured.
-func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, error) {
+// BackfillEmpty scans the subscription's own asset_description table for
+// rows missing OrganizationPermID or InstrumentPermID, resolves up to
+// `limit` of them via Enrich, and writes the resolved values back to that
+// table. Asset providers call this at the end of their Fetch so PermID
+// coverage is maintained by the provider that owns the table, drawing on
+// the same per-run API budget as the inline Enrich calls. Pass limit =
+// DefaultBackfillLimit for the standard cadence; pass 0 to no-op. Skips
+// silently when no permid.apikey is configured or the table is absent.
+func BackfillEmpty(ctx context.Context, sub *library.Subscription, limit int) (int, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
@@ -71,89 +66,55 @@ func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, e
 		return 0, nil
 	}
 
-	logger.Info().Int("Limit", limit).Msg("permid: starting backfill of empty PermIDs")
-
-	subs, err := lib.Subscriptions(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("permid backfill: load subscriptions: %w", err)
+	tbl := sub.DataTablesMap[data.AssetKey]
+	if tbl == "" {
+		return 0, nil
 	}
 
-	conn, err := lib.AcquireWithTimeout(ctx)
+	logger.Info().Int("Limit", limit).Str("Table", tbl).Msg("permid: starting backfill of empty PermIDs")
+
+	conn, err := sub.Library.AcquireWithTimeout(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("permid backfill: acquire connection: %w", err)
 	}
 	defer conn.Release()
 
-	candidates := make([]backfillCandidate, 0, limit)
-	remaining := limit
+	// Order common-stock candidates first so the limited daily API
+	// budget gets spent on the asset class we most care about for
+	// PermID coverage. ADRC (depositary receipts) is the natural
+	// runner-up. Everything else (ETF / MF / CEF / ETN / unknown)
+	// trails. Secondary order on ticker keeps the pick deterministic
+	// across runs so we don't churn the same residual subset.
+	sql := fmt.Sprintf(`SELECT
+		ticker,
+		composite_figi,
+		coalesce(share_class_figi, '') as share_class_figi,
+		coalesce(cik, '') as cik,
+		coalesce(organization_permid, '') as organization_permid,
+		coalesce(instrument_permid, '') as instrument_permid,
+		coalesce(name, '') as name,
+		coalesce(active, false) as active
+	FROM %s
+	WHERE composite_figi <> ''
+	  AND (organization_permid IS NULL OR organization_permid = ''
+	       OR instrument_permid IS NULL OR instrument_permid = '')
+	ORDER BY
+	  CASE asset_type
+	    WHEN 'CS'   THEN 0
+	    WHEN 'ADRC' THEN 1
+	    ELSE             2
+	  END,
+	  ticker
+	LIMIT %d`, tbl, limit)
 
-	for _, sub := range subs {
-		if remaining <= 0 {
-			break
-		}
+	rows, queryErr := conn.Query(ctx, sql)
+	if queryErr != nil {
+		return 0, fmt.Errorf("permid backfill: query %s: %w", tbl, queryErr)
+	}
 
-		tbl := sub.DataTablesMap[data.AssetKey]
-		if tbl == "" {
-			continue
-		}
-
-		// Order common-stock candidates first so the limited daily
-		// API budget gets spent on the asset class we most care
-		// about for PermID coverage. ADRC (depositary receipts) is
-		// the natural runner-up. Everything else (ETF / MF / CEF /
-		// ETN / unknown) trails. Secondary order on ticker keeps
-		// the pick deterministic across runs so we don't churn the
-		// same residual subset.
-		sql := fmt.Sprintf(`SELECT
-			ticker,
-			composite_figi,
-			coalesce(share_class_figi, '') as share_class_figi,
-			coalesce(cik, '') as cik,
-			coalesce(organization_permid, '') as organization_permid,
-			coalesce(instrument_permid, '') as instrument_permid,
-			coalesce(name, '') as name,
-			coalesce(active, false) as active
-		FROM %s
-		WHERE composite_figi <> ''
-		  AND (organization_permid IS NULL OR organization_permid = ''
-		       OR instrument_permid IS NULL OR instrument_permid = '')
-		ORDER BY
-		  CASE asset_type
-		    WHEN 'CS'   THEN 0
-		    WHEN 'ADRC' THEN 1
-		    ELSE             2
-		  END,
-		  ticker
-		LIMIT %d`, tbl, remaining)
-
-		rows, queryErr := conn.Query(ctx, sql)
-		if queryErr != nil {
-			logger.Warn().
-				Err(queryErr).
-				Str("Table", tbl).
-				Msg("permid backfill: query failed; skipping table")
-
-			continue
-		}
-
-		var partial []*data.Asset
-		if scanErr := pgxscan.ScanAll(&partial, rows); scanErr != nil {
-			logger.Warn().
-				Err(scanErr).
-				Str("Table", tbl).
-				Msg("permid backfill: scan failed; skipping table")
-
-			continue
-		}
-
-		for _, a := range partial {
-			if remaining <= 0 {
-				break
-			}
-
-			candidates = append(candidates, backfillCandidate{asset: a, table: tbl})
-			remaining--
-		}
+	var candidates []*data.Asset
+	if scanErr := pgxscan.ScanAll(&candidates, rows); scanErr != nil {
+		return 0, fmt.Errorf("permid backfill: scan %s: %w", tbl, scanErr)
 	}
 
 	if len(candidates) == 0 {
@@ -167,22 +128,17 @@ func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, e
 		Int("Budget", limit).
 		Msg("permid backfill: resolving missing PermIDs")
 
-	assets := make([]*data.Asset, len(candidates))
-	for i, c := range candidates {
-		assets[i] = c.asset
-	}
-
 	// Reuse Enrich's full pipeline: it consults the asset index
 	// first (free DB-level lookup), then spends API budget for
 	// what is left. WithAPIBudget caps that spend to the same
 	// limit we passed for candidate collection.
 	enrichCtx := WithAPIBudget(ctx, limit)
-	Enrich(enrichCtx, assets...)
+	Enrich(enrichCtx, candidates...)
 
 	resolved := 0
 
-	for _, c := range candidates {
-		if c.asset.OrganizationPermID == "" && c.asset.InstrumentPermID == "" {
+	for _, a := range candidates {
+		if a.OrganizationPermID == "" && a.InstrumentPermID == "" {
 			continue
 		}
 
@@ -193,18 +149,18 @@ func BackfillEmpty(ctx context.Context, lib *library.Library, limit int) (int, e
 		updateSQL := fmt.Sprintf(`UPDATE %s SET
 			organization_permid = COALESCE(NULLIF($1, ''), organization_permid),
 			instrument_permid = COALESCE(NULLIF($2, ''), instrument_permid)
-		WHERE ticker = $3 AND composite_figi = $4`, c.table)
+		WHERE ticker = $3 AND composite_figi = $4`, tbl)
 
 		if _, err := conn.Exec(ctx, updateSQL,
-			c.asset.OrganizationPermID,
-			c.asset.InstrumentPermID,
-			c.asset.Ticker,
-			c.asset.CompositeFigi,
+			a.OrganizationPermID,
+			a.InstrumentPermID,
+			a.Ticker,
+			a.CompositeFigi,
 		); err != nil {
 			logger.Warn().
 				Err(err).
-				Str("Table", c.table).
-				Str("Ticker", c.asset.Ticker).
+				Str("Table", tbl).
+				Str("Ticker", a.Ticker).
 				Msg("permid backfill: update failed")
 
 			continue

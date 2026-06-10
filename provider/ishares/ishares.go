@@ -233,6 +233,14 @@ func downloadISharesHoldings(ctx context.Context, subscription *library.Subscrip
 		}
 	}
 
+	// Maintain PermID coverage for this provider's own asset table:
+	// resolve a capped batch of rows still missing org/instrument
+	// PermIDs, drawing on the same per-run API budget as the inline
+	// Enrich calls above.
+	if _, err := permid.BackfillEmpty(ctx, subscription, permid.DefaultBackfillLimit); err != nil {
+		logger.Warn().Err(err).Msg("permid backfill failed; continuing")
+	}
+
 	runSummary.Status = data.RunSuccess
 }
 

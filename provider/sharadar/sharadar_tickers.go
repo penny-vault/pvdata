@@ -127,6 +127,14 @@ func downloadAllSharadarTickers(ctx context.Context, subscription *library.Subsc
 			break
 		}
 	}
+
+	// Maintain PermID coverage for this provider's own asset table:
+	// resolve a capped batch of rows still missing org/instrument
+	// PermIDs, drawing on the same per-run API budget as the inline
+	// Enrich calls during import.
+	if _, err := permid.BackfillEmpty(ctx, subscription, permid.DefaultBackfillLimit); err != nil {
+		logger.Warn().Err(err).Msg("permid backfill failed; continuing")
+	}
 }
 
 func downloadSharadarTickers(ctx context.Context, subscription *library.Subscription, client *resty.Client, limiter *rate.Limiter, cursor string, out chan<- *data.Observation) (string, int) {
