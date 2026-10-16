@@ -23,12 +23,12 @@ import (
 	"time"
 
 	"github.com/gocarina/gocsv"
+	"github.com/mxschmitt/playwright-go"
 	"github.com/penny-vault/pvdata/backblaze"
 	"github.com/penny-vault/pvdata/data"
 	"github.com/penny-vault/pvdata/library"
 	"github.com/penny-vault/pvdata/playwright_helpers"
 	"github.com/penny-vault/pvdata/provider"
-	"github.com/playwright-community/playwright-go"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 	"github.com/xitongsys/parquet-go-source/local"

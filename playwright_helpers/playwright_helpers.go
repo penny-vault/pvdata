@@ -19,7 +19,7 @@ import (
 	_ "embed"
 	"strings"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 )
